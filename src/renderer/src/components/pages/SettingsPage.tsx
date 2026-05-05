@@ -1759,6 +1759,9 @@ function UISection() {
       document.documentElement.classList.toggle('dark', prefersDark)
       localStorage.removeItem('theme')
     }
+    // Notify other surfaces (e.g., the sidebar dark/light toggle button) so
+    // they can update their own state immediately without a remount.
+    window.dispatchEvent(new CustomEvent('theme-changed'))
   }
 
   const handleThemeChange = (v: string) => {

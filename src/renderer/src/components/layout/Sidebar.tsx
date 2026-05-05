@@ -115,11 +115,62 @@ export function Sidebar() {
     return document.documentElement.classList.contains('dark')
   })
 
-  const toggleTheme = () => {
+  // Sync initial theme from app config (the same store the Settings page reads),
+  // so the sidebar toggle and Settings UI never drift apart.
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      try {
+        const cfg = await window.appConfig.read()
+        if (!active) return
+        const ui = (cfg?.ui || {}) as { theme?: string }
+        const themeVal = typeof ui.theme === 'string' ? ui.theme : ''
+        if (themeVal === 'dark') {
+          document.documentElement.classList.add('dark')
+          localStorage.setItem('theme', 'dark')
+          setIsDark(true)
+        } else if (themeVal === 'light') {
+          document.documentElement.classList.remove('dark')
+          localStorage.setItem('theme', 'light')
+          setIsDark(false)
+        } else if (themeVal === 'system') {
+          const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+          document.documentElement.classList.toggle('dark', prefersDark)
+          localStorage.removeItem('theme')
+          setIsDark(prefersDark)
+        }
+      } catch {
+        // ignore — keep localStorage-based initial state
+      }
+    })()
+    return () => { active = false }
+  }, [])
+
+  // Listen for theme changes triggered elsewhere (e.g., the Settings UI page)
+  // so the sun/moon icon reflects the current state immediately.
+  useEffect(() => {
+    const handler = () => {
+      setIsDark(document.documentElement.classList.contains('dark'))
+    }
+    window.addEventListener('theme-changed', handler)
+    return () => window.removeEventListener('theme-changed', handler)
+  }, [])
+
+  const toggleTheme = async () => {
     const next = !isDark
     setIsDark(next)
     document.documentElement.classList.toggle('dark', next)
     localStorage.setItem('theme', next ? 'dark' : 'light')
+    // Persist to app config so the Settings page reads the same value and
+    // doesn't revert the theme on mount.
+    try {
+      const cfg = await window.appConfig.read()
+      const ui = (cfg?.ui || {}) as Record<string, unknown>
+      await window.appConfig.save({ ...cfg, ui: { ...ui, theme: next ? 'dark' : 'light' } })
+    } catch {
+      // ignore — DOM and localStorage already updated
+    }
+    window.dispatchEvent(new CustomEvent('theme-changed'))
   }
 
   const toggleExpanded = () => {
