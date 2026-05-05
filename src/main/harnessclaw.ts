@@ -369,7 +369,7 @@ export class HarnessclawClient extends EventEmitter {
     waiters.forEach((waiter) => waiter(ok))
   }
 
-  private waitForTransport(): Promise<void> {
+  private waitForTransport(timeoutMs = 8000): Promise<void> {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       return Promise.resolve()
     }
@@ -377,8 +377,30 @@ export class HarnessclawClient extends EventEmitter {
     if (!this.shouldReconnect) {
       this.connect()
     }
+    // Fail fast if the websocket cannot be (re)established within the
+    // timeout. Without this, callers like `send()` and `stop()` would hang
+    // indefinitely in `transportWaiters` when the backend is offline,
+    // leaving the renderer stuck in a "thinking" state.
     return new Promise((resolve, reject) => {
-      this.transportWaiters.push({ resolve, reject })
+      const waiter = { resolve, reject }
+      this.transportWaiters.push(waiter)
+      const timer = setTimeout(() => {
+        const index = this.transportWaiters.indexOf(waiter)
+        if (index >= 0) {
+          this.transportWaiters.splice(index, 1)
+        }
+        reject(new Error('Harnessclaw websocket transport unavailable (timeout)'))
+      }, timeoutMs)
+      const wrappedResolve = waiter.resolve
+      const wrappedReject = waiter.reject
+      waiter.resolve = () => {
+        clearTimeout(timer)
+        wrappedResolve()
+      }
+      waiter.reject = (error: Error) => {
+        clearTimeout(timer)
+        wrappedReject(error)
+      }
     })
   }
 
