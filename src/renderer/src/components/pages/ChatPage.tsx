@@ -4857,30 +4857,32 @@ function ToolCallCard({
     <div className="mb-1.5">
       <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
         <div className="flex items-start gap-2 px-3 py-2 transition-colors hover:bg-muted/40">
-          {isRunning ? (
-            <Loader2 size={12} className="animate-spin text-yellow-500 flex-shrink-0" />
-          ) : result?.isError ? (
-            <AlertCircle size={12} className="text-red-500 flex-shrink-0" />
-          ) : result ? (
-            <Check size={12} className="text-green-500 flex-shrink-0" />
-          ) : (
-            <Wrench size={12} className="text-muted-foreground flex-shrink-0" />
-          )}
+          <div className="flex h-5 flex-shrink-0 items-center justify-center">
+            {isRunning ? (
+              <Loader2 size={12} className="animate-spin text-yellow-500" />
+            ) : result?.isError ? (
+              <AlertCircle size={12} className="text-red-500" />
+            ) : result ? (
+              <Check size={12} className="text-green-500" />
+            ) : (
+              <Wrench size={12} className="text-muted-foreground" />
+            )}
+          </div>
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <span className="flex-1 truncate text-xs font-medium text-foreground">{toolName}</span>
+            <div className="flex min-h-5 items-center gap-2">
+              <span className="flex-1 truncate text-xs font-medium leading-5 text-foreground">{toolName}</span>
               {renderHintLabel && result && (
-                <span className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] text-muted-foreground">
+                <span className="inline-flex h-5 flex-shrink-0 items-center rounded-full border border-border bg-background px-2 text-[10px] leading-none text-muted-foreground">
                   {renderHintLabel}
                 </span>
               )}
               {durationLabel && result && (
-                <span className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] text-muted-foreground">
+                <span className="inline-flex h-5 flex-shrink-0 items-center rounded-full border border-border bg-background px-2 text-[10px] leading-none text-muted-foreground">
                   {durationLabel}
                 </span>
               )}
               <span className={cn(
-                'text-[10px] flex-shrink-0',
+                'inline-flex h-5 flex-shrink-0 items-center text-[10px] leading-none',
                 isRunning ? 'text-yellow-500' : result?.isError ? 'text-red-500' : result ? 'text-green-600' : 'text-muted-foreground'
               )}>
                 {isRunning ? '执行中' : result?.isError ? '失败' : result ? '完成' : ''}
@@ -4912,12 +4914,12 @@ function ToolCallCard({
 
           <button
             onClick={() => setExpanded(!expanded)}
-            className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg hover:bg-muted"
+            className="inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition-colors hover:bg-muted"
             aria-label={expanded ? '收起工具详情' : '展开工具详情'}
             aria-expanded={expanded}
             aria-controls={contentId}
           >
-            {expanded ? <ChevronUp size={12} className="text-muted-foreground" /> : <ChevronDown size={12} className="text-muted-foreground" />}
+            {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
           </button>
         </div>
 
