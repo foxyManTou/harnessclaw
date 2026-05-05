@@ -64,6 +64,14 @@ interface PendingPermissionRequest {
   options: Array<{ label: string; scope: 'once' | 'session'; allow: boolean }>
 }
 
+interface PendingAskQuestionRequest {
+  sessionId: string
+  question: string
+  options: Array<{ label: string; description?: string }>
+  multi: boolean
+  allowCustom: boolean
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -206,6 +214,11 @@ export class HarnessclawClient extends EventEmitter {
   private knownSessions = new Map<string, number>()
   private pendingMessages = new Map<string, PendingMessageState>()
   private pendingPermissionRequests = new Map<string, PendingPermissionRequest>()
+  private pendingAskQuestionRequests = new Map<string, PendingAskQuestionRequest>()
+  // v1.12: tool_use_id → intent text. Filled by `agent.intent` /
+  // `subagent.event{event_type:intent}`, drained when the matching
+  // `tool.start` / `tool.call` arrives so intent rides along the tool_call event.
+  private pendingToolIntents = new Map<string, string>()
   private pendingSessionInitId = ''
   private sessionCreateInFlight = false
   private transportWaiters: Array<{ resolve: () => void; reject: (error: Error) => void }> = []
@@ -305,6 +318,8 @@ export class HarnessclawClient extends EventEmitter {
       this.ws = null
       this.pendingMessages.clear()
       this.pendingPermissionRequests.clear()
+      this.pendingAskQuestionRequests.clear()
+      this.pendingToolIntents.clear()
       this.clientId = ''
       this.defaultSessionId = ''
       this.subscriptions = []
@@ -606,6 +621,8 @@ export class HarnessclawClient extends EventEmitter {
         const toolName = typeof msg.tool_name === 'string' ? msg.tool_name : ''
         const toolUseId = typeof msg.tool_use_id === 'string' ? msg.tool_use_id : ''
         const input = isPlainObject(msg.input) ? msg.input : {}
+        const intent = toolUseId ? this.pendingToolIntents.get(toolUseId) : undefined
+        if (toolUseId) this.pendingToolIntents.delete(toolUseId)
         this.emitCompatEvent({
           type: 'tool_call',
           session_id: sessionId,
@@ -613,6 +630,7 @@ export class HarnessclawClient extends EventEmitter {
           name: toolName,
           arguments: input,
           call_id: toolUseId,
+          intent,
         })
         break
       }
@@ -620,7 +638,13 @@ export class HarnessclawClient extends EventEmitter {
       case 'tool.end': {
         const toolName = typeof msg.tool_name === 'string' ? msg.tool_name : ''
         const toolUseId = typeof msg.tool_use_id === 'string' ? msg.tool_use_id : ''
-        const metadata = isPlainObject(msg.metadata) ? msg.metadata : {}
+        const baseMetadata = isPlainObject(msg.metadata) ? msg.metadata : {}
+        // v1.13: embed engine-provided `artifacts: []ArtifactRef` inside
+        // metadata so the existing metadata_json DB column round-trips it.
+        const artifacts = Array.isArray(msg.artifacts) ? msg.artifacts : []
+        const metadata = artifacts.length > 0
+          ? { ...baseMetadata, artifacts }
+          : baseMetadata
         const output = typeof msg.output === 'string'
           ? msg.output
           : isPlainObject(msg.error) && typeof msg.error.message === 'string'
@@ -648,6 +672,56 @@ export class HarnessclawClient extends EventEmitter {
         const toolName = typeof msg.tool_name === 'string' ? msg.tool_name : ''
         const toolUseId = typeof msg.tool_use_id === 'string' ? msg.tool_use_id : ''
         const input = isPlainObject(msg.input) ? msg.input : {}
+
+        // AskUserQuestion is not a real tool — it's emma asking the user a
+        // question. Render it as a question UI in the renderer rather than
+        // executing it locally. The renderer will reply with the answer via
+        // respondAskQuestion(), which sends `tool.result` back to the server.
+        if (toolName === 'AskUserQuestion') {
+          const question = typeof input.question === 'string' ? input.question : ''
+          const rawOptions = Array.isArray(input.options) ? input.options : []
+          const options = rawOptions.flatMap((option) => {
+            if (!isPlainObject(option)) return []
+            const label = typeof option.label === 'string' ? option.label : ''
+            if (!label) return []
+            const description = typeof option.description === 'string' ? option.description : undefined
+            return [description ? { label, description } : { label }]
+          })
+          const multi = input.multi === true
+          const allowCustom = input.allow_custom !== false // default true
+
+          if (toolUseId) {
+            this.pendingAskQuestionRequests.set(toolUseId, {
+              sessionId,
+              question,
+              options,
+              multi,
+              allowCustom,
+            })
+          }
+
+          // v1.12: framework strips `intent` from every tool's input (incl.
+          // AskUserQuestion) and emits it via `agent.intent` beforehand. Drain
+          // any buffered intent so it rides along on the question card and
+          // doesn't leak into pendingToolIntents.
+          const askIntent = toolUseId ? this.pendingToolIntents.get(toolUseId) : undefined
+          if (toolUseId) this.pendingToolIntents.delete(toolUseId)
+
+          this.emitCompatEvent({
+            type: 'ask_user_question',
+            session_id: sessionId,
+            request_id: msg.request_id,
+            call_id: toolUseId,
+            tool_name: toolName,
+            question,
+            options,
+            multi,
+            allow_custom: allowCustom,
+            intent: askIntent,
+          })
+          break
+        }
+
         this.emitCompatEvent({
           type: 'tool_call',
           session_id: sessionId,
@@ -655,7 +729,9 @@ export class HarnessclawClient extends EventEmitter {
           name: toolName,
           arguments: input,
           call_id: toolUseId,
+          intent: toolUseId ? this.pendingToolIntents.get(toolUseId) : undefined,
         })
+        if (toolUseId) this.pendingToolIntents.delete(toolUseId)
         void this.executeToolCall(sessionId, toolUseId, toolName, input)
         break
       }
@@ -747,6 +823,115 @@ export class HarnessclawClient extends EventEmitter {
         this.pendingMessages.delete(sessionId)
         this.knownSessions.set(sessionId, Date.now())
         this.emitSessions()
+        break
+      }
+
+      // ─── v1.12: Task-level visibility ─────────────────────────────────
+      case 'agent.intent': {
+        // Main agent (emma) progress sentence right before tool.start.
+        const toolUseId = typeof msg.tool_use_id === 'string' ? msg.tool_use_id : ''
+        const intent = typeof msg.intent === 'string' ? msg.intent : ''
+        if (toolUseId && intent) this.pendingToolIntents.set(toolUseId, intent)
+        this.emitCompatEvent({
+          type: 'agent_intent',
+          session_id: sessionId,
+          agent_id: typeof msg.agent_id === 'string' ? msg.agent_id : '',
+          agent_name: typeof msg.agent_name === 'string' ? msg.agent_name : '',
+          tool_use_id: toolUseId,
+          tool_name: typeof msg.tool_name === 'string' ? msg.tool_name : '',
+          intent,
+        })
+        break
+      }
+
+      case 'subagent.start': {
+        this.emitCompatEvent({
+          type: 'subagent_start',
+          session_id: sessionId,
+          agent_id: typeof msg.agent_id === 'string' ? msg.agent_id : '',
+          agent_name: typeof msg.agent_name === 'string' ? msg.agent_name : '',
+          description: typeof msg.description === 'string' ? msg.description : '',
+          // v1.12: full task prompt (≤800 runes)
+          task: typeof msg.task === 'string' ? msg.task : '',
+          agent_type: typeof msg.agent_type === 'string' ? msg.agent_type : 'sync',
+          parent_agent_id: typeof msg.parent_agent_id === 'string' ? msg.parent_agent_id : 'main',
+        })
+        break
+      }
+
+      case 'subagent.event': {
+        const agentId = typeof msg.agent_id === 'string' ? msg.agent_id : ''
+        const agentName = typeof msg.agent_name === 'string' ? msg.agent_name : ''
+        const payload = isPlainObject(msg.payload) ? msg.payload : {}
+        const eventType = typeof payload.event_type === 'string' ? payload.event_type : ''
+        const toolUseId = typeof payload.tool_use_id === 'string' ? payload.tool_use_id : ''
+
+        if (eventType === 'intent') {
+          // v1.12: sub-agent intent — surfaced as a top-level agent_intent
+          // compat event so the renderer can show the shimmer above the
+          // upcoming sub-agent tool card.
+          const intent = typeof payload.intent === 'string' ? payload.intent : ''
+          this.emitCompatEvent({
+            type: 'agent_intent',
+            session_id: sessionId,
+            agent_id: agentId,
+            agent_name: agentName,
+            tool_use_id: toolUseId,
+            tool_name: typeof payload.tool_name === 'string' ? payload.tool_name : '',
+            intent,
+            from_subagent: true,
+          })
+          break
+        }
+
+        // Forward `tool_start` / `tool_end` (and any future inner type) as a
+        // single `subagent_event` compat event with the raw payload preserved
+        // — matches the existing renderer / index.ts handlers (v1.10 contract).
+        // `event_type: "text"` is deprecated since v1.10 and silently ignored
+        // by those handlers.
+        // v1.13: when payload is a tool_end with artifacts, mirror them into
+        // payload.metadata.artifacts so DB metadata_json round-trip works the
+        // same as for main-agent tool.end events.
+        let forwardedPayload: Record<string, unknown> = payload
+        const innerArtifacts = Array.isArray(payload.artifacts) ? payload.artifacts : []
+        if (eventType === 'tool_end' && innerArtifacts.length > 0) {
+          const innerMeta = isPlainObject(payload.metadata) ? payload.metadata : {}
+          forwardedPayload = {
+            ...payload,
+            metadata: { ...innerMeta, artifacts: innerArtifacts },
+          }
+        }
+        this.emitCompatEvent({
+          type: 'subagent_event',
+          session_id: sessionId,
+          agent_id: agentId,
+          agent_name: agentName,
+          payload: forwardedPayload,
+        })
+        break
+      }
+
+      case 'subagent.end': {
+        const usage = isPlainObject(msg.usage) ? msg.usage : {}
+        // v1.13: forward the aggregated artifacts list. The server now
+        // populates this from SubmitTaskResult-validated refs (contract
+        // mode) or all ArtifactWrite calls in the sub-agent (legacy).
+        // Without this passthrough the renderer's subagent_end handler
+        // sees no artifacts even though the wire frame has them, and
+        // the produced-files panel stays empty.
+        const artifacts = Array.isArray(msg.artifacts) ? msg.artifacts : []
+        this.emitCompatEvent({
+          type: 'subagent_end',
+          session_id: sessionId,
+          agent_id: typeof msg.agent_id === 'string' ? msg.agent_id : '',
+          agent_name: typeof msg.agent_name === 'string' ? msg.agent_name : '',
+          status: typeof msg.status === 'string' ? msg.status : 'completed',
+          duration_ms: typeof msg.duration_ms === 'number' ? msg.duration_ms : undefined,
+          num_turns: typeof msg.num_turns === 'number' ? msg.num_turns : undefined,
+          usage,
+          denied_tools: Array.isArray(msg.denied_tools) ? msg.denied_tools : [],
+          artifacts,
+        })
         break
       }
 
@@ -1025,6 +1210,44 @@ export class HarnessclawClient extends EventEmitter {
       approved,
       scope,
       content: approved ? 'User approved permission request' : (message || 'User denied permission request'),
+    })
+
+    return true
+  }
+
+  respondAskQuestion(
+    toolUseId: string,
+    status: 'success' | 'cancelled',
+    output?: string,
+    errorMessage?: string,
+  ): boolean {
+    const pending = this.pendingAskQuestionRequests.get(toolUseId)
+    if (!pending || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return false
+    }
+
+    const payload: ToolResultPayload = status === 'success'
+      ? { status: 'success', output: output || '' }
+      : {
+          status: 'cancelled',
+          error: {
+            code: 'user_cancelled',
+            message: errorMessage || 'User dismissed the question dialog',
+          },
+        }
+
+    this.sendToolResult(pending.sessionId, toolUseId, payload)
+    this.pendingAskQuestionRequests.delete(toolUseId)
+
+    this.emitCompatEvent({
+      type: 'ask_user_question_result',
+      session_id: pending.sessionId,
+      call_id: toolUseId,
+      status,
+      output: status === 'success' ? (output || '') : '',
+      error: status === 'cancelled'
+        ? { code: 'user_cancelled', message: errorMessage || 'User dismissed the question dialog' }
+        : undefined,
     })
 
     return true

@@ -100,6 +100,7 @@ interface HarnessclawAPI {
   listSessions: () => Promise<{ ok: boolean }>
   probe: () => Promise<{ ok: boolean }>
   respondPermission: (requestId: string, approved: boolean, scope?: 'once' | 'session', message?: string) => Promise<{ ok: boolean; error?: string }>
+  respondAskQuestion: (toolUseId: string, status: 'success' | 'cancelled', output?: string, errorMessage?: string) => Promise<{ ok: boolean; error?: string }>
   getStatus: () => Promise<{ status: string; clientId: string; sessionId: string; subscriptions: string[] }>
   onStatus: (callback: (status: string) => void) => () => void
   onEvent: (callback: (event: Record<string, unknown>) => void) => () => void

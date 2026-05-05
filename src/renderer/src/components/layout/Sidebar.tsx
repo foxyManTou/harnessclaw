@@ -23,6 +23,7 @@ import {
 import { cn } from '../../lib/utils'
 import { useHarnessclawStatus } from '../../hooks/useHarnessclawStatus'
 import sidebarLogo from '../../assets/sidebar-logo.png'
+import { AvatarLightbox } from '../common/AvatarLightbox'
 
 interface NavItem {
   icon: React.ElementType
@@ -100,7 +101,6 @@ export function Sidebar() {
   const [recentScrollFade, setRecentScrollFade] = useState({ top: false, bottom: false })
   const [projects, setProjects] = useState<DbProjectRow[]>([])
   const [assignDialog, setAssignDialog] = useState<AssignProjectDialogState | null>(null)
-  const [logoPreview, setLogoPreview] = useState(false)
   const floatingMenuRef = useRef<HTMLDivElement | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const recentScrollRef = useRef<HTMLDivElement | null>(null)
@@ -258,7 +258,6 @@ export function Sidebar() {
         setMenuState(null)
         setRenamingSessionId(null)
         setRenameValue('')
-        setLogoPreview(false)
         closeSearch()
       }
     }
@@ -530,11 +529,11 @@ export function Sidebar() {
               {expanded ? (
                 <div className="flex w-full items-center gap-2 px-2 py-1">
                   <div className="min-w-0 flex flex-1 items-center gap-2">
-                    <img
+                    <AvatarLightbox
                       src={sidebarLogo}
                       alt="HarnessClaw"
-                      className="h-9 w-9 flex-shrink-0 cursor-pointer object-contain transition-opacity hover:opacity-80"
-                      onClick={() => setLogoPreview(true)}
+                      triggerClassName="flex-shrink-0"
+                      imgClassName="h-9 w-9 object-contain"
                     />
                   </div>
 
@@ -973,21 +972,6 @@ export function Sidebar() {
               </div>
             </div>
           </div>
-        </div>,
-        document.body
-      )}
-
-      {logoPreview && createPortal(
-        <div
-          className="fixed inset-0 z-[150] flex items-center justify-center bg-black/60 backdrop-blur-sm"
-          onClick={() => setLogoPreview(false)}
-        >
-          <img
-            src={sidebarLogo}
-            alt="HarnessClaw"
-            className="max-h-[80vh] max-w-[80vw] object-contain"
-            onClick={(e) => e.stopPropagation()}
-          />
         </div>,
         document.body
       )}

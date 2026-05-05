@@ -1298,38 +1298,14 @@ app.whenReady().then(() => {
           const payload = isRecord(event.payload) ? event.payload : {}
           const eventType = typeof payload.event_type === 'string' ? payload.event_type : ''
           if (!eventType) break
+          // v1.10+: server no longer streams sub-agent LLM text. Only
+          // `tool_start` / `tool_end` inner events are forwarded; user-visible
+          // text comes exclusively from L1 (emma) `content.delta`. Ignore any
+          // legacy `text` event from older servers to avoid persisting
+          // duplicated copies of emma's final reply.
+          if (eventType !== 'tool_start' && eventType !== 'tool_end') break
           const persistedSubagent = createPersistedSubagent(agentId, agentName, 'running')
           const now = Date.now()
-
-          if (eventType === 'text') {
-            let aid = pendingDbAssistantIds[sid]
-            const chunk = typeof payload.text === 'string' ? payload.text : ''
-            if (!chunk) break
-            if (!aid) {
-              aid = ensureDbAssistantMessage(sid, now)
-              const initialSegments = [{ text: chunk, ts: now, subagent: persistedSubagent }]
-              pendingDbSegments[sid] = { ...(pendingDbSegments[sid] || { lastToolTsByModule: {}, segments: [] }), segments: initialSegments }
-              updateMessageContent(aid, chunk, initialSegments)
-            } else {
-              const state = pendingDbSegments[sid] || { segments: [], lastToolTsByModule: {} }
-              const segments = [...state.segments]
-              const moduleKey = getModuleKey(persistedSubagent)
-              const lastSegIndex = [...segments].reverse().findIndex((seg) => getModuleKey(seg.subagent) === moduleKey)
-              const resolvedLastSegIndex = lastSegIndex === -1 ? -1 : segments.length - 1 - lastSegIndex
-              const lastSeg = resolvedLastSegIndex >= 0 ? segments[resolvedLastSegIndex] : undefined
-              const lastRelatedToolTs = state.lastToolTsByModule[moduleKey] || 0
-
-              if (lastSeg && lastRelatedToolTs <= lastSeg.ts && isSameSubagent(lastSeg.subagent, persistedSubagent)) {
-                segments[resolvedLastSegIndex] = { ...lastSeg, text: lastSeg.text + chunk, ts: lastSeg.ts }
-              } else {
-                segments.push({ text: chunk, ts: now, subagent: persistedSubagent })
-              }
-
-              pendingDbSegments[sid] = { ...state, segments }
-              updateMessageContent(aid, chunk, segments)
-            }
-            break
-          }
 
           const aid = ensureDbAssistantMessage(sid, now)
           const callId = typeof payload.tool_use_id === 'string' && payload.tool_use_id
@@ -1501,6 +1477,66 @@ app.whenReady().then(() => {
                 }),
                 callId: event.request_id as string,
                 isError: event.approved !== true,
+                subagent,
+              })
+              const state = pendingDbSegments[sid]
+              if (state) state.lastToolTsByModule[getModuleKey(subagent)] = Date.now()
+            }
+          }
+          break
+        }
+        case 'ask_user_question': {
+          if (sid) {
+            const callId = typeof event.call_id === 'string' ? event.call_id : ''
+            if (!callId) break
+            const aid = ensureDbAssistantMessage(sid, Date.now())
+            if (aid) {
+              const rawOptions = Array.isArray(event.options) ? event.options : []
+              const options = rawOptions.flatMap((option) => {
+                if (!option || typeof option !== 'object' || Array.isArray(option)) return []
+                const candidate = option as { label?: unknown; description?: unknown }
+                const label = typeof candidate.label === 'string' ? candidate.label : ''
+                if (!label) return []
+                const description = typeof candidate.description === 'string' ? candidate.description : undefined
+                return [description ? { label, description } : { label }]
+              })
+              insertToolActivity(aid, {
+                type: 'question',
+                name: typeof event.tool_name === 'string' ? event.tool_name : 'AskUserQuestion',
+                content: JSON.stringify({
+                  question: typeof event.question === 'string' ? event.question : '',
+                  options,
+                  multi: event.multi === true,
+                  allow_custom: event.allow_custom !== false,
+                }),
+                callId,
+                subagent,
+              })
+              const state = pendingDbSegments[sid]
+              if (state) state.lastToolTsByModule[getModuleKey(subagent)] = Date.now()
+            }
+          }
+          break
+        }
+        case 'ask_user_question_result': {
+          if (sid) {
+            const callId = typeof event.call_id === 'string' ? event.call_id : ''
+            if (!callId) break
+            const aid = ensureDbAssistantMessage(sid, Date.now())
+            if (aid) {
+              const status = event.status === 'cancelled' ? 'cancelled' : 'success'
+              const errorObj = isRecord(event.error) ? event.error : null
+              const errorMessage = errorObj && typeof errorObj.message === 'string' ? errorObj.message : ''
+              insertToolActivity(aid, {
+                type: 'question_result',
+                name: 'AskUserQuestion',
+                content: JSON.stringify({
+                  status,
+                  output: typeof event.output === 'string' ? event.output : '',
+                  error_message: errorMessage,
+                }),
+                callId,
+                isError: status === 'cancelled',
                 subagent,
               })
               const state = pendingDbSegments[sid]
@@ -1706,6 +1742,12 @@ app.whenReady().then(() => {
   ipcMain.handle('harnessclaw:respondPermission', (_, requestId: string, approved: boolean, scope?: 'once' | 'session', message?: string) => {
     const ok = harnessclawClient.respondPermission(requestId, approved, scope === 'session' ? 'session' : 'once', message)
     return ok ? { ok: true } : { ok: false, error: 'Permission request not found or socket unavailable' }
+  })
+
+  ipcMain.handle('harnessclaw:respondAskQuestion', (_, toolUseId: string, status: 'success' | 'cancelled', output?: string, errorMessage?: string) => {
+    const normalizedStatus: 'success' | 'cancelled' = status === 'cancelled' ? 'cancelled' : 'success'
+    const ok = harnessclawClient.respondAskQuestion(toolUseId, normalizedStatus, output, errorMessage)
+    return ok ? { ok: true } : { ok: false, error: 'AskUserQuestion request not found or socket unavailable' }
   })
 
   ipcMain.handle('harnessclaw:status', () => {

@@ -1,10 +1,10 @@
-import { memo, useState, useRef, useEffect, useCallback, useMemo, useId, useSyncExternalStore, type ReactNode, type RefObject } from 'react'
+import { memo, useState, useRef, useEffect, useCallback, useMemo, useId, useSyncExternalStore, type ReactNode, type RefObject, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
   Send, Plus, Copy, Check, Trash2,
   Loader2, Wrench, Brain, AlertCircle, RefreshCw, ChevronDown, ChevronUp,
-  FileText, X, ArrowDown, AtSign, GitBranch, ListTodo, Users, MessagesSquare, ChevronLeft, ChevronRight, Search
+  FileText, X, ArrowDown, AtSign, GitBranch, ListTodo, Users, MessagesSquare, ChevronLeft, ChevronRight, Search, HelpCircle, FolderOpen
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -20,6 +20,7 @@ import {
   type SelectedSkillChip,
 } from '../common/SkillComposerInput'
 import { PastedBlocksBar, usePastedBlocks } from '../common/PastedBlocksBar'
+import { AvatarLightbox } from '../common/AvatarLightbox'
 import emmaAvatar from '../../assets/sidebar-logo.png'
 import analystAvatar from '../../assets/team/analyst.png'
 import developerAvatar from '../../assets/team/developer.png'
@@ -138,8 +139,25 @@ interface ContentSegment {
   subagent?: SubagentInfo
 }
 
+/**
+ * v1.13: ArtifactRef wire shape (see harnessclaw-engine websocket protocol §10.6).
+ * Stored inside `ToolActivity.metadata.artifacts` so it round-trips through the
+ * existing metadata_json DB column without a schema change.
+ */
+interface ArtifactRef {
+  artifact_id: string
+  name?: string
+  type?: string
+  mime_type?: string
+  size_bytes?: number
+  description?: string
+  preview_text?: string
+  uri?: string
+  role?: string
+}
+
 interface ToolActivity {
-  type: 'hint' | 'call' | 'result' | 'status' | 'permission' | 'permission_result'
+  type: 'hint' | 'call' | 'result' | 'status' | 'permission' | 'permission_result' | 'question' | 'question_result'
   name?: string
   content: string
   callId?: string
@@ -149,6 +167,8 @@ interface ToolActivity {
   language?: string
   filePath?: string
   metadata?: Record<string, unknown>
+  /** v1.12: agent.intent attached at sub-agent tool_start, rendered as the tool card header line. */
+  intent?: string
   ts: number
   subagent?: SubagentInfo
 }
@@ -196,6 +216,19 @@ interface PermissionResultData {
   message: string
 }
 
+interface AskQuestionRequestData {
+  question: string
+  options: Array<{ label: string; description?: string }>
+  multi: boolean
+  allowCustom: boolean
+}
+
+interface AskQuestionResultData {
+  status: 'success' | 'cancelled'
+  output: string
+  errorMessage?: string
+}
+
 interface SystemNoticeData {
   kind: 'error'
   title: string
@@ -207,6 +240,7 @@ interface SystemNoticeData {
 
 type AttachmentItem = LocalAttachmentItem
 type RespondPermissionHandler = (requestId: string, approved: boolean, scope: 'once' | 'session') => Promise<void>
+type RespondAskQuestionHandler = (toolUseId: string, status: 'success' | 'cancelled', output?: string, errorMessage?: string) => Promise<void>
 
 // Per-session state
 interface SessionState {
@@ -214,6 +248,17 @@ interface SessionState {
   pendingAssistantId: string | null
   isProcessing: boolean
   currentThinking: string
+  /**
+   * v1.12: agent.intent — pre-tool progress sentence (e.g. "正在搜索 vLLM 论文").
+   * Set on `agent_intent`, cleared when the matching tool finishes (matched by
+   * `toolUseId`) or when the assistant turn ends.
+   */
+  currentIntent?: {
+    text: string
+    toolUseId: string
+    agentName: string
+    fromSubagent: boolean
+  }
   isPaused: boolean
   isStopping: boolean
   pauseReason?: string
@@ -240,6 +285,8 @@ interface SyncAgentState {
   agentId: string
   agentName: string
   description: string
+  /** v1.12: full task prompt (≤800 runes) handed from parent to sub-agent. */
+  task?: string
   agentType: string
   parentAgentId: string
   status: 'running' | 'completed' | 'max_turns' | 'model_error' | 'aborted' | 'timeout' | 'error'
@@ -250,6 +297,8 @@ interface SyncAgentState {
   activeToolName?: string
   activeToolStatus?: 'running' | 'completed' | 'error'
   activeToolSummary?: string
+  /** v1.12: latest agent.intent for this sub-agent. Cleared on matching tool_end / subagent_end. */
+  currentIntent?: { text: string; toolUseId: string }
   lastEventAt?: number
   eventCount: number
   updatedAt: number
@@ -374,28 +423,9 @@ const PROJECT_CONTEXT_BLOCK_START = '[HARNESSCLAW_PROJECT_CONTEXT]'
 const PROJECT_CONTEXT_BLOCK_END = '[/HARNESSCLAW_PROJECT_CONTEXT]'
 const ERROR_ATTACH_WINDOW_MS = 30_000
 const noopUnsubscribe = () => {}
-const CHAT_LOADING_STEPS = [
-  {
-    title: '整理上下文',
-    detail: '把你刚刚发来的内容、技能和附件先排成同一条工作线。',
-  },
-  {
-    title: '检查可执行路径',
-    detail: '确认这轮回复要直接回答，还是先调用工具补足信息。',
-  },
-  {
-    title: '准备清晰回复',
-    detail: '优先给出可继续推进任务的下一步，而不是泛泛而谈。',
-  },
-] as const
 
 interface ChatGreeting {
   tone: string
-  title: string
-  detail: string
-}
-
-interface LoadingStep {
   title: string
   detail: string
 }
@@ -496,13 +526,14 @@ const ConversationTimeline = memo(function ConversationTimeline({
   isPaused,
   isStopping,
   currentThinking,
+  currentIntent,
   pendingAssistantMessage,
-  activeLoadingStep,
   messagesViewportRef,
   messagesEndRef,
   onScroll,
   onOpenFilePreview,
   onRespondPermission,
+  onRespondAskQuestion,
 }: {
   collaboration: CollaborationState
   displayMessages: Message[]
@@ -510,13 +541,14 @@ const ConversationTimeline = memo(function ConversationTimeline({
   isPaused: boolean
   isStopping: boolean
   currentThinking: string
+  currentIntent?: SessionState['currentIntent']
   pendingAssistantMessage: Message | null
-  activeLoadingStep: LoadingStep
   messagesViewportRef: RefObject<HTMLDivElement | null>
   messagesEndRef: RefObject<HTMLDivElement | null>
   onScroll: () => void
   onOpenFilePreview: (preview: FilePreviewData) => void
   onRespondPermission: RespondPermissionHandler
+  onRespondAskQuestion: RespondAskQuestionHandler
 }) {
   return (
     <div
@@ -528,12 +560,21 @@ const ConversationTimeline = memo(function ConversationTimeline({
         <CollaborationOverview collaboration={collaboration} />
 
         {displayMessages.map((message) => (
-          <MessageBubble
+          <div
             key={message.id}
-            message={message}
-            onOpenFilePreview={onOpenFilePreview}
-            onRespondPermission={onRespondPermission}
-          />
+            data-message-id={message.id}
+            data-message-role={message.role}
+          >
+            <MessageBubble
+              message={message}
+              syncAgents={collaboration.syncAgents}
+              // v1.12: Emma 的鎏光只在当前正在流式输出的助手消息上显示（紧贴 "Emma" 名字）。
+              activeIntent={message.isStreaming ? currentIntent : undefined}
+              onOpenFilePreview={onOpenFilePreview}
+              onRespondPermission={onRespondPermission}
+              onRespondAskQuestion={onRespondAskQuestion}
+            />
+          </div>
         ))}
 
         {isProcessing && currentThinking && (
@@ -541,30 +582,231 @@ const ConversationTimeline = memo(function ConversationTimeline({
         )}
 
         {isProcessing && !isPaused && !isStopping && !currentThinking && !pendingAssistantMessage?.content && !(pendingAssistantMessage?.tools && pendingAssistantMessage.tools.length > 0) && (
-          <div className="flex justify-start">
-            <div className="chat-processing-card flex max-w-[28rem] items-start gap-3 rounded-2xl rounded-bl-sm border border-border bg-card px-3.5 py-3 shadow-sm">
-              <div className="chat-processing-core mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl bg-accent">
-                <Loader2 size={14} className="animate-spin text-primary" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <p className="text-sm font-medium text-foreground">{activeLoadingStep.title}</p>
-                  <span className="chat-processing-status text-[10px] text-primary">进行中</span>
-                </div>
-                <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                  {activeLoadingStep.detail}
-                </p>
-                <div className="chat-processing-rail mt-2" aria-hidden="true">
-                  <span />
-                </div>
-              </div>
-            </div>
+          <div className="-my-[17px] flex justify-start pl-[2.625rem]">
+            <span className="chat-thinking-shimmer" aria-live="polite">Thinking…</span>
           </div>
         )}
 
         <div ref={messagesEndRef} />
       </div>
     </div>
+  )
+})
+
+const ConversationQuickNav = memo(function ConversationQuickNav({
+  displayMessages,
+  messagesViewportRef,
+}: {
+  displayMessages: Message[]
+  messagesViewportRef: RefObject<HTMLDivElement | null>
+}) {
+  const userMessages = useMemo(
+    () => displayMessages.filter((m) => m.role === 'user'),
+    [displayMessages]
+  )
+
+  const [isHovered, setIsHovered] = useState(false)
+  const [isScrollLong, setIsScrollLong] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(-1)
+
+  const upWheelTimestampsRef = useRef<number[]>([])
+  const upWheelDistancesRef = useRef<number[]>([])
+  const idleTimerRef = useRef<number | null>(null)
+  const fadeTimerRef = useRef<number | null>(null)
+  const navRef = useRef<HTMLDivElement>(null)
+
+  const userMessagesRef = useRef(userMessages)
+  userMessagesRef.current = userMessages
+  const activeIndexRef = useRef(activeIndex)
+  activeIndexRef.current = activeIndex
+
+  const updateActiveIndex = useCallback(() => {
+    const viewport = messagesViewportRef.current
+    if (!viewport) return
+    const viewportRect = viewport.getBoundingClientRect()
+    const anchor = viewportRect.top + 16
+    let bestIdx = -1
+    let bestDist = Infinity
+    userMessagesRef.current.forEach((msg, idx) => {
+      const el = viewport.querySelector(
+        `[data-message-id="${msg.id}"]`
+      ) as HTMLElement | null
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      if (rect.bottom < viewportRect.top || rect.top > viewportRect.bottom) return
+      const dist = Math.abs(rect.top - anchor)
+      if (dist < bestDist) {
+        bestDist = dist
+        bestIdx = idx
+      }
+    })
+    if (bestIdx !== -1) setActiveIndex(bestIdx)
+  }, [messagesViewportRef])
+
+  const scrollToIndex = useCallback(
+    (idx: number) => {
+      const viewport = messagesViewportRef.current
+      const target = userMessagesRef.current[idx]
+      if (!viewport || !target) return
+      const el = viewport.querySelector(
+        `[data-message-id="${target.id}"]`
+      ) as HTMLElement | null
+      if (!el) return
+      const top = Math.max(0, el.offsetTop - 16)
+      viewport.scrollTo({ top, behavior: 'smooth' })
+      setActiveIndex(idx)
+    },
+    [messagesViewportRef]
+  )
+  const scrollToIndexRef = useRef(scrollToIndex)
+  scrollToIndexRef.current = scrollToIndex
+
+  // Listeners:
+  // - wheel: trigger panel when user pages UP repeatedly (>3 upward events within 2s window)
+  // - scroll: keep active index in sync; auto-fade panel after scroll idle
+  useEffect(() => {
+    const viewport = messagesViewportRef.current
+    if (!viewport) return
+
+    const UP_WINDOW_MS = 2000
+    const UP_EVENT_THRESHOLD = 8 // strictly greater than 8 upward wheel events in window
+    const UP_DISTANCE_THRESHOLD = 800 // and accumulated upward |deltaY| >= 800px
+
+    const onWheel = (e: WheelEvent) => {
+      // Downward scroll → close the panel immediately
+      if (e.deltaY > 0) {
+        upWheelTimestampsRef.current = []
+        upWheelDistancesRef.current = []
+        if (fadeTimerRef.current != null) {
+          window.clearTimeout(fadeTimerRef.current)
+          fadeTimerRef.current = null
+        }
+        setIsScrollLong(false)
+        return
+      }
+      // Only count upward (negative deltaY) wheel events
+      if (e.deltaY >= 0) return
+      const now = Date.now()
+      const ts = upWheelTimestampsRef.current
+      const distances = upWheelDistancesRef.current
+      ts.push(now)
+      distances.push(Math.abs(e.deltaY))
+      // Drop entries older than the rolling window
+      while (ts.length > 0 && now - ts[0] > UP_WINDOW_MS) {
+        ts.shift()
+        distances.shift()
+      }
+      const totalDistance = distances.reduce((sum, d) => sum + d, 0)
+      if (ts.length > UP_EVENT_THRESHOLD && totalDistance >= UP_DISTANCE_THRESHOLD) {
+        setIsScrollLong(true)
+        if (fadeTimerRef.current != null) {
+          window.clearTimeout(fadeTimerRef.current)
+          fadeTimerRef.current = null
+        }
+      }
+    }
+
+    const onScroll = () => {
+      updateActiveIndex()
+      if (idleTimerRef.current != null) window.clearTimeout(idleTimerRef.current)
+      idleTimerRef.current = window.setTimeout(() => {
+        // Scroll idle — clear upward-event history and queue fade-out
+        upWheelTimestampsRef.current = []
+        upWheelDistancesRef.current = []
+        if (fadeTimerRef.current != null) window.clearTimeout(fadeTimerRef.current)
+        fadeTimerRef.current = window.setTimeout(() => {
+          setIsScrollLong(false)
+        }, 1500)
+      }, 600)
+    }
+
+    viewport.addEventListener('wheel', onWheel, { passive: true })
+    viewport.addEventListener('scroll', onScroll, { passive: true })
+    updateActiveIndex()
+    return () => {
+      viewport.removeEventListener('wheel', onWheel)
+      viewport.removeEventListener('scroll', onScroll)
+      if (idleTimerRef.current != null) window.clearTimeout(idleTimerRef.current)
+      if (fadeTimerRef.current != null) window.clearTimeout(fadeTimerRef.current)
+    }
+  }, [messagesViewportRef, updateActiveIndex])
+
+  // Recalc when message list changes
+  useEffect(() => {
+    updateActiveIndex()
+  }, [userMessages, updateActiveIndex])
+
+  // Wheel inside the nav steps between messages
+  useEffect(() => {
+    const el = navRef.current
+    if (!el) return
+    let lastWheel = 0
+    const onWheel = (e: WheelEvent) => {
+      const msgs = userMessagesRef.current
+      if (msgs.length === 0) return
+      e.preventDefault()
+      e.stopPropagation()
+      const now = Date.now()
+      if (now - lastWheel < 120) return
+      lastWheel = now
+      const direction = e.deltaY > 0 ? 1 : -1
+      const cur = activeIndexRef.current < 0 ? 0 : activeIndexRef.current
+      const next = Math.max(0, Math.min(msgs.length - 1, cur + direction))
+      if (next !== cur) scrollToIndexRef.current(next)
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => {
+      el.removeEventListener('wheel', onWheel)
+    }
+  }, [])
+
+  if (userMessages.length === 0) return null
+
+  const visible = isHovered || isScrollLong
+
+  return (
+    <>
+      {/* Right-edge hover hot-zone (always interactive, invisible) */}
+      <div
+        className="pointer-events-auto absolute bottom-0 right-0 top-0 z-20 w-12"
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        aria-hidden="true"
+      />
+      {/* Quick nav pill */}
+      <div
+        ref={navRef}
+        className={cn(
+          'absolute right-3 top-1/2 z-30 -translate-y-1/2 transition-all duration-200 ease-out',
+          visible
+            ? 'pointer-events-auto translate-x-0 opacity-100'
+            : 'pointer-events-none translate-x-2 opacity-0'
+        )}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        role="navigation"
+        aria-label="对话快速切换"
+      >
+        <div className="flex max-h-[60vh] flex-col items-center gap-2 overflow-y-auto px-1 py-2">
+          {userMessages.map((msg, idx) => (
+            <button
+              key={msg.id}
+              type="button"
+              onClick={() => scrollToIndex(idx)}
+              title={(msg.content || '').slice(0, 60) || `第 ${idx + 1} 条对话`}
+              aria-label={`跳转至第 ${idx + 1} 条对话`}
+              aria-current={activeIndex === idx ? 'true' : undefined}
+              className={cn(
+                'h-1.5 rounded-full transition-all',
+                activeIndex === idx
+                  ? 'w-7 bg-orange-500'
+                  : 'w-5 bg-slate-400 hover:w-6 hover:bg-slate-600 dark:bg-slate-300 dark:hover:bg-slate-100'
+              )}
+            />
+          ))}
+        </div>
+      </div>
+    </>
   )
 })
 
@@ -1707,6 +1949,38 @@ function parsePermissionResultData(raw: string): PermissionResultData | null {
   }
 }
 
+function parseAskQuestionRequestData(raw: string): AskQuestionRequestData | null {
+  const parsed = parseJsonObject(raw)
+  if (!parsed) return null
+  const options = Array.isArray(parsed.options)
+    ? parsed.options.flatMap((option) => {
+        if (!option || typeof option !== 'object' || Array.isArray(option)) return []
+        const candidate = option as { label?: unknown; description?: unknown }
+        const label = typeof candidate.label === 'string' ? candidate.label : ''
+        if (!label) return []
+        const description = typeof candidate.description === 'string' ? candidate.description : undefined
+        return [description ? { label, description } : { label }]
+      })
+    : []
+  return {
+    question: typeof parsed.question === 'string' ? parsed.question : '',
+    options,
+    multi: parsed.multi === true,
+    allowCustom: parsed.allow_custom !== false, // default true
+  }
+}
+
+function parseAskQuestionResultData(raw: string): AskQuestionResultData | null {
+  const parsed = parseJsonObject(raw)
+  if (!parsed) return null
+  const status = parsed.status === 'cancelled' ? 'cancelled' : 'success'
+  return {
+    status,
+    output: typeof parsed.output === 'string' ? parsed.output : '',
+    errorMessage: typeof parsed.error_message === 'string' ? parsed.error_message : undefined,
+  }
+}
+
 function getConversationLabel(title = '', firstMessage = ''): string {
   const raw = title.trim() || firstMessage.trim() || '新对话'
   return raw.length > 24 ? `${raw.slice(0, 24)}...` : raw
@@ -1872,6 +2146,156 @@ function getTeamEventSummary(team: TeamState): string {
   return '团队成员保持在当前编组中。'
 }
 
+// ─── v1.13 Artifact helpers ────────────────────────────────────────────────
+
+/**
+ * Pull `ArtifactRef[]` out of a tool result's metadata. Main process embeds
+ * the engine-provided `artifacts` field inside metadata so the existing
+ * metadata_json DB column round-trips it without a schema change.
+ */
+function extractArtifactsFromActivity(activity: ToolActivity): ArtifactRef[] {
+  const raw = activity.metadata?.artifacts
+  if (!Array.isArray(raw)) return []
+  const refs: ArtifactRef[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const r = item as Record<string, unknown>
+    const id = typeof r.artifact_id === 'string' ? r.artifact_id : ''
+    if (!id) continue
+    refs.push({
+      artifact_id: id,
+      name: typeof r.name === 'string' ? r.name : undefined,
+      type: typeof r.type === 'string' ? r.type : undefined,
+      mime_type: typeof r.mime_type === 'string' ? r.mime_type : undefined,
+      size_bytes: typeof r.size_bytes === 'number' ? r.size_bytes : undefined,
+      description: typeof r.description === 'string' ? r.description : undefined,
+      preview_text: typeof r.preview_text === 'string' ? r.preview_text : undefined,
+      uri: typeof r.uri === 'string' ? r.uri : undefined,
+      role: typeof r.role === 'string' ? r.role : undefined,
+    })
+  }
+  return refs
+}
+
+function formatArtifactSize(size?: number): string {
+  if (typeof size !== 'number' || !Number.isFinite(size) || size < 0) return ''
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(size >= 10 * 1024 ? 0 : 1)} KB`
+  return `${(size / (1024 * 1024)).toFixed(size >= 10 * 1024 * 1024 ? 0 : 1)} MB`
+}
+
+/**
+ * Top-bar button that lists every artifact produced in the current session.
+ * Click → toggles a popover under the button. Each list item triggers the
+ * same FilePreviewDrawer used for read/write tool previews, populated from
+ * the artifact's preview_text.
+ */
+function SessionArtifactsButton({
+  artifacts,
+  onOpenFilePreview,
+}: {
+  artifacts: ArtifactRef[]
+  onOpenFilePreview: (preview: FilePreviewData) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!containerRef.current) return
+      if (!containerRef.current.contains(event.target as Node)) setOpen(false)
+    }
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleKey)
+    }
+  }, [open])
+
+  if (artifacts.length === 0) return null
+
+  const handleSelect = (artifact: ArtifactRef) => {
+    setOpen(false)
+    onOpenFilePreview({
+      path: artifact.uri || artifact.artifact_id,
+      fileName: artifact.name || artifact.artifact_id,
+      operation: 'read_file',
+      content: artifact.preview_text || '',
+    })
+  }
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-label={`本对话产出文件 (${artifacts.length})`}
+        title="本对话产出文件"
+        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-border px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      >
+        <FolderOpen size={14} />
+        <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+          {artifacts.length}
+        </span>
+      </button>
+
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-[calc(100%+6px)] z-50 w-80 max-w-[80vw] overflow-hidden rounded-xl border border-border bg-card shadow-lg"
+        >
+          <div className="flex items-center justify-between border-b border-border px-3 py-2">
+            <span className="text-xs font-semibold text-foreground">本对话产出文件</span>
+            <span className="text-[11px] text-muted-foreground">{artifacts.length}</span>
+          </div>
+          <div className="max-h-80 overflow-y-auto py-1">
+            {artifacts.map((artifact) => {
+              const title = artifact.name || artifact.artifact_id
+              const subtitle = artifact.description || artifact.mime_type || artifact.type || ''
+              const size = formatArtifactSize(artifact.size_bytes)
+              return (
+                <button
+                  key={artifact.artifact_id}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => handleSelect(artifact)}
+                  className="flex w-full items-start gap-2 px-3 py-2 text-left transition-colors hover:bg-muted/60"
+                >
+                  <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-muted">
+                    <FileText size={13} className="text-primary" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-[12px] font-medium text-foreground" title={title}>{title}</span>
+                      {size && (
+                        <span className="inline-flex h-5 flex-shrink-0 items-center rounded-full border border-border bg-background px-2 text-[10px] leading-none text-muted-foreground">
+                          {size}
+                        </span>
+                      )}
+                    </div>
+                    {subtitle && (
+                      <p className="mt-0.5 truncate text-[11px] text-muted-foreground" title={subtitle}>
+                        {subtitle}
+                      </p>
+                    )}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Chat Page ──────────────────────────────────────────────────────────────
 
 export function ChatPage() {
@@ -1993,6 +2417,16 @@ export function ChatPage() {
     )
   }, [])
 
+  const respondAskQuestion = useCallback<RespondAskQuestionHandler>(async (toolUseId, status, output, errorMessage) => {
+    if (!toolUseId) return
+    await window.harnessclaw.respondAskQuestion(
+      toolUseId,
+      status,
+      status === 'success' ? (output || '') : undefined,
+      status === 'cancelled' ? (errorMessage || 'User dismissed the question dialog') : undefined,
+    )
+  }, [])
+
   const updateCollaboration = useCallback((sid: string, updater: (prev: CollaborationState) => CollaborationState) => {
     updateSession(sid, (prev) => ({
       ...prev,
@@ -2011,9 +2445,6 @@ export function ChatPage() {
     && !activeSession.isStopping
     && !activeSession.currentThinking
     && !hasDraftComposerState
-  const shouldRotatePreparation = activeSession.isProcessing && !activeSession.isPaused && !activeSession.isStopping && !activeSession.currentThinking
-  const loadingNow = useSharedNowTicker(shouldRotatePreparation, 1800)
-  const activeLoadingStep = CHAT_LOADING_STEPS[Math.floor(loadingNow / 1800) % CHAT_LOADING_STEPS.length]
   const pendingAssistantMessage = useMemo(() => {
     const pendingAssistantId = pendingAssistantIds.current[activeSessionId]
     if (!pendingAssistantId) return null
@@ -2027,6 +2458,61 @@ export function ChatPage() {
     () => mergeLegacyCollaborationFallback(activeSession.collaboration, activeSession.messages),
     [activeSession.collaboration, activeSession.messages],
   )
+  // v1.13: aggregate every artifact produced anywhere in the active session
+  // (main agent + sub-agents). Walk all tool result activities, dedupe by
+  // artifact_id, preserve discovery order. Powers the top-bar "文件" button.
+  // Also enrich each ref with the full body recovered from the matching
+  // `ArtifactWrite` tool call's input — preview_text on the wire is capped at
+  // ≤512B (per protocol §10.6) which isn't enough for "fully display"; the
+  // call input still has the producer's full content, so we use that when
+  // available.
+  const sessionArtifacts = useMemo<ArtifactRef[]>(() => {
+    const seen = new Set<string>()
+    const refs: ArtifactRef[] = []
+    // Build call-id → call-input map across the whole session so an artifact
+    // produced inside a sub-agent's tool can still be paired with its
+    // ArtifactWrite call regardless of which message holds the call event.
+    const callInputByCallId = new Map<string, { name: string; input: Record<string, unknown> }>()
+    for (const message of activeSession.messages) {
+      for (const tool of message.tools || []) {
+        if (tool.type !== 'call') continue
+        if (!tool.callId) continue
+        try {
+          const parsed = tool.content ? JSON.parse(tool.content) : {}
+          if (parsed && typeof parsed === 'object') {
+            callInputByCallId.set(tool.callId, {
+              name: tool.name || '',
+              input: parsed as Record<string, unknown>,
+            })
+          }
+        } catch {
+          // input not JSON — skip enrichment for this call.
+        }
+      }
+    }
+    for (const message of activeSession.messages) {
+      for (const tool of message.tools || []) {
+        if (tool.type !== 'result') continue
+        const matched = tool.callId ? callInputByCallId.get(tool.callId) : undefined
+        const writeContent = matched && matched.name === 'ArtifactWrite' && typeof matched.input.content === 'string'
+          ? (matched.input.content as string)
+          : ''
+        for (const artifact of extractArtifactsFromActivity(tool)) {
+          if (seen.has(artifact.artifact_id)) continue
+          seen.add(artifact.artifact_id)
+          refs.push({
+            ...artifact,
+            // Prefer the full ArtifactWrite body when this result corresponds
+            // to that exact write; otherwise keep preview_text so users still
+            // see something for aggregated tool.end refs (Specialists / Task)
+            // where there's no single matching write call in this scope.
+            preview_text: writeContent || artifact.preview_text,
+          })
+        }
+      }
+    }
+    return refs
+  }, [activeSession.messages])
 
   // Display sessions from sessionMap only (user-created or DB-loaded), enriched with server info
   const displayedSessions = useMemo(() => {
@@ -2123,7 +2609,7 @@ export function ChatPage() {
     setShowJumpToBottom(!isNearBottom)
   }, [])
 
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     messagesEndRef.current?.scrollIntoView({ behavior })
     isNearBottomRef.current = true
     setShowJumpToBottom(false)
@@ -2132,12 +2618,12 @@ export function ChatPage() {
   // Scroll to bottom only when the user is already close to the bottom
   useEffect(() => {
     if (isNearBottomRef.current) {
-      scrollToBottom('smooth')
+      scrollToBottom()
     }
   }, [activeSession.messages, activeSession.currentThinking, scrollToBottom])
 
   useEffect(() => {
-    scrollToBottom('auto')
+    scrollToBottom()
   }, [activeSessionId, scrollToBottom])
 
   useEffect(() => {
@@ -2371,6 +2857,26 @@ export function ChatPage() {
     const eventSessionId = getHarnessclawEventSessionId(event) || undefined
     const subagent = normalizeSubagent(event.subagent)
 
+    // DEBUG (remove when SubAgent rendering is verified working): log every
+    // sub-agent / artifact-related event so we can see in DevTools console
+    // whether the renderer is receiving them and which fields are populated.
+    // If "subagent_start" never appears here but the WS Network tab shows
+    // "subagent.start" frames, the bug is between IPC and this callback.
+    if (
+      normalizedType === 'subagent_start' ||
+      normalizedType === 'subagent_event' ||
+      normalizedType === 'subagent_end' ||
+      normalizedType === 'agent_intent'
+    ) {
+      // eslint-disable-next-line no-console
+      console.log('[harnessclaw subagent debug]', normalizedType, {
+        agent_id: event.agent_id,
+        agent_name: event.agent_name,
+        session_id: event.session_id,
+        payload_event_type: isRecord(event.payload) ? event.payload.event_type : undefined,
+      })
+    }
+
     const ensureAssistantMessage = (sid: string, now: number): string => {
       let aid = pendingAssistantIds.current[sid]
       if (aid) return aid
@@ -2507,6 +3013,11 @@ export function ChatPage() {
               ...(prev.syncAgents[agentId] || createSyncAgentState(agentId, updatedAt)),
               agentName: typeof event.agent_name === 'string' ? event.agent_name : prev.syncAgents[agentId]?.agentName || 'subagent',
               description: typeof event.description === 'string' ? event.description : prev.syncAgents[agentId]?.description || '正在执行子 Agent 任务',
+              // v1.12: full task prompt from parent agent. Optional; older
+              // servers (≤v1.11) won't send it — keep prior value if absent.
+              task: typeof event.task === 'string' && event.task
+                ? event.task
+                : prev.syncAgents[agentId]?.task,
               agentType: typeof event.agent_type === 'string' ? event.agent_type : prev.syncAgents[agentId]?.agentType || 'sync',
               parentAgentId: typeof event.parent_agent_id === 'string' ? event.parent_agent_id : prev.syncAgents[agentId]?.parentAgentId || 'main',
               status: 'running',
@@ -2533,8 +3044,19 @@ export function ChatPage() {
         const payload = isRecord(event.payload) ? event.payload : {}
         const eventType = typeof payload.event_type === 'string' ? payload.event_type : ''
         if (!eventType) break
+        // v1.10+: server no longer streams sub-agent LLM text. Only `tool_start`
+        // and `tool_end` inner events are forwarded; user-visible text now comes
+        // exclusively from L1 (emma) `content.delta`. Ignore any unexpected
+        // `text` events from older servers to avoid duplicating emma's reply.
+        if (eventType !== 'tool_start' && eventType !== 'tool_end') break
         const now = Date.now()
         const subagentInfo = createSubagentInfo(agentId, agentName, 'running')
+
+        // v1.12: capture sub-agent's pending intent (if it matches this tool_use_id)
+        // so we can stamp it onto the ToolActivity as a tool-card header line.
+        // Read happens inside the updateCollaboration updater (which has access
+        // to the latest `prev` state synchronously).
+        let intentForActivity: string | undefined
 
         updateCollaboration(sid, (prev) => {
           const existing = prev.syncAgents[agentId] || createSyncAgentState(agentId, now)
@@ -2547,20 +3069,25 @@ export function ChatPage() {
             eventCount: existing.eventCount + 1,
           }
 
-          if (eventType === 'text') {
-            const text = typeof payload.text === 'string' ? payload.text : ''
-            nextState.streamText = `${existing.streamText}${text}`.slice(-2000)
-            nextState.activeToolName = undefined
-            nextState.activeToolStatus = undefined
-            nextState.activeToolSummary = summarizeInlineText(text, 90) || existing.activeToolSummary
-          } else if (eventType === 'tool_start') {
+          const callIdInPayload = typeof payload.tool_use_id === 'string' ? payload.tool_use_id : ''
+
+          if (eventType === 'tool_start') {
             nextState.activeToolName = getToolEventName(payload) || existing.activeToolName
             nextState.activeToolStatus = 'running'
             nextState.activeToolSummary = summarizeInlineText(getToolCallEventContent(payload), 90) || '准备执行工具'
+            // v1.12: if a matching intent was buffered for this tool_use_id,
+            // capture it for the ToolActivity below.
+            if (existing.currentIntent && callIdInPayload && existing.currentIntent.toolUseId === callIdInPayload) {
+              intentForActivity = existing.currentIntent.text
+            }
           } else if (eventType === 'tool_end') {
             nextState.activeToolName = getToolEventName(payload) || existing.activeToolName
             nextState.activeToolStatus = payload.is_error === true ? 'error' : 'completed'
             nextState.activeToolSummary = summarizeInlineText(getToolResultEventContent(payload), 90) || (payload.is_error === true ? '工具执行失败' : '工具执行完成')
+            // v1.12: clear sub-agent intent shimmer once its tool finishes.
+            if (existing.currentIntent && callIdInPayload && existing.currentIntent.toolUseId === callIdInPayload) {
+              nextState.currentIntent = undefined
+            }
           }
 
           return {
@@ -2573,77 +3100,40 @@ export function ChatPage() {
           }
         })
 
-        if (eventType === 'text') {
-          const aid = ensureAssistantMessage(sid, now)
-          const text = typeof payload.text === 'string' ? payload.text : ''
-          if (!text) break
-          updateSession(sid, (prev) => ({
-            ...prev,
-            messages: prev.messages.map((m) => {
-              if (m.id !== aid) return m
-              const segments = m.contentSegments || []
-              const moduleKey = getModuleKey(subagentInfo)
-              const lastSegIndex = [...segments].reverse().findIndex((seg) => getModuleKey(seg.subagent) === moduleKey)
-              const resolvedLastSegIndex = lastSegIndex === -1 ? -1 : segments.length - 1 - lastSegIndex
-              const lastSeg = resolvedLastSegIndex >= 0 ? segments[resolvedLastSegIndex] : undefined
-              const lastRelatedToolTs = Math.max(
-                0,
-                ...(m.tools || [])
-                  .filter((tool) => getModuleKey(tool.subagent) === moduleKey)
-                  .map((tool) => tool.ts),
-              )
+        const aid = ensureAssistantMessage(sid, now)
+        const callId = typeof payload.tool_use_id === 'string' && payload.tool_use_id
+          ? payload.tool_use_id
+          : `${agentId}-${typeof event.event_id === 'string' ? event.event_id : now}`
 
-              if (lastSeg && lastRelatedToolTs > lastSeg.ts) {
-                return { ...m, content: m.content + text, contentSegments: [...segments, { text, ts: now, subagent: subagentInfo }] }
-              }
+        const activity: ToolActivity = eventType === 'tool_start'
+          ? {
+              type: 'call',
+              name: getToolEventName(payload) || 'tool',
+              content: getToolCallEventContent(payload),
+              callId,
+              intent: intentForActivity,
+              ts: now,
+              subagent: subagentInfo,
+            }
+          : {
+              type: 'result',
+              name: getToolEventName(payload) || 'tool',
+              content: getToolResultEventContent(payload),
+              callId,
+              isError: payload.is_error === true,
+              durationMs: getToolDurationMs(payload),
+              renderHint: getToolRenderHint(payload),
+              language: getToolLanguage(payload),
+              filePath: getToolFilePath(payload),
+              metadata: getToolMetadata(payload),
+              ts: now,
+              subagent: subagentInfo,
+            }
 
-              if (lastSeg && isSameSubagent(lastSeg.subagent, subagentInfo)) {
-                const updated = [...segments]
-                updated[resolvedLastSegIndex] = { ...lastSeg, text: lastSeg.text + text, ts: lastSeg.ts }
-                return { ...m, content: m.content + text, contentSegments: updated }
-              }
-
-              return { ...m, content: m.content + text, contentSegments: [...segments, { text, ts: now, subagent: subagentInfo }] }
-            }),
-          }))
-          break
-        }
-
-        if (eventType === 'tool_start' || eventType === 'tool_end') {
-          const aid = ensureAssistantMessage(sid, now)
-          const callId = typeof payload.tool_use_id === 'string' && payload.tool_use_id
-            ? payload.tool_use_id
-            : `${agentId}-${typeof event.event_id === 'string' ? event.event_id : now}`
-
-          const activity: ToolActivity = eventType === 'tool_start'
-            ? {
-                type: 'call',
-                name: getToolEventName(payload) || 'tool',
-                content: getToolCallEventContent(payload),
-                callId,
-                ts: now,
-                subagent: subagentInfo,
-              }
-            : {
-                type: 'result',
-                name: getToolEventName(payload) || 'tool',
-                content: getToolResultEventContent(payload),
-                callId,
-                isError: payload.is_error === true,
-                durationMs: getToolDurationMs(payload),
-                renderHint: getToolRenderHint(payload),
-                language: getToolLanguage(payload),
-                filePath: getToolFilePath(payload),
-                metadata: getToolMetadata(payload),
-                ts: now,
-                subagent: subagentInfo,
-              }
-
-          updateSession(sid, (prev) => ({
-            ...prev,
-            messages: prev.messages.map((m) => m.id === aid ? { ...m, tools: [...(m.tools || []), activity] } : m),
-          }))
-        }
+        updateSession(sid, (prev) => ({
+          ...prev,
+          messages: prev.messages.map((m) => m.id === aid ? { ...m, tools: [...(m.tools || []), activity] } : m),
+        }))
         break
       }
 
@@ -2677,6 +3167,8 @@ export function ChatPage() {
               activeToolName: prev.syncAgents[agentId]?.activeToolName,
               activeToolStatus: prev.syncAgents[agentId]?.activeToolStatus,
               activeToolSummary: prev.syncAgents[agentId]?.activeToolSummary,
+              // v1.12: clear any lingering intent on sub-agent termination.
+              currentIntent: undefined,
               lastEventAt: prev.syncAgents[agentId]?.lastEventAt,
               eventCount: prev.syncAgents[agentId]?.eventCount || 0,
               updatedAt,
@@ -3010,6 +3502,55 @@ export function ChatPage() {
         break
       }
 
+      case 'agent_intent': {
+        // v1.12: agent.intent — pre-tool progress sentence ("正在搜索 vLLM 论文").
+        // Routing rule (per design decisions):
+        //   - main agent (from_subagent !== true) → session.currentIntent (top-level shimmer)
+        //   - sub-agent (from_subagent === true)  → syncAgents[agentId].currentIntent
+        //                                          (rendered inside that sub-agent card)
+        // Cleared when the matching tool finishes (matched by tool_use_id) or
+        // when the assistant turn / sub-agent ends.
+        const sid = eventSessionId!
+        const intentText = typeof event.intent === 'string' ? event.intent : ''
+        if (!intentText) break
+        const toolUseId = typeof event.tool_use_id === 'string' ? event.tool_use_id : ''
+        const agentName = typeof event.agent_name === 'string' ? event.agent_name : ''
+        const fromSubagent = event.from_subagent === true
+
+        if (fromSubagent) {
+          const agentId = typeof event.agent_id === 'string' ? event.agent_id : ''
+          if (!agentId) break
+          const updatedAt = Date.now()
+          updateCollaboration(sid, (prev) => ({
+            ...prev,
+            capabilities: { ...prev.capabilities, subAgents: true },
+            syncAgents: {
+              ...prev.syncAgents,
+              [agentId]: {
+                ...(prev.syncAgents[agentId] || createSyncAgentState(agentId, updatedAt)),
+                agentName: agentName || prev.syncAgents[agentId]?.agentName || 'subagent',
+                currentIntent: { text: intentText, toolUseId },
+                lastEventAt: updatedAt,
+                updatedAt,
+              },
+            },
+          }))
+          break
+        }
+
+        ensureAssistantMessage(sid, Date.now())
+        updateSession(sid, (prev) => ({
+          ...prev,
+          currentIntent: {
+            text: intentText,
+            toolUseId,
+            agentName,
+            fromSubagent: false,
+          },
+        }))
+        break
+      }
+
       case 'tool_hint': {
         const sid = eventSessionId!
         const aid = ensureAssistantMessage(sid, Date.now())
@@ -3033,16 +3574,29 @@ export function ChatPage() {
       case 'tool_start': {
         const sid = eventSessionId!
         const aid = ensureAssistantMessage(sid, Date.now())
+        // v1.12: main-process attaches the buffered `agent.intent` text on the
+        // tool_call compat event (see harnessclaw.ts). Capture it so the tool
+        // card can render its own intent line — important for the `Task` tool
+        // whose intent ("派研究子代理…") differs from the spawned sub-agent's
+        // intents that follow.
+        const callIntent = typeof event.intent === 'string' && event.intent ? event.intent : undefined
         const activity: ToolActivity = {
           type: 'call',
           name: getToolEventName(event),
           content: getToolCallEventContent(event),
           callId: getToolEventCallId(event),
+          intent: callIntent,
           ts: Date.now(),
           subagent,
         }
+        const startedCallId = activity.callId
         updateSession(sid, (prev) => ({
           ...prev,
+          // v1.12: Emma 的鎏光在"安排好具体的事情"之后结束 — 即工具开始派发时
+          // 立即清除主 Agent 的 intent。剩下的执行进度由工具卡片自己呈现。
+          currentIntent: prev.currentIntent && startedCallId && prev.currentIntent.toolUseId === startedCallId
+            ? undefined
+            : prev.currentIntent,
           isPaused: false,
           isStopping: false,
           pauseReason: undefined,
@@ -3122,11 +3676,86 @@ export function ChatPage() {
         break
       }
 
+      case 'ask_user_question': {
+        const sid = eventSessionId!
+        if (!sid) break
+        const callId = typeof event.call_id === 'string' ? event.call_id : ''
+        if (!callId) break
+        const aid = ensureAssistantMessage(sid, Date.now())
+        const rawOptions = Array.isArray(event.options) ? event.options : []
+        const options = rawOptions.flatMap((option) => {
+          if (!option || typeof option !== 'object' || Array.isArray(option)) return []
+          const candidate = option as { label?: unknown; description?: unknown }
+          const label = typeof candidate.label === 'string' ? candidate.label : ''
+          if (!label) return []
+          const description = typeof candidate.description === 'string' ? candidate.description : undefined
+          return [description ? { label, description } : { label }]
+        })
+        const activity: ToolActivity = {
+          type: 'question',
+          name: typeof event.tool_name === 'string' ? event.tool_name : 'AskUserQuestion',
+          content: JSON.stringify({
+            question: typeof event.question === 'string' ? event.question : '',
+            options,
+            multi: event.multi === true,
+            allow_custom: event.allow_custom !== false,
+          }),
+          callId,
+          ts: Date.now(),
+          subagent,
+        }
+        updateSession(sid, (prev) => ({
+          ...prev,
+          messages: prev.messages.map((m) => m.id === aid ? { ...m, tools: [...(m.tools || []), activity] } : m),
+        }))
+        break
+      }
+
+      case 'ask_user_question_result': {
+        const sid = eventSessionId!
+        if (!sid) break
+        const callId = typeof event.call_id === 'string' ? event.call_id : ''
+        if (!callId) break
+        const aid = ensureAssistantMessage(sid, Date.now())
+        const status = event.status === 'cancelled' ? 'cancelled' : 'success'
+        const errorObj = isRecord(event.error) ? event.error : null
+        const errorMessage = errorObj && typeof errorObj.message === 'string' ? errorObj.message : ''
+        const activity: ToolActivity = {
+          type: 'question_result',
+          name: 'AskUserQuestion',
+          content: JSON.stringify({
+            status,
+            output: typeof event.output === 'string' ? event.output : '',
+            error_message: errorMessage,
+          }),
+          callId,
+          isError: status === 'cancelled',
+          ts: Date.now(),
+          subagent,
+        }
+        updateSession(sid, (prev) => ({
+          ...prev,
+          messages: prev.messages.map((m) => m.id === aid ? { ...m, tools: [...(m.tools || []), activity] } : m),
+        }))
+        break
+      }
+
       case 'text_delta': {
         const sid = eventSessionId!
         let aid = pendingAssistantIds.current[sid]
         const chunk = event.content as string
         const now = Date.now()
+        // TEMP DIAGNOSTIC — surface routing + tracking state for streaming
+        // text. Remove once the "stuck on Thinking…" issue is identified.
+        // eslint-disable-next-line no-console
+        console.log('[text_delta debug]', {
+          eventSessionId: sid,
+          activeSessionId: activeSessionIdRef.current,
+          sidMatchesActive: sid === activeSessionIdRef.current,
+          pendingAssistantId: aid,
+          chunkPreview: chunk?.slice(0, 20),
+          chunkLen: chunk?.length,
+        })
         if (!aid) {
           aid = ensureAssistantMessage(sid, now)
           updateSession(sid, (prev) => ({
@@ -3259,6 +3888,7 @@ export function ChatPage() {
           ...prev,
           isProcessing: false,
           currentThinking: '',
+          currentIntent: undefined,
           isPaused: false,
           isStopping: false,
           pauseReason: undefined,
@@ -3319,6 +3949,7 @@ export function ChatPage() {
           ...prev,
           isProcessing: false,
           currentThinking: '',
+          currentIntent: undefined,
           isPaused: false,
           isStopping: false,
           pauseReason: undefined,
@@ -3395,6 +4026,51 @@ export function ChatPage() {
     const payload = buildMessagePayload(fullMessage, attachments)
     const attachedFiles = [...attachments]
 
+    // Fail-fast when the backend is not connected. Without this guard the
+    // message would enter an indefinite "thinking" state because
+    // `window.harnessclaw.send` would block on `waitForTransport` in the main
+    // process while the reconnect loop runs.
+    if (harnessclawStatus !== 'connected') {
+      const sendAt = Date.now()
+      updateSession(sid, (prev) => ({
+        ...prev,
+        isProcessing: false,
+        currentThinking: '',
+        isPaused: false,
+        isStopping: false,
+        pauseReason: undefined,
+        messages: [
+          ...prev.messages,
+          {
+            id: `usr-${sendAt}`,
+            role: 'user',
+            content: fullMessage,
+            attachments: attachedFiles,
+            timestamp: sendAt,
+          },
+          {
+            id: `err-${sendAt}`,
+            role: 'assistant',
+            content: '',
+            timestamp: sendAt,
+            systemNotice: {
+              kind: 'error',
+              title: '后台服务未连接',
+              message: harnessclawStatus === 'connecting'
+                ? '正在尝试连接 HarnessClaw 服务，请稍后再试。'
+                : '无法连接 HarnessClaw 服务，请确认本地后台已启动后再试。',
+              hint: '请检查本地服务是否已启动，以及连接配置是否正确。',
+            },
+          },
+        ],
+      }))
+      setInput('')
+      setSelectedSkills([])
+      setAttachments([])
+      pasted.clearBlocks()
+      return
+    }
+
     updateSession(sid, (prev) => ({
       ...prev,
       isProcessing: true,
@@ -3410,7 +4086,56 @@ export function ChatPage() {
         timestamp: Date.now(),
       }],
     }))
-    void window.harnessclaw.send(payload, sid)
+    // Await the IPC so that an explicit `false` (e.g. transport-not-open
+    // thrown inside the main process) immediately clears the thinking state.
+    void window.harnessclaw.send(payload, sid).then((ok) => {
+      if (ok) return
+      const errorAt = Date.now()
+      const pendingAssistantId = pendingAssistantIds.current[sid]
+      pendingAssistantIds.current[sid] = null
+      updateSession(sid, (prev) => {
+        const messages = [...prev.messages]
+        const attachIndex = findAttachableAssistantMessageIndex(messages, errorAt, pendingAssistantId)
+        const notice: SystemNoticeData = {
+          kind: 'error',
+          title: '请求失败',
+          message: '消息发送失败：后台服务未连接，请确认本地后台已启动后再试。',
+          hint: '请检查本地服务是否已启动，以及连接配置是否正确。',
+        }
+        if (attachIndex >= 0) {
+          messages[attachIndex] = {
+            ...messages[attachIndex],
+            isStreaming: false,
+            systemNotice: notice,
+            timestamp: errorAt,
+          }
+        } else {
+          messages.push({
+            id: `err-${errorAt}`,
+            role: 'assistant',
+            content: '',
+            systemNotice: notice,
+            timestamp: errorAt,
+          })
+        }
+        return {
+          ...prev,
+          isProcessing: false,
+          currentThinking: '',
+          isPaused: false,
+          isStopping: false,
+          pauseReason: undefined,
+          messages,
+        }
+      })
+    }).catch(() => {
+      // IPC layer failure (e.g. preload error) — clear the thinking state too.
+      updateSession(sid, (prev) => ({
+        ...prev,
+        isProcessing: false,
+        currentThinking: '',
+      }))
+    })
     if (sendBurstTimerRef.current != null) {
       window.clearTimeout(sendBurstTimerRef.current)
     }
@@ -3583,7 +4308,14 @@ export function ChatPage() {
             </div>
 
             {activeSessionId && (
-              <div className="flex justify-start sm:justify-end">
+              <div className="flex flex-wrap items-center justify-start gap-2 sm:justify-end">
+                {/* v1.13: Files button. Appears only when the session has at
+                    least one artifact; click opens a popover listing all
+                    produced artifacts; click an item → preview drawer. */}
+                <SessionArtifactsButton
+                  artifacts={sessionArtifacts}
+                  onOpenFilePreview={setFilePreview}
+                />
                 <button
                   onClick={handleClearHistory}
                   className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-border px-3.5 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
@@ -3644,26 +4376,33 @@ export function ChatPage() {
         ) : (
           <>
             {/* Messages */}
-            <ConversationTimeline
-              collaboration={displayCollaboration}
-              displayMessages={displayMessages}
-              isProcessing={activeSession.isProcessing}
-              isPaused={activeSession.isPaused}
-              isStopping={activeSession.isStopping}
-              currentThinking={activeSession.currentThinking}
-              pendingAssistantMessage={pendingAssistantMessage}
-              activeLoadingStep={activeLoadingStep}
-              messagesViewportRef={messagesViewportRef}
-              messagesEndRef={messagesEndRef}
-              onScroll={updateScrollState}
-              onOpenFilePreview={setFilePreview}
-              onRespondPermission={respondPermission}
-            />
+            <div className="relative flex flex-1 min-h-0 flex-col">
+              <ConversationTimeline
+                collaboration={displayCollaboration}
+                displayMessages={displayMessages}
+                isProcessing={activeSession.isProcessing}
+                isPaused={activeSession.isPaused}
+                isStopping={activeSession.isStopping}
+                currentThinking={activeSession.currentThinking}
+                currentIntent={activeSession.currentIntent}
+                pendingAssistantMessage={pendingAssistantMessage}
+                messagesViewportRef={messagesViewportRef}
+                messagesEndRef={messagesEndRef}
+                onScroll={updateScrollState}
+                onOpenFilePreview={setFilePreview}
+                onRespondPermission={respondPermission}
+                onRespondAskQuestion={respondAskQuestion}
+              />
+              <ConversationQuickNav
+                displayMessages={displayMessages}
+                messagesViewportRef={messagesViewportRef}
+              />
+            </div>
 
             {showJumpToBottom && (
               <button
-                onClick={() => scrollToBottom('smooth')}
-                className="chat-jump-to-bottom absolute bottom-[calc(100px+1.5rem)] left-1/2 z-20 flex h-11 w-11 -translate-x-1/2 items-center justify-center rounded-full border border-border/80 bg-white shadow-[0_14px_30px_rgba(15,23,42,0.14)] transition-transform hover:scale-[1.03] dark:bg-card"
+                onClick={() => scrollToBottom()}
+                className="chat-jump-to-bottom absolute bottom-[calc(100px+1.5rem)] left-1/2 z-20 flex h-11 w-11 -translate-x-1/2 items-center justify-center rounded-full border border-border/80 bg-white text-foreground shadow-[0_14px_30px_rgba(15,23,42,0.14)] transition-[transform,background-color,border-color,box-shadow] hover:scale-[1.03] hover:border-border hover:bg-muted hover:shadow-[0_18px_36px_rgba(15,23,42,0.18)] dark:bg-card dark:hover:bg-muted/60"
                 aria-label="快速回到底部"
                 title="回到底部"
               >
@@ -3833,15 +4572,23 @@ function AgentAvatar({ agentId, agentName, size = 'md' }: { agentId?: string; ag
   const dim = size === 'sm' ? 'h-6 w-6' : 'h-8 w-8'
   // Main agent (emma) — or fallback when no agentId is given
   if (!agentId) {
-    return <img src={emmaAvatar} alt="Emma" className={cn(dim, 'flex-shrink-0 rounded-full object-cover')} />
+    return (
+      <AvatarLightbox
+        src={emmaAvatar}
+        alt="Emma"
+        triggerClassName="flex-shrink-0 rounded-full"
+        imgClassName={cn(dim, 'rounded-full object-cover')}
+      />
+    )
   }
   // Sub-agent — resolve to one of the 5 team member avatars
   const src = resolveTeamAvatar(agentName || agentId)
   return (
-    <img
+    <AvatarLightbox
       src={src}
       alt={agentName || agentId}
-      className={cn(dim, 'flex-shrink-0 rounded-full bg-muted object-cover')}
+      triggerClassName="flex-shrink-0 rounded-full"
+      imgClassName={cn(dim, 'rounded-full bg-muted object-cover')}
     />
   )
 }
@@ -4009,14 +4756,53 @@ function CollaborationOverview({ collaboration }: { collaboration: Collaboration
   )
 }
 
+/**
+ * v1.12: collapsible expander showing the full task prompt that the parent
+ * agent handed to a sub-agent. Mirrors the rest of the project's expander
+ * style (small chevron + "查看任务详情" trigger, code-style task body).
+ */
+function TaskPromptExpander({ prompt }: { prompt: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const trimmed = prompt.trim()
+  if (!trimmed) return null
+  return (
+    <div className="mb-2">
+      <button
+        type="button"
+        onClick={() => setExpanded((prev) => !prev)}
+        aria-expanded={expanded}
+        className="inline-flex min-h-7 items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+      >
+        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        <span>{expanded ? '收起任务详情' : '查看任务详情'}</span>
+      </button>
+      {expanded && (
+        <div className="mt-1.5 max-h-60 overflow-y-auto rounded-lg border border-border/70 bg-muted/40 px-2.5 py-2 text-[11px] leading-5 text-foreground/85">
+          <p className="whitespace-pre-wrap break-words">{trimmed}</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function MessageBubble({
   message,
+  syncAgents,
+  activeIntent,
   onOpenFilePreview,
   onRespondPermission,
+  onRespondAskQuestion,
 }: {
   message: Message
+  /** v1.12: per-agent state used to render the sub-agent task expander and
+   * intent shimmer inside the agent-team segment header. */
+  syncAgents?: Record<string, SyncAgentState>
+  /** v1.12: main-agent (Emma) intent shimmer rendered after the agent name.
+   * Only set on the currently streaming assistant message. */
+  activeIntent?: SessionState['currentIntent']
   onOpenFilePreview: (preview: FilePreviewData) => void
   onRespondPermission: (requestId: string, approved: boolean, scope: 'once' | 'session') => Promise<void>
+  onRespondAskQuestion: RespondAskQuestionHandler
 }) {
   const [copied, setCopied] = useState(false)
   const isUser = message.role === 'user'
@@ -4083,6 +4869,7 @@ function MessageBubble({
     | { kind: 'hint'; data: ToolActivity; ts: number; subagent?: SubagentInfo }
     | { kind: 'tool'; call: ToolActivity; result?: ToolActivity; isRunning: boolean; ts: number; subagent?: SubagentInfo }
     | { kind: 'permission'; request: ToolActivity; result?: ToolActivity; ts: number; subagent?: SubagentInfo }
+    | { kind: 'question'; request: ToolActivity; result?: ToolActivity; ts: number; subagent?: SubagentInfo }
     | { kind: 'text'; text: string; ts: number; subagent?: SubagentInfo }
 
   type AgentTeamMember = {
@@ -4099,6 +4886,7 @@ function MessageBubble({
   const tools = message.tools || []
   const toolResults = tools.filter((a) => a.type === 'result')
   const permissionResults = tools.filter((a) => a.type === 'permission_result')
+  const questionResults = tools.filter((a) => a.type === 'question_result')
 
   for (const t of tools) {
     if (t.type === 'status') {
@@ -4112,6 +4900,9 @@ function MessageBubble({
     } else if (t.type === 'permission') {
       const result = permissionResults.find((r) => r.callId === t.callId)
       segments.push({ kind: 'permission', request: t, result, ts: t.ts, subagent: t.subagent || result?.subagent })
+    } else if (t.type === 'question') {
+      const result = questionResults.find((r) => r.callId === t.callId)
+      segments.push({ kind: 'question', request: t, result, ts: t.ts, subagent: t.subagent || result?.subagent })
     }
   }
 
@@ -4128,46 +4919,51 @@ function MessageBubble({
 
   segments.sort((a, b) => a.ts - b.ts)
 
+  // Chronological multi-chat grouping. Walk segments in time order; if the
+  // current segment's speaker matches the most-recent module's speaker,
+  // append to it (rule 1 — old/continuing task appends after itself).
+  // If the speaker is different from the previous module's speaker, open
+  // a brand-new module so the speaker change is visible (rule 2 — new
+  // speaker → new module, with its own avatar). The same speaker can have
+  // multiple non-consecutive modules over the course of a message; each
+  // module renders the speaker's avatar so the layout reads like a
+  // multi-person chat transcript.
   const displaySegments: DisplaySegment[] = []
+  const mainSpeakerKey = '__main__'
 
   for (const seg of segments) {
+    const speakerKey = seg.subagent ? `agent:${seg.subagent.taskId}` : mainSpeakerKey
+    const lastSegment = displaySegments[displaySegments.length - 1]
+
     if (!seg.subagent) {
-      const lastSegment = displaySegments[displaySegments.length - 1]
       if (lastSegment?.kind === 'main') {
         lastSegment.items.push(seg)
       } else {
-        displaySegments.push({
-          kind: 'main',
-          items: [seg],
-          ts: seg.ts,
-        })
+        displaySegments.push({ kind: 'main', items: [seg], ts: seg.ts })
       }
       continue
     }
 
-    const lastSegment = displaySegments[displaySegments.length - 1]
-    const teamSegment = lastSegment?.kind === 'agent-team'
-      ? lastSegment
-      : (() => {
-          const next: Extract<DisplaySegment, { kind: 'agent-team' }> = {
-            kind: 'agent-team',
-            agents: [],
-            ts: seg.ts,
-          }
-          displaySegments.push(next)
-          return next
-        })()
+    // Sub-agent segment: only continue the previous agent-team module when
+    // the most-recent module is also an agent-team AND its trailing speaker
+    // is THIS sub-agent. Otherwise (different sub-agent or main was last),
+    // start a fresh agent-team module so each unique speaker gets its own
+    // visual block in chronological order.
+    const lastIsSameSpeaker =
+      lastSegment?.kind === 'agent-team' &&
+      lastSegment.agents.length > 0 &&
+      `agent:${lastSegment.agents[lastSegment.agents.length - 1].task.taskId}` === speakerKey
 
-    const existingMember = teamSegment.agents.find((member) => member.task.taskId === seg.subagent?.taskId)
-    if (existingMember) {
-      existingMember.task = seg.subagent
-      existingMember.items.push(seg)
+    if (lastIsSameSpeaker && lastSegment?.kind === 'agent-team') {
+      const member = lastSegment.agents[lastSegment.agents.length - 1]
+      member.task = seg.subagent
+      member.items.push(seg)
       continue
     }
 
-    teamSegment.agents.push({
-      task: seg.subagent,
-      items: [seg],
+    displaySegments.push({
+      kind: 'agent-team',
+      agents: [{ task: seg.subagent, items: [seg], ts: seg.ts }],
       ts: seg.ts,
     })
   }
@@ -4301,7 +5097,20 @@ function MessageBubble({
         )}
       >
         {!isUser && (
-          <p className="mb-1 text-xs font-medium text-muted-foreground">Emma</p>
+          // v1.12: 主 Agent (Emma) 名字旁渲染鎏光 intent — "安排好具体的事情就应该结束了"
+          // (在 tool_call / tool_start 触达时由 reducer 清空 currentIntent)。
+          <div className="mb-1 flex items-center gap-2">
+            <span className="text-xs font-medium text-muted-foreground">Emma</span>
+            {activeIntent?.text && (
+              <span
+                className="chat-thinking-shimmer min-w-0 truncate text-xs font-medium"
+                aria-live="polite"
+                title={activeIntent.text}
+              >
+                {activeIntent.text}
+              </span>
+            )}
+          </div>
         )}
         <div className={cn(
           'mb-1 flex justify-end gap-1 opacity-100 transition-opacity md:absolute md:top-1 md:z-10 md:mb-0 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100',
@@ -4344,6 +5153,16 @@ function MessageBubble({
                       />
                     )
                   }
+                  if (item.kind === 'question') {
+                    return (
+                      <AskUserQuestionCard
+                        key={item.request.callId || `${i}-${itemIndex}`}
+                        request={item.request}
+                        result={item.result}
+                        onRespondAskQuestion={onRespondAskQuestion}
+                      />
+                    )
+                  }
                   return renderTextBlock(item.text, `text-${i}-${itemIndex}`)
                 })}
               </div>
@@ -4359,8 +5178,32 @@ function MessageBubble({
                   )
                   const visualStatus = getSubagentVisualStatus(latestTask.status)
                   const visibleItems = agent.items.filter((item) => item.kind !== 'status')
+                  // v1.12: pull task prompt + live intent from the collaboration state.
+                  const liveAgentState = syncAgents?.[latestTask.taskId]
+                  const taskPrompt = liveAgentState?.task
+                  const liveIntent = liveAgentState?.currentIntent?.text
+                  // Compute hierarchy depth by walking parentAgentId up the
+                  // syncAgents chain. Depth 0 = L2 specialist (parent = main),
+                  // depth >= 1 = L3+ nested sub-agent. Each level adds left
+                  // indentation so the parent/child relationship is visible.
+                  let depth = 0
+                  let parentId = liveAgentState?.parentAgentId
+                  const seen = new Set<string>([latestTask.taskId])
+                  while (parentId && parentId !== 'main' && !seen.has(parentId)) {
+                    seen.add(parentId)
+                    depth += 1
+                    parentId = syncAgents?.[parentId]?.parentAgentId
+                    if (depth > 4) break
+                  }
+                  const indentClass = depth === 0
+                    ? 'ml-2'
+                    : depth === 1
+                      ? 'ml-8'
+                      : depth === 2
+                        ? 'ml-14'
+                        : 'ml-20'
                   return (
-                    <div key={latestTask.taskId || `sub-${agentIdx}`} className="ml-2 border-l-2 border-primary/20 pl-3">
+                    <div key={latestTask.taskId || `sub-${agentIdx}`} className={cn(indentClass, 'border-l-2 border-primary/20 pl-3')} data-agent-depth={depth}>
                       <div className="mb-1.5 flex items-center gap-2">
                         <AgentAvatar agentId={latestTask.taskId || latestTask.label} agentName={latestTask.label} size="sm" />
                         <span className="text-xs font-medium text-foreground/80">{latestTask.label}</span>
@@ -4375,6 +5218,23 @@ function MessageBubble({
                           {visualStatus === 'failed' ? '失败' : visualStatus === 'running' ? '进行中' : '已完成'}
                         </span>
                       </div>
+
+                      {/* v1.12: live agent.intent shimmer rendered inside the
+                          sub-agent card, right under the header. Cleared when
+                          the matching tool ends or the sub-agent terminates. */}
+                      {liveIntent && (
+                        <p className="mb-1.5 truncate text-[11px] leading-5">
+                          <span className="chat-thinking-shimmer" title={liveIntent}>{liveIntent}</span>
+                        </p>
+                      )}
+
+                      {/* v1.12: collapsible task prompt — full text the parent
+                          handed to this sub-agent (≤800 runes). Helps users
+                          understand what L3 is actually doing. */}
+                      {taskPrompt && (
+                        <TaskPromptExpander prompt={taskPrompt} />
+                      )}
+
                       {visibleItems.length === 0 ? (
                         <p className="text-[11px] text-muted-foreground">等待更多处理结果…</p>
                       ) : (
@@ -4400,6 +5260,16 @@ function MessageBubble({
                                 request={item.request}
                                 result={item.result}
                                 onRespondPermission={onRespondPermission}
+                              />
+                            )
+                          }
+                          if (item.kind === 'question') {
+                            return (
+                              <AskUserQuestionCard
+                                key={item.request.callId || `sub-question-${i}-${agentIdx}-${itemIndex}`}
+                                request={item.request}
+                                result={item.result}
+                                onRespondAskQuestion={onRespondAskQuestion}
                               />
                             )
                           }
@@ -4450,6 +5320,7 @@ function AgentTeamPanel({
   agents,
   onOpenFilePreview,
   onRespondPermission,
+  onRespondAskQuestion,
   renderHint,
   renderTextBlock,
 }: {
@@ -4460,12 +5331,14 @@ function AgentTeamPanel({
       | { kind: 'hint'; data: ToolActivity; ts: number; subagent?: SubagentInfo }
       | { kind: 'tool'; call: ToolActivity; result?: ToolActivity; isRunning: boolean; ts: number; subagent?: SubagentInfo }
       | { kind: 'permission'; request: ToolActivity; result?: ToolActivity; ts: number; subagent?: SubagentInfo }
+      | { kind: 'question'; request: ToolActivity; result?: ToolActivity; ts: number; subagent?: SubagentInfo }
       | { kind: 'text'; text: string; ts: number; subagent?: SubagentInfo }
     >
     ts: number
   }>
   onOpenFilePreview: (preview: FilePreviewData) => void
   onRespondPermission: (requestId: string, approved: boolean, scope: 'once' | 'session') => Promise<void>
+  onRespondAskQuestion: RespondAskQuestionHandler
   renderHint: (text: string, key: string, compact?: boolean) => JSX.Element
   renderTextBlock: (text: string, key: string, compact?: boolean) => JSX.Element
 }) {
@@ -4657,10 +5530,12 @@ function AgentTeamPanel({
               <div className="team-stack-card-top">
                 <div className="team-stack-agent-head">
                   <div className="team-stack-agent-avatar">
-                    <img
+                    <AvatarLightbox
+                      nested
                       src={resolveTeamAvatar(latestActiveTask.label)}
                       alt={latestActiveTask.label}
-                      className="h-full w-full rounded-[0.85rem] object-cover"
+                      triggerClassName="block h-full w-full rounded-[0.85rem]"
+                      imgClassName="h-full w-full rounded-[0.85rem] object-cover"
                     />
                   </div>
                   <div className="min-w-0">
@@ -4778,7 +5653,9 @@ function AgentTeamPanel({
                         ? `team-hint-${latestActiveTask.taskId}-${index}`
                         : item.kind === 'tool'
                           ? `team-tool-${item.call.callId || index}`
-                          : `team-perm-${item.request.callId || index}`
+                          : item.kind === 'permission'
+                            ? `team-perm-${item.request.callId || index}`
+                            : `team-question-${item.request.callId || index}`
                     const itemIsLive = activeVisualStatus === 'running' && liveNow - item.ts < 1500
 
                     if (item.kind === 'hint') {
@@ -4809,6 +5686,18 @@ function AgentTeamPanel({
                             request={item.request}
                             result={item.result}
                             onRespondPermission={onRespondPermission}
+                          />
+                        </div>
+                      )
+                    }
+
+                    if (item.kind === 'question') {
+                      return (
+                        <div key={itemKey} className="subagent-stream-item" data-live={itemIsLive ? 'true' : undefined}>
+                          <AskUserQuestionCard
+                            request={item.request}
+                            result={item.result}
+                            onRespondAskQuestion={onRespondAskQuestion}
                           />
                         </div>
                       )
@@ -4888,6 +5777,23 @@ function ToolCallCard({
                 {isRunning ? '执行中' : result?.isError ? '失败' : result ? '完成' : ''}
               </span>
             </div>
+            {/* v1.12: agent.intent — pre-tool progress sentence rendered as a
+                shimmer header line. Shimmer animation only while running; once
+                the tool finishes we keep the text in plain muted color so the
+                user retains context but the activity stops drawing attention.
+                For the `Task` tool this is the parent agent's own intent
+                (e.g. "派研究子代理调研…"), distinct from the sub-agent intents
+                rendered inside the specialist panel. */}
+            {call.intent && (
+              <p className="mt-1 truncate text-[11px] leading-5">
+                <span
+                  className={cn(isRunning ? 'chat-thinking-shimmer' : 'text-muted-foreground')}
+                  title={call.intent}
+                >
+                  {call.intent}
+                </span>
+              </p>
+            )}
             <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
               {isRunning ? 'Agent 正在执行这个步骤。' : getToolResultSummary(call, result, filePreview)}
             </p>
@@ -5104,6 +6010,221 @@ function PermissionRequestCard({
               </pre>
             </div>
           )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AskUserQuestionCard({
+  request,
+  result,
+  onRespondAskQuestion,
+}: {
+  request: ToolActivity
+  result?: ToolActivity
+  onRespondAskQuestion: RespondAskQuestionHandler
+}) {
+  const requestData = parseAskQuestionRequestData(request.content)
+  const resultData = result ? parseAskQuestionResultData(result.content) : null
+  const isResolved = !!resultData
+  const allowCustom = requestData?.allowCustom !== false
+  const multi = requestData?.multi === true
+  const options = requestData?.options || []
+  const hasOptions = options.length > 0
+
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [customText, setCustomText] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  const hasCustomText = customText.trim().length > 0
+
+  const toggleOption = (label: string) => {
+    // Mutual exclusion: picking an option clears any in-progress custom reply.
+    if (hasCustomText) setCustomText('')
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (multi) {
+        if (next.has(label)) next.delete(label)
+        else next.add(label)
+      } else {
+        const wasSelected = next.has(label)
+        next.clear()
+        if (!wasSelected) next.add(label)
+      }
+      return next
+    })
+  }
+
+  const handleCustomChange = (value: string) => {
+    // Mutual exclusion: typing a custom reply clears any picked options.
+    if (value.trim().length > 0 && selected.size > 0) {
+      setSelected(new Set())
+    }
+    setCustomText(value)
+  }
+
+  const buildOutput = (): string => {
+    const picked = options.filter((option) => selected.has(option.label)).map((option) => option.label)
+    const trimmedCustom = customText.trim()
+    if (trimmedCustom) picked.push(trimmedCustom)
+    return picked.join('\n')
+  }
+
+  const canSubmit = !isResolved && !submitting && (selected.size > 0 || (allowCustom && customText.trim().length > 0))
+
+  const handleSubmit = async () => {
+    if (!canSubmit || !request.callId) return
+    const output = buildOutput()
+    if (!output) return
+    setSubmitting(true)
+    try {
+      await onRespondAskQuestion(request.callId, 'success', output)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleCancel = async () => {
+    if (isResolved || submitting || !request.callId) return
+    setSubmitting(true)
+    try {
+      await onRespondAskQuestion(request.callId, 'cancelled', undefined, 'User dismissed the question dialog')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault()
+      void handleSubmit()
+    }
+  }
+
+  const statusLabel = isResolved
+    ? resultData?.status === 'success'
+      ? '已答复'
+      : '已取消'
+    : '等待答复'
+
+  return (
+    <div className="mb-1.5">
+      <div className="overflow-hidden rounded-xl border border-blue-200/80 bg-blue-50/70 shadow-sm dark:border-blue-900/40 dark:bg-blue-950/20">
+        <div className="flex items-start gap-2 px-3 py-2">
+          <HelpCircle
+            size={14}
+            className={cn(
+              'mt-0.5 flex-shrink-0',
+              isResolved
+                ? resultData?.status === 'success'
+                  ? 'text-green-600'
+                  : 'text-muted-foreground'
+                : 'text-blue-600'
+            )}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="flex-1 truncate text-xs font-medium text-foreground">追问一下</span>
+              <span className={cn(
+                'flex-shrink-0 text-[10px]',
+                isResolved
+                  ? resultData?.status === 'success' ? 'text-green-600' : 'text-muted-foreground'
+                  : 'text-blue-700 dark:text-blue-300'
+              )}>
+                {statusLabel}
+              </span>
+            </div>
+
+            <p className="mt-1 whitespace-pre-wrap break-words text-[12px] leading-5 text-foreground/90">
+              {requestData?.question || '需要更多信息以继续。'}
+            </p>
+
+            {!isResolved && (
+              <>
+                {hasOptions && (
+                  <div className="mt-2 flex flex-col gap-2">
+                    {options.map((option) => {
+                      const isSelected = selected.has(option.label)
+                      const optionDisabled = submitting || hasCustomText
+                      return (
+                        <button
+                          key={option.label}
+                          type="button"
+                          onClick={() => toggleOption(option.label)}
+                          disabled={optionDisabled}
+                          title={option.description}
+                          aria-pressed={isSelected}
+                          className={cn(
+                            'min-h-9 w-full rounded-lg border px-2.5 py-1 text-left text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60',
+                            isSelected
+                              ? 'border-blue-600 bg-blue-600 text-white hover:bg-blue-700'
+                              : 'border-border bg-background hover:bg-muted'
+                          )}
+                        >
+                          <span className="block">{option.label}</span>
+                          {option.description && (
+                            <span className={cn(
+                              'mt-0.5 block text-[10px]',
+                              isSelected ? 'text-blue-100' : 'text-muted-foreground'
+                            )}>
+                              {option.description}
+                            </span>
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {allowCustom && (
+                  <div className="mt-2">
+                    <textarea
+                      value={customText}
+                      onChange={(event) => handleCustomChange(event.target.value)}
+                      onKeyDown={handleKeyDown}
+                      disabled={submitting || selected.size > 0}
+                      rows={2}
+                      placeholder={hasOptions ? '或输入自定义答复…' : '输入你的答复…'}
+                      className="w-full resize-none rounded-lg border border-border bg-background px-2.5 py-1.5 text-[11px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                  </div>
+                )}
+
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleCancel()}
+                    disabled={submitting}
+                    className="min-h-9 w-full rounded-lg border border-border bg-background px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleSubmit()}
+                    disabled={!canSubmit}
+                    className="min-h-9 w-full rounded-lg bg-blue-600 px-3 py-1 text-[11px] font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {submitting ? '发送中…' : '发送'}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {isResolved && resultData?.status === 'success' && resultData.output && (
+              <div className="mt-2 rounded-lg border border-blue-200/70 bg-white/70 px-2.5 py-1.5 dark:border-blue-900/30 dark:bg-background/80">
+                <p className="text-[10px] text-muted-foreground">你的答复</p>
+                <p className="mt-0.5 whitespace-pre-wrap break-words text-[12px] text-foreground/90">
+                  {resultData.output}
+                </p>
+              </div>
+            )}
+
+            {isResolved && resultData?.status === 'cancelled' && (
+              <p className="mt-2 text-[11px] text-muted-foreground">已取消追问，对话继续。</p>
+            )}
+          </div>
         </div>
       </div>
     </div>
