@@ -92,7 +92,7 @@ interface AppRuntimeAPI {
 interface HarnessclawAPI {
   connect: () => Promise<{ ok: boolean }>
   disconnect: () => Promise<{ ok: boolean }>
-  send: (content: string, sessionId?: string) => Promise<{ ok: boolean; error?: string }>
+  send: (content: string, sessionId?: string, options?: { coordinatorMode?: 'react' | 'plan'; planConfirmation?: 'auto' | 'required' }) => Promise<{ ok: boolean; error?: string }>
   command: (cmd: string, sessionId?: string) => Promise<{ ok: boolean }>
   stop: (sessionId?: string) => Promise<{ ok: boolean; error?: string }>
   subscribe: (sessionId: string) => Promise<{ ok: boolean }>
@@ -101,6 +101,7 @@ interface HarnessclawAPI {
   probe: () => Promise<{ ok: boolean }>
   respondPermission: (requestId: string, approved: boolean, scope?: 'once' | 'session', message?: string) => Promise<{ ok: boolean; error?: string }>
   respondAskQuestion: (toolUseId: string, status: 'success' | 'cancelled', output?: string, errorMessage?: string) => Promise<{ ok: boolean; error?: string }>
+  respondPlan: (planId: string, approved: boolean, sessionId?: string, options?: { steps?: Array<Record<string, unknown>>; reason?: string }) => Promise<{ ok: boolean; error?: string }>
   getStatus: () => Promise<{ status: string; clientId: string; sessionId: string; subscriptions: string[] }>
   onStatus: (callback: (status: string) => void) => () => void
   onEvent: (callback: (event: Record<string, unknown>) => void) => () => void

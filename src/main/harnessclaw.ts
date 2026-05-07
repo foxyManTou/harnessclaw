@@ -22,29 +22,6 @@ interface HarnessclawConfig {
   deniedTools: string[]
 }
 
-interface PendingContentBlock {
-  type: string
-  id?: string
-  name?: string
-  text?: string
-  thinking?: string
-  inputJson?: string
-  emittedTextLength?: number
-  emittedThinkingLength?: number
-}
-
-interface PendingMessageState {
-  requestId?: string
-  stopReason?: string
-  usage?: {
-    input_tokens?: number
-    output_tokens?: number
-    cache_read_tokens?: number
-    cache_write_tokens?: number
-  }
-  blocks: Map<number, PendingContentBlock>
-}
-
 interface ToolResultPayload {
   status: 'success' | 'error' | 'denied' | 'timeout' | 'cancelled'
   output?: string
@@ -66,30 +43,62 @@ interface PendingPermissionRequest {
 
 interface PendingAskQuestionRequest {
   sessionId: string
-  question: string
-  options: Array<{ label: string; description?: string }>
+  optionLabels: string[]
   multi: boolean
-  allowCustom: boolean
+}
+
+interface PendingPlanReviewRequest {
+  sessionId: string
+  planId: string
+}
+
+// v2 protocol — per-session card forest. We track cards keyed by card_id and
+// accumulate streaming channels (text / tool_input / thinking) per
+// (channel, index). When a card closes we emit the appropriate v1-shaped
+// compat event so the existing renderer code keeps working unchanged.
+interface CardState {
+  cardId: string
+  parentCardId?: string
+  cardKind: string
+  agentId?: string
+  payload: Record<string, unknown>
+  hint?: Record<string, unknown>
+  channels: Map<string, Map<number, string>>
+  status?: string
+  artifacts: Array<Record<string, unknown>>
+  // Tool-card bookkeeping. `toolEmitted` tracks whether tool_call/tool_start
+  // (or subagent_event tool_start) has been emitted yet. `localResultEmitted`
+  // dedups the case where we run a client tool locally AND later receive
+  // card.close from the server.
+  toolEmitted?: boolean
+  toolTarget?: string
+  localResultEmitted?: boolean
+  // Streamed-text bookkeeping — number of chars already pushed to the renderer
+  // as text_delta / thinking compat events, per channel.
+  emittedTextLength: number
+  emittedThinkingLength: number
+}
+
+interface SessionForest {
+  cards: Map<string, CardState>
+  // agent_ids that were registered via card.add(agent). Used to decide whether
+  // to emit main-flow compat events vs. subagent_event variants.
+  subagentIds: Set<string>
+  agentNames: Map<string, string>
+  agentParents: Map<string, string>
+  activeTraceId?: string
+  lastSeq: number
+  // request_id cursors so respond* helpers can map UI replies back to v2
+  // prompt requests.
+  permissionRequests: Map<string, PendingPermissionRequest>
+  askRequests: Map<string, PendingAskQuestionRequest>
+  planReviewRequests: Map<string, PendingPlanReviewRequest>
+  // plan_id → request_id, so respondPlan(planId,...) can find the right req.
+  planIdToRequestId: Map<string, string>
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function getMessageSessionId(msg: Record<string, unknown>, fallback = ''): string {
-  if (typeof msg.session_id === 'string' && msg.session_id) {
-    return msg.session_id
-  }
-
-  if (isPlainObject(msg.payload) && typeof msg.payload.session_id === 'string' && msg.payload.session_id) {
-    return msg.payload.session_id
-  }
-
-  if (isPlainObject(msg.error) && typeof msg.error.session_id === 'string' && msg.error.session_id) {
-    return msg.error.session_id
-  }
-
-  return fallback
 }
 
 function asStringArray(value: unknown): string[] {
@@ -120,16 +129,19 @@ function makeEventId(prefix = 'evt_client'): string {
   return `${prefix}_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`
 }
 
-function toUsage(totalUsage: unknown): { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined {
-  if (!isPlainObject(totalUsage)) return undefined
-  const prompt = typeof totalUsage.input_tokens === 'number' ? totalUsage.input_tokens : 0
-  const completion = typeof totalUsage.output_tokens === 'number' ? totalUsage.output_tokens : 0
-  const cacheRead = typeof totalUsage.cache_read_tokens === 'number' ? totalUsage.cache_read_tokens : 0
-  const cacheWrite = typeof totalUsage.cache_write_tokens === 'number' ? totalUsage.cache_write_tokens : 0
+function metricsToUsage(metrics: unknown):
+  | { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+  | undefined {
+  if (!isPlainObject(metrics)) return undefined
+  const tokensIn = typeof metrics.tokens_in === 'number' ? metrics.tokens_in : 0
+  const tokensOut = typeof metrics.tokens_out === 'number' ? metrics.tokens_out : 0
+  const cacheRead = typeof metrics.cache_read_tokens === 'number' ? metrics.cache_read_tokens : 0
+  const cacheWrite = typeof metrics.cache_write_tokens === 'number' ? metrics.cache_write_tokens : 0
+  if (tokensIn === 0 && tokensOut === 0 && cacheRead === 0 && cacheWrite === 0) return undefined
   return {
-    prompt_tokens: prompt + cacheRead + cacheWrite,
-    completion_tokens: completion,
-    total_tokens: prompt + completion + cacheRead + cacheWrite,
+    prompt_tokens: tokensIn + cacheRead + cacheWrite,
+    completion_tokens: tokensOut,
+    total_tokens: tokensIn + tokensOut + cacheRead + cacheWrite,
   }
 }
 
@@ -140,42 +152,6 @@ function trimOutput(output: string, maxLength = 200_000): { text: string; trunca
   return {
     text: `${output.slice(0, maxLength)}\n\n[truncated ${output.length - maxLength} chars]`,
     truncated: true,
-  }
-}
-
-function emitPendingBlockContent(
-  emit: (event: Record<string, unknown>) => void,
-  sessionId: string,
-  requestId: string | undefined,
-  block?: PendingContentBlock,
-): void {
-  if (!block) return
-
-  const text = typeof block.text === 'string' ? block.text : ''
-  const emittedTextLength = typeof block.emittedTextLength === 'number' ? block.emittedTextLength : 0
-  if (text.length > emittedTextLength) {
-    const chunk = text.slice(emittedTextLength)
-    if (chunk) {
-      emit({
-        type: 'text_delta',
-        session_id: sessionId,
-        request_id: requestId,
-        content: chunk,
-      })
-      block.emittedTextLength = text.length
-    }
-  }
-
-  const thinking = typeof block.thinking === 'string' ? block.thinking : ''
-  const emittedThinkingLength = typeof block.emittedThinkingLength === 'number' ? block.emittedThinkingLength : 0
-  if (thinking.length > emittedThinkingLength) {
-    emit({
-      type: 'thinking',
-      session_id: sessionId,
-      request_id: requestId,
-      content: thinking,
-    })
-    block.emittedThinkingLength = thinking.length
   }
 }
 
@@ -195,11 +171,28 @@ function logSessionSummary(message: string, meta: Record<string, unknown>): void
   writeAppLog('debug', 'harnessclaw-engine.session', message, meta)
 }
 
+function joinChannel(card: CardState, channel: string): string {
+  const buf = card.channels.get(channel)
+  if (!buf) return ''
+  const indices = [...buf.keys()].sort((a, b) => a - b)
+  return indices.map((idx) => buf.get(idx) || '').join('')
+}
+
+function appendChannelChunk(card: CardState, channel: string, index: number, chunk: string): void {
+  let buf = card.channels.get(channel)
+  if (!buf) {
+    buf = new Map<number, string>()
+    card.channels.set(channel, buf)
+  }
+  buf.set(index, (buf.get(index) || '') + chunk)
+}
+
 type HarnessclawStatus = 'disconnected' | 'connecting' | 'connected'
 
 const HARNESSCLAW_WS_HOST = '0.0.0.0'
 const HARNESSCLAW_WS_PORT = 8081
-const HARNESSCLAW_WS_PATH = '/ws'
+// v2 protocol endpoint (engine mounts v2 wire here).
+const HARNESSCLAW_WS_PATH = '/v1/ws'
 
 export class HarnessclawClient extends EventEmitter {
   private ws: WebSocket | null = null
@@ -212,13 +205,16 @@ export class HarnessclawClient extends EventEmitter {
   private maxRetries = 20
   private shouldReconnect = false
   private knownSessions = new Map<string, number>()
-  private pendingMessages = new Map<string, PendingMessageState>()
-  private pendingPermissionRequests = new Map<string, PendingPermissionRequest>()
-  private pendingAskQuestionRequests = new Map<string, PendingAskQuestionRequest>()
-  // v1.12: tool_use_id → intent text. Filled by `agent.intent` /
-  // `subagent.event{event_type:intent}`, drained when the matching
-  // `tool.start` / `tool.call` arrives so intent rides along the tool_call event.
-  private pendingToolIntents = new Map<string, string>()
+  // v0.3 (websocket protocol): when the server advertises capabilities.recovery
+  // in `session.event(kind=opened)`, it persists unanswered prompts and will
+  // replay them by the same `request_id` on reconnect. We therefore must NOT
+  // synthesize cancellation events for in-flight askRequests on WS close —
+  // the cards on the renderer should sit and wait for the replay so that the
+  // user's reply can still land once the socket comes back.
+  private recoveryCapability = false
+  // Per-session v2 card-forest state. Each session gets its own forest so
+  // multiple subscribed sessions don't collide.
+  private forests = new Map<string, SessionForest>()
   private pendingSessionInitId = ''
   private sessionCreateInFlight = false
   private transportWaiters: Array<{ resolve: () => void; reject: (error: Error) => void }> = []
@@ -291,8 +287,12 @@ export class HarnessclawClient extends EventEmitter {
       try {
         const raw = data.toString()
         const msg = JSON.parse(raw) as Record<string, unknown>
+        const envelope = isPlainObject(msg.envelope) ? msg.envelope : {}
+        const sessionId = typeof envelope.session_id === 'string' && envelope.session_id
+          ? envelope.session_id
+          : (typeof msg.session_id === 'string' ? msg.session_id : this.defaultSessionId)
         logEngineFrame('recv', msg, {
-          sessionId: getMessageSessionId(msg, this.defaultSessionId),
+          sessionId,
           type: typeof msg.type === 'string' ? msg.type : '',
         })
         this.handleMessage(msg)
@@ -316,10 +316,33 @@ export class HarnessclawClient extends EventEmitter {
       })
       const reconnectSessionId = this.pendingSessionInitId || this.defaultSessionId
       this.ws = null
-      this.pendingMessages.clear()
-      this.pendingPermissionRequests.clear()
-      this.pendingAskQuestionRequests.clear()
-      this.pendingToolIntents.clear()
+      // v0.3: when the server supports recovery, unanswered prompts will be
+      // replayed (with the same request_id) after reconnect, so we keep the
+      // renderer cards alive. When recovery is unavailable, the prompts are
+      // genuinely lost — synthesize cancellations so cards don't hang.
+      if (!this.recoveryCapability) {
+        for (const [sid, forest] of this.forests.entries()) {
+          for (const requestId of forest.askRequests.keys()) {
+            writeAppLog('warn', 'harnessclaw-engine.askQuestion', 'Cancelling pending askRequest due to websocket close (no recovery capability)', {
+              sessionId: sid,
+              requestId,
+            })
+            this.emitCompatEvent({
+              type: 'ask_user_question_result',
+              session_id: sid,
+              call_id: requestId,
+              status: 'cancelled',
+              output: '',
+              error: { code: 'connection_lost', message: '连接已断开，该追问已失效，请发起新的会话。' },
+            })
+          }
+        }
+      } else {
+        writeAppLog('info', 'harnessclaw-engine.askQuestion', 'WebSocket closed; pending prompts will be replayed by server (recovery=true)', {
+          pendingForests: this.forests.size,
+        })
+      }
+      this.forests.clear()
       this.clientId = ''
       this.defaultSessionId = ''
       this.subscriptions = []
@@ -392,10 +415,6 @@ export class HarnessclawClient extends EventEmitter {
     if (!this.shouldReconnect) {
       this.connect()
     }
-    // Fail fast if the websocket cannot be (re)established within the
-    // timeout. Without this, callers like `send()` and `stop()` would hang
-    // indefinitely in `transportWaiters` when the backend is offline,
-    // leaving the renderer stuck in a "thinking" state.
     return new Promise((resolve, reject) => {
       const waiter = { resolve, reject }
       this.transportWaiters.push(waiter)
@@ -423,6 +442,7 @@ export class HarnessclawClient extends EventEmitter {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN || this.sessionCreateInFlight) return
 
     const cfg = this.readConfig()
+    // v2 §9: { type:'session.create', session_id, capabilities? }
     const payload: Record<string, unknown> = {
       type: 'session.create',
       event_id: makeEventId(),
@@ -481,472 +501,198 @@ export class HarnessclawClient extends EventEmitter {
     })
   }
 
+  // ────────────────────────────────────────────────────────────────────
+  //  v2 dispatcher
+  // ────────────────────────────────────────────────────────────────────
+
+  private getForest(sessionId: string): SessionForest {
+    let forest = this.forests.get(sessionId)
+    if (!forest) {
+      forest = {
+        cards: new Map(),
+        subagentIds: new Set(),
+        agentNames: new Map(),
+        agentParents: new Map(),
+        lastSeq: 0,
+        permissionRequests: new Map(),
+        askRequests: new Map(),
+        planReviewRequests: new Map(),
+        planIdToRequestId: new Map(),
+      }
+      this.forests.set(sessionId, forest)
+    }
+    return forest
+  }
+
+  private isSubagentContext(forest: SessionForest, agentId?: string): boolean {
+    if (!agentId) return false
+    if (agentId === 'main') return false
+    return forest.subagentIds.has(agentId)
+  }
+
+  private resolveAgentInfo(forest: SessionForest, agentId?: string): { agentId: string; agentName: string; isSubagent: boolean } {
+    const id = agentId || 'main'
+    const isSubagent = this.isSubagentContext(forest, id)
+    const name = forest.agentNames.get(id) || (isSubagent ? 'subagent' : '')
+    return { agentId: id, agentName: name, isSubagent }
+  }
+
   private handleMessage(msg: Record<string, unknown>): void {
     const type = typeof msg.type === 'string' ? msg.type : ''
-    const sessionId = getMessageSessionId(msg, this.defaultSessionId)
     if (!type) return
 
+    const envelope = isPlainObject(msg.envelope) ? msg.envelope : {}
+    const sessionId = typeof envelope.session_id === 'string' && envelope.session_id
+      ? envelope.session_id
+      : (typeof msg.session_id === 'string' ? msg.session_id : this.defaultSessionId)
+    const traceId = typeof envelope.trace_id === 'string' ? envelope.trace_id : ''
+    const cardId = typeof envelope.card_id === 'string' ? envelope.card_id : ''
+    const parentCardId = typeof envelope.parent_card_id === 'string' ? envelope.parent_card_id : undefined
+    const cardKind = typeof envelope.card_kind === 'string' ? envelope.card_kind : ''
+    const agentId = typeof envelope.agent_id === 'string' ? envelope.agent_id : undefined
+    const seq = typeof envelope.seq === 'number' ? envelope.seq : 0
+    const hint = isPlainObject(msg.hint) ? msg.hint : undefined
+    const metrics = isPlainObject(msg.metrics) ? msg.metrics : undefined
+    const payload = isPlainObject(msg.payload) ? msg.payload : {}
+
+    const forest = sessionId ? this.getForest(sessionId) : undefined
+    if (forest) {
+      if (seq > forest.lastSeq) forest.lastSeq = seq
+      if (traceId) forest.activeTraceId = traceId
+    }
+
     switch (type) {
-      case 'session.created': {
-        this.defaultSessionId = sessionId
+      case 'session.event':
+        this.handleSessionEvent(sessionId, payload, msg)
+        return
+
+      case 'prompt.user':
+        this.handlePromptUser(sessionId, agentId, payload)
+        return
+
+      case 'prompt.reply':
+        // v2 §7.2 — server echo of the user's decision. The renderer dismisses
+        // its modal optimistically when it sends the response, so we only log
+        // here for diagnostics.
+        writeAppLog('debug', 'harnessclaw-engine.session', 'prompt.reply', {
+          sessionId,
+          payload: sanitizeForLogging(payload),
+        })
+        return
+    }
+
+    if (!forest || !cardId || !cardKind) return
+
+    switch (type) {
+      case 'card.add':
+        this.handleCardAdd(sessionId, forest, { cardId, parentCardId, cardKind, agentId, traceId, payload, hint })
+        return
+      case 'card.set':
+        this.handleCardSet(sessionId, forest, { cardId, cardKind, agentId, traceId, payload })
+        return
+      case 'card.append':
+        this.handleCardAppend(sessionId, forest, { cardId, cardKind, agentId, traceId, payload })
+        return
+      case 'card.tick':
+        this.handleCardTick(sessionId, forest, { cardId, cardKind, agentId, traceId, payload })
+        return
+      case 'card.close':
+        this.handleCardClose(sessionId, forest, { cardId, cardKind, agentId, traceId, payload, metrics, hint })
+        return
+      default:
+        // Unknown type — forward as raw event for diagnostics.
+        this.emit('event', msg)
+    }
+  }
+
+  // ─── session.event ───────────────────────────────────────────────────
+  private handleSessionEvent(sessionId: string, payload: Record<string, unknown>, msg: Record<string, unknown>): void {
+    const kind = typeof payload.kind === 'string' ? payload.kind : ''
+    const inner = isPlainObject(payload.inner) ? payload.inner : {}
+
+    switch (kind) {
+      case 'opened': {
+        const sid = sessionId || this.pendingSessionInitId || ''
+        if (sid) {
+          this.defaultSessionId = sid
+          this.knownSessions.set(sid, Date.now())
+        }
         this.pendingSessionInitId = ''
         this.sessionCreateInFlight = false
-        this.clientId = `session:${sessionId}`
-        this.subscriptions = sessionId ? [sessionId] : []
-        if (sessionId) {
-          this.knownSessions.set(sessionId, Date.now())
-        }
-        this.resolveSessionInitWaiters(sessionId)
+        this.clientId = sid ? `session:${sid}` : ''
+        this.subscriptions = sid ? [sid] : []
+        this.resolveSessionInitWaiters(sid)
+
+        const capabilities = isPlainObject(inner.capabilities) ? inner.capabilities : {}
+        this.recoveryCapability = capabilities.recovery === true
+        writeAppLog('info', 'harnessclaw-engine.session', 'Session opened', {
+          sessionId: sid,
+          recoveryCapability: this.recoveryCapability,
+        })
+        this.emitCompatEvent({
+          type: 'session_created',
+          session_id: sid,
+          client_id: this.clientId,
+          protocol_version: typeof inner.protocol_version === 'string' ? inner.protocol_version : '2.0',
+          capabilities,
+          session: { session_id: sid, capabilities },
+        })
+        // Legacy shim — older renderer code hooks "connected".
         this.emitCompatEvent({
           type: 'connected',
-          session_id: sessionId,
+          session_id: sid,
           client_id: this.clientId,
-          protocol_version: msg.protocol_version,
-          session: msg.session,
         })
         this.emitSessions()
-        break
+        return
       }
 
-      case 'message.start': {
-        const hadPendingMessage = this.pendingMessages.has(sessionId)
-        this.pendingMessages.set(sessionId, {
-          requestId: typeof msg.request_id === 'string' ? msg.request_id : undefined,
-          usage: isPlainObject(msg.message) && isPlainObject(msg.message.usage)
-            ? {
-                input_tokens: typeof msg.message.usage.input_tokens === 'number' ? msg.message.usage.input_tokens : 0,
-                output_tokens: 0,
-                cache_read_tokens: typeof msg.message.usage.cache_read_tokens === 'number' ? msg.message.usage.cache_read_tokens : 0,
-                cache_write_tokens: typeof msg.message.usage.cache_write_tokens === 'number' ? msg.message.usage.cache_write_tokens : 0,
-              }
-            : undefined,
-          blocks: new Map<number, PendingContentBlock>(),
-        })
-        if (!hadPendingMessage) {
-          this.emitCompatEvent({
-            type: 'turn_start',
-            session_id: sessionId,
-            request_id: msg.request_id,
-            message: msg.message,
-          })
-        }
-        break
-      }
-
-      case 'content.start': {
-        const index = typeof msg.index === 'number' ? msg.index : -1
-        const state = this.ensurePendingMessage(sessionId)
-        const block = isPlainObject(msg.content_block) ? msg.content_block : {}
-        const pendingBlock: PendingContentBlock = {
-          type: typeof block.type === 'string' ? block.type : 'text',
-          id: typeof block.id === 'string' ? block.id : undefined,
-          name: typeof block.name === 'string' ? block.name : undefined,
-          text: typeof block.text === 'string' ? block.text : '',
-          thinking: typeof block.thinking === 'string' ? block.thinking : '',
-          inputJson: isPlainObject(block.input) ? JSON.stringify(block.input) : '',
-          emittedTextLength: 0,
-          emittedThinkingLength: 0,
-        }
-        state.blocks.set(index, pendingBlock)
-        emitPendingBlockContent((event) => this.emitCompatEvent(event), sessionId, state.requestId, pendingBlock)
-        break
-      }
-
-      case 'content.delta': {
-        const index = typeof msg.index === 'number' ? msg.index : -1
-        const state = this.ensurePendingMessage(sessionId)
-        const block = state.blocks.get(index)
-        const delta = isPlainObject(msg.delta) ? msg.delta : {}
-        const deltaType = typeof delta.type === 'string' ? delta.type : ''
-
-        if (deltaType === 'text_delta') {
-          const chunk = typeof delta.text === 'string' ? delta.text : ''
-          if (block) block.text = `${block.text || ''}${chunk}`
-          this.emitCompatEvent({
-            type: 'text_delta',
-            session_id: sessionId,
-            request_id: state.requestId,
-            content: chunk,
-          })
-          if (block) block.emittedTextLength = typeof block.text === 'string' ? block.text.length : 0
-        }
-
-        if (deltaType === 'thinking_delta') {
-          const chunk = typeof delta.thinking === 'string' ? delta.thinking : ''
-          if (block) block.thinking = `${block.thinking || ''}${chunk}`
-          this.emitCompatEvent({
-            type: 'thinking',
-            session_id: sessionId,
-            request_id: state.requestId,
-            content: block?.thinking || chunk,
-          })
-          if (block) block.emittedThinkingLength = typeof block.thinking === 'string' ? block.thinking.length : 0
-        }
-
-        if (deltaType === 'input_json_delta' && block) {
-          const partialJson = typeof delta.partial_json === 'string' ? delta.partial_json : ''
-          block.inputJson = `${block.inputJson || ''}${partialJson}`
-        }
-
-        break
-      }
-
-      case 'content.stop': {
-        const index = typeof msg.index === 'number' ? msg.index : -1
-        const state = this.ensurePendingMessage(sessionId)
-        const block = state.blocks.get(index)
-        emitPendingBlockContent((event) => this.emitCompatEvent(event), sessionId, state.requestId, block)
-        break
-      }
-
-      case 'message.delta': {
-        const state = this.ensurePendingMessage(sessionId)
-        if (isPlainObject(msg.delta) && typeof msg.delta.stop_reason === 'string') {
-          state.stopReason = msg.delta.stop_reason
-        }
-        if (isPlainObject(msg.usage)) {
-          state.usage = {
-            ...(state.usage || {}),
-            output_tokens: typeof msg.usage.output_tokens === 'number' ? msg.usage.output_tokens : 0,
-          }
-        }
-        break
-      }
-
-      case 'message.stop': {
-        break
-      }
-
-      case 'tool.start': {
-        const toolName = typeof msg.tool_name === 'string' ? msg.tool_name : ''
-        const toolUseId = typeof msg.tool_use_id === 'string' ? msg.tool_use_id : ''
-        const input = isPlainObject(msg.input) ? msg.input : {}
-        const intent = toolUseId ? this.pendingToolIntents.get(toolUseId) : undefined
-        if (toolUseId) this.pendingToolIntents.delete(toolUseId)
+      case 'updated': {
         this.emitCompatEvent({
-          type: 'tool_call',
+          type: 'session_updated',
           session_id: sessionId,
-          request_id: msg.request_id,
-          name: toolName,
-          arguments: input,
-          call_id: toolUseId,
-          intent,
+          payload: inner,
         })
-        break
+        return
       }
 
-      case 'tool.end': {
-        const toolName = typeof msg.tool_name === 'string' ? msg.tool_name : ''
-        const toolUseId = typeof msg.tool_use_id === 'string' ? msg.tool_use_id : ''
-        const baseMetadata = isPlainObject(msg.metadata) ? msg.metadata : {}
-        // v1.13: embed engine-provided `artifacts: []ArtifactRef` inside
-        // metadata so the existing metadata_json DB column round-trips it.
-        const artifacts = Array.isArray(msg.artifacts) ? msg.artifacts : []
-        const metadata = artifacts.length > 0
-          ? { ...baseMetadata, artifacts }
-          : baseMetadata
-        const output = typeof msg.output === 'string'
-          ? msg.output
-          : isPlainObject(msg.error) && typeof msg.error.message === 'string'
-            ? msg.error.message
-            : ''
+      case 'pong': {
+        const waiter = this.pendingPongWaiters.shift()
+        if (waiter) waiter(true)
+        this.emitCompatEvent({ type: 'pong' })
+        return
+      }
+
+      case 'resumed': {
         this.emitCompatEvent({
-          type: 'tool_result',
+          type: 'session_resumed',
           session_id: sessionId,
-          request_id: msg.request_id,
-          name: toolName,
-          content: output,
-          call_id: toolUseId,
-          is_error: msg.is_error === true || msg.status === 'error',
-          status: msg.status,
-          duration_ms: msg.duration_ms,
-          render_hint: typeof msg.render_hint === 'string' ? msg.render_hint : undefined,
-          language: typeof msg.language === 'string' ? msg.language : undefined,
-          file_path: typeof msg.file_path === 'string' ? msg.file_path : undefined,
-          metadata,
+          trace_id: typeof inner.trace_id === 'string' ? inner.trace_id : '',
+          from_seq: typeof inner.from_seq === 'number' ? inner.from_seq : 0,
+          to_seq: typeof inner.to_seq === 'number' ? inner.to_seq : 0,
         })
-        break
+        return
       }
 
-      case 'tool.call': {
-        const toolName = typeof msg.tool_name === 'string' ? msg.tool_name : ''
-        const toolUseId = typeof msg.tool_use_id === 'string' ? msg.tool_use_id : ''
-        const input = isPlainObject(msg.input) ? msg.input : {}
-
-        // AskUserQuestion is not a real tool — it's emma asking the user a
-        // question. Render it as a question UI in the renderer rather than
-        // executing it locally. The renderer will reply with the answer via
-        // respondAskQuestion(), which sends `tool.result` back to the server.
-        if (toolName === 'AskUserQuestion') {
-          const question = typeof input.question === 'string' ? input.question : ''
-          const rawOptions = Array.isArray(input.options) ? input.options : []
-          const options = rawOptions.flatMap((option) => {
-            if (!isPlainObject(option)) return []
-            const label = typeof option.label === 'string' ? option.label : ''
-            if (!label) return []
-            const description = typeof option.description === 'string' ? option.description : undefined
-            return [description ? { label, description } : { label }]
-          })
-          const multi = input.multi === true
-          const allowCustom = input.allow_custom !== false // default true
-
-          if (toolUseId) {
-            this.pendingAskQuestionRequests.set(toolUseId, {
-              sessionId,
-              question,
-              options,
-              multi,
-              allowCustom,
-            })
-          }
-
-          // v1.12: framework strips `intent` from every tool's input (incl.
-          // AskUserQuestion) and emits it via `agent.intent` beforehand. Drain
-          // any buffered intent so it rides along on the question card and
-          // doesn't leak into pendingToolIntents.
-          const askIntent = toolUseId ? this.pendingToolIntents.get(toolUseId) : undefined
-          if (toolUseId) this.pendingToolIntents.delete(toolUseId)
-
-          this.emitCompatEvent({
-            type: 'ask_user_question',
-            session_id: sessionId,
-            request_id: msg.request_id,
-            call_id: toolUseId,
-            tool_name: toolName,
-            question,
-            options,
-            multi,
-            allow_custom: allowCustom,
-            intent: askIntent,
-          })
-          break
-        }
-
+      case 'resume_failed': {
         this.emitCompatEvent({
-          type: 'tool_call',
+          type: 'session_resume_failed',
           session_id: sessionId,
-          request_id: msg.request_id,
-          name: toolName,
-          arguments: input,
-          call_id: toolUseId,
-          intent: toolUseId ? this.pendingToolIntents.get(toolUseId) : undefined,
+          trace_id: typeof inner.trace_id === 'string' ? inner.trace_id : '',
+          reason: typeof inner.reason === 'string' ? inner.reason : '',
         })
-        if (toolUseId) this.pendingToolIntents.delete(toolUseId)
-        void this.executeToolCall(sessionId, toolUseId, toolName, input)
-        break
-      }
-
-      case 'permission.request': {
-        const requestId = typeof msg.request_id === 'string' ? msg.request_id : ''
-        const toolName = typeof msg.tool_name === 'string' ? msg.tool_name : ''
-        const toolInput = typeof msg.tool_input === 'string' ? msg.tool_input : ''
-        const message = typeof msg.message === 'string' ? msg.message : ''
-        const isReadOnly = msg.is_read_only === true
-        const options = Array.isArray(msg.options)
-          ? msg.options.flatMap((option) => {
-              if (!isPlainObject(option)) return []
-              const label = typeof option.label === 'string' ? option.label : ''
-              const scope = option.scope === 'session' ? 'session' : 'once'
-              const allow = option.allow === true
-              return label ? [{ label, scope, allow }] : []
-            })
-          : []
-        if (requestId) {
-          this.pendingPermissionRequests.set(requestId, {
-            sessionId,
-            toolName,
-            toolInput,
-            message,
-            isReadOnly,
-            options,
-          })
-        }
-        this.emitCompatEvent({
-          type: 'permission_request',
-          session_id: sessionId,
-          request_id: requestId,
-          name: toolName,
-          tool_input: toolInput,
-          content: message,
-          is_read_only: isReadOnly,
-          options,
-        })
-        break
-      }
-
-      case 'task.end': {
-        const pendingState = this.pendingMessages.get(sessionId)
-        if (pendingState) {
-          for (const block of pendingState.blocks.values()) {
-            emitPendingBlockContent((event) => this.emitCompatEvent(event), sessionId, pendingState.requestId, block)
-          }
-        }
-        const usage = toUsage(msg.total_usage)
-        const status = typeof msg.status === 'string' ? msg.status : ''
-        if (status === 'aborted' || status === 'error' || status === 'failed') {
-          writeAppLog('warn', 'harnessclaw-engine.session', 'Session task finished with exception', {
-            sessionId,
-            requestId: msg.request_id,
-            status,
-            durationMs: msg.duration_ms,
-            numTurns: msg.num_turns,
-            usage,
-          })
-        } else {
-          logSessionSummary('Session task completed', {
-            sessionId,
-            requestId: msg.request_id,
-            status,
-            durationMs: msg.duration_ms,
-            numTurns: msg.num_turns,
-            usage,
-          })
-        }
-        if (status === 'aborted') {
-          this.emitCompatEvent({
-            type: 'stopped',
-            session_id: sessionId,
-            request_id: msg.request_id,
-            usage,
-          })
-        } else {
-          this.emitCompatEvent({
-            type: 'response_end',
-            session_id: sessionId,
-            request_id: msg.request_id,
-            usage,
-            status: msg.status,
-            duration_ms: msg.duration_ms,
-            num_turns: msg.num_turns,
-          })
-        }
-        this.pendingMessages.delete(sessionId)
-        this.knownSessions.set(sessionId, Date.now())
-        this.emitSessions()
-        break
-      }
-
-      // ─── v1.12: Task-level visibility ─────────────────────────────────
-      case 'agent.intent': {
-        // Main agent (emma) progress sentence right before tool.start.
-        const toolUseId = typeof msg.tool_use_id === 'string' ? msg.tool_use_id : ''
-        const intent = typeof msg.intent === 'string' ? msg.intent : ''
-        if (toolUseId && intent) this.pendingToolIntents.set(toolUseId, intent)
-        this.emitCompatEvent({
-          type: 'agent_intent',
-          session_id: sessionId,
-          agent_id: typeof msg.agent_id === 'string' ? msg.agent_id : '',
-          agent_name: typeof msg.agent_name === 'string' ? msg.agent_name : '',
-          tool_use_id: toolUseId,
-          tool_name: typeof msg.tool_name === 'string' ? msg.tool_name : '',
-          intent,
-        })
-        break
-      }
-
-      case 'subagent.start': {
-        this.emitCompatEvent({
-          type: 'subagent_start',
-          session_id: sessionId,
-          agent_id: typeof msg.agent_id === 'string' ? msg.agent_id : '',
-          agent_name: typeof msg.agent_name === 'string' ? msg.agent_name : '',
-          description: typeof msg.description === 'string' ? msg.description : '',
-          // v1.12: full task prompt (≤800 runes)
-          task: typeof msg.task === 'string' ? msg.task : '',
-          agent_type: typeof msg.agent_type === 'string' ? msg.agent_type : 'sync',
-          parent_agent_id: typeof msg.parent_agent_id === 'string' ? msg.parent_agent_id : 'main',
-        })
-        break
-      }
-
-      case 'subagent.event': {
-        const agentId = typeof msg.agent_id === 'string' ? msg.agent_id : ''
-        const agentName = typeof msg.agent_name === 'string' ? msg.agent_name : ''
-        const payload = isPlainObject(msg.payload) ? msg.payload : {}
-        const eventType = typeof payload.event_type === 'string' ? payload.event_type : ''
-        const toolUseId = typeof payload.tool_use_id === 'string' ? payload.tool_use_id : ''
-
-        if (eventType === 'intent') {
-          // v1.12: sub-agent intent — surfaced as a top-level agent_intent
-          // compat event so the renderer can show the shimmer above the
-          // upcoming sub-agent tool card.
-          const intent = typeof payload.intent === 'string' ? payload.intent : ''
-          this.emitCompatEvent({
-            type: 'agent_intent',
-            session_id: sessionId,
-            agent_id: agentId,
-            agent_name: agentName,
-            tool_use_id: toolUseId,
-            tool_name: typeof payload.tool_name === 'string' ? payload.tool_name : '',
-            intent,
-            from_subagent: true,
-          })
-          break
-        }
-
-        // Forward `tool_start` / `tool_end` (and any future inner type) as a
-        // single `subagent_event` compat event with the raw payload preserved
-        // — matches the existing renderer / index.ts handlers (v1.10 contract).
-        // `event_type: "text"` is deprecated since v1.10 and silently ignored
-        // by those handlers.
-        // v1.13: when payload is a tool_end with artifacts, mirror them into
-        // payload.metadata.artifacts so DB metadata_json round-trip works the
-        // same as for main-agent tool.end events.
-        let forwardedPayload: Record<string, unknown> = payload
-        const innerArtifacts = Array.isArray(payload.artifacts) ? payload.artifacts : []
-        if (eventType === 'tool_end' && innerArtifacts.length > 0) {
-          const innerMeta = isPlainObject(payload.metadata) ? payload.metadata : {}
-          forwardedPayload = {
-            ...payload,
-            metadata: { ...innerMeta, artifacts: innerArtifacts },
-          }
-        }
-        this.emitCompatEvent({
-          type: 'subagent_event',
-          session_id: sessionId,
-          agent_id: agentId,
-          agent_name: agentName,
-          payload: forwardedPayload,
-        })
-        break
-      }
-
-      case 'subagent.end': {
-        const usage = isPlainObject(msg.usage) ? msg.usage : {}
-        // v1.13: forward the aggregated artifacts list. The server now
-        // populates this from SubmitTaskResult-validated refs (contract
-        // mode) or all ArtifactWrite calls in the sub-agent (legacy).
-        // Without this passthrough the renderer's subagent_end handler
-        // sees no artifacts even though the wire frame has them, and
-        // the produced-files panel stays empty.
-        const artifacts = Array.isArray(msg.artifacts) ? msg.artifacts : []
-        this.emitCompatEvent({
-          type: 'subagent_end',
-          session_id: sessionId,
-          agent_id: typeof msg.agent_id === 'string' ? msg.agent_id : '',
-          agent_name: typeof msg.agent_name === 'string' ? msg.agent_name : '',
-          status: typeof msg.status === 'string' ? msg.status : 'completed',
-          duration_ms: typeof msg.duration_ms === 'number' ? msg.duration_ms : undefined,
-          num_turns: typeof msg.num_turns === 'number' ? msg.num_turns : undefined,
-          usage,
-          denied_tools: Array.isArray(msg.denied_tools) ? msg.denied_tools : [],
-          artifacts,
-        })
-        break
+        return
       }
 
       case 'error': {
-        const payload = isPlainObject(msg.payload) ? msg.payload : {}
-        const error = isPlainObject(msg.error)
-          ? msg.error
-          : payload
-        const content = typeof error.message === 'string' ? error.message : 'Unknown websocket error'
+        const error = isPlainObject(inner.error) ? inner.error : inner
+        const content = typeof error.message === 'string'
+          ? error.message
+          : typeof error.user_message === 'string' ? error.user_message : 'Unknown websocket error'
         writeAppLog('error', 'harnessclaw-engine.session', 'Session error frame received', {
           sessionId,
-          requestId: msg.request_id,
           message: content,
           error: sanitizeForLogging(error),
-          payload: sanitizeForLogging(payload),
         })
         if (this.pendingSessionInitId) {
           this.pendingSessionInitId = ''
@@ -956,34 +702,817 @@ export class HarnessclawClient extends EventEmitter {
         this.emitCompatEvent({
           type: 'error',
           session_id: sessionId,
-          request_id: msg.request_id,
           content,
           error,
-          payload,
+          payload: inner,
         })
-        break
-      }
-
-      case 'pong': {
-        const waiter = this.pendingPongWaiters.shift()
-        if (waiter) {
-          waiter(true)
-        }
-        this.emitCompatEvent({ type: 'pong' })
-        break
+        return
       }
 
       default:
-        this.emit('event', msg)
+        writeAppLog('debug', 'harnessclaw-engine.session', 'Unknown session.event kind', {
+          sessionId,
+          kind,
+          payload: sanitizeForLogging(msg),
+        })
     }
   }
 
-  private ensurePendingMessage(sessionId: string): PendingMessageState {
-    const existing = this.pendingMessages.get(sessionId)
-    if (existing) return existing
-    const next: PendingMessageState = { blocks: new Map<number, PendingContentBlock>() }
-    this.pendingMessages.set(sessionId, next)
-    return next
+  // ─── prompt.user ─────────────────────────────────────────────────────
+  private handlePromptUser(sessionId: string, _agentId: string | undefined, payload: Record<string, unknown>): void {
+    if (!sessionId) return
+    const forest = this.getForest(sessionId)
+    const requestId = typeof payload.request_id === 'string' ? payload.request_id : ''
+    const kind = typeof payload.kind === 'string' ? payload.kind : ''
+    const inner = isPlainObject(payload.inner) ? payload.inner : {}
+    const timeoutMs = typeof payload.timeout_ms === 'number' ? payload.timeout_ms : 0
+
+    if (!requestId || !kind) return
+
+    switch (kind) {
+      case 'permission': {
+        const toolName = typeof inner.tool_name === 'string' ? inner.tool_name : ''
+        const toolInput = typeof inner.tool_input === 'string'
+          ? inner.tool_input
+          : isPlainObject(inner.tool_input) || Array.isArray(inner.tool_input)
+            ? JSON.stringify(inner.tool_input)
+            : ''
+        const message = typeof inner.message === 'string' ? inner.message : ''
+        const isReadOnly = inner.is_read_only === true
+        const rawOptions = Array.isArray(inner.options) ? inner.options : []
+        const options = rawOptions.flatMap((option) => {
+          if (!isPlainObject(option)) return []
+          const label = typeof option.label === 'string' ? option.label : ''
+          if (!label) return []
+          const scope: 'once' | 'session' = option.scope === 'session' ? 'session' : 'once'
+          const allow = option.allow === true
+          return [{ label, scope, allow }]
+        })
+
+        forest.permissionRequests.set(requestId, {
+          sessionId,
+          toolName,
+          toolInput,
+          message,
+          isReadOnly,
+          options,
+        })
+
+        this.emitCompatEvent({
+          type: 'permission_request',
+          session_id: sessionId,
+          request_id: requestId,
+          name: toolName,
+          tool_input: toolInput,
+          content: message,
+          is_read_only: isReadOnly,
+          options,
+          timeout_ms: timeoutMs,
+        })
+        return
+      }
+
+      case 'question': {
+        const question = typeof inner.question === 'string' ? inner.question : ''
+        const rawOptions = Array.isArray(inner.options) ? inner.options : []
+        const options = rawOptions.flatMap((option) => {
+          if (!isPlainObject(option)) return []
+          const label = typeof option.label === 'string' ? option.label : ''
+          if (!label) return []
+          const description = typeof option.description === 'string' ? option.description : undefined
+          return [description ? { label, description } : { label }]
+        })
+        const multi = inner.multi === true
+        const allowCustom = inner.allow_custom !== false
+
+        forest.askRequests.set(requestId, {
+          sessionId,
+          optionLabels: options.map((opt) => opt.label),
+          multi,
+        })
+
+        this.emitCompatEvent({
+          type: 'ask_user_question',
+          session_id: sessionId,
+          request_id: requestId,
+          // The renderer keys ask-question state by call_id; use request_id as
+          // the call_id so subsequent respondAskQuestion(toolUseId,...) round-
+          // trips correctly.
+          call_id: requestId,
+          tool_name: 'AskUserQuestion',
+          question,
+          options,
+          multi,
+          allow_custom: allowCustom,
+          timeout_ms: timeoutMs,
+        })
+        return
+      }
+
+      case 'plan_review': {
+        const planId = typeof inner.plan_id === 'string' ? inner.plan_id : ''
+        const goal = typeof inner.goal === 'string' ? inner.goal : ''
+        const rationale = typeof inner.rationale === 'string' ? inner.rationale : ''
+        const rawSteps = Array.isArray(inner.steps) ? inner.steps : []
+        const steps = rawSteps.flatMap((step) => {
+          if (!isPlainObject(step)) return []
+          const id = typeof step.id === 'string' ? step.id : (typeof step.step_id === 'string' ? step.step_id : '')
+          if (!id) return []
+          return [{
+            id,
+            subagent_type: typeof step.subagent_type === 'string' ? step.subagent_type : undefined,
+            description: typeof step.description === 'string' ? step.description : undefined,
+            prompt: typeof step.prompt === 'string' ? step.prompt : undefined,
+            depends_on: Array.isArray(step.depends_on)
+              ? step.depends_on.filter((d): d is string => typeof d === 'string')
+              : undefined,
+          }]
+        })
+        const availableSubagents = asStringArray(inner.available_subagents)
+
+        forest.planReviewRequests.set(requestId, { sessionId, planId })
+        if (planId) forest.planIdToRequestId.set(planId, requestId)
+
+        this.emitCompatEvent({
+          type: 'plan_proposed',
+          session_id: sessionId,
+          request_id: requestId,
+          plan_id: planId,
+          agent_id: typeof inner.agent_id === 'string' ? inner.agent_id : '',
+          goal,
+          rationale,
+          steps,
+          available_subagents: availableSubagents,
+          rejection_reason: typeof inner.rejection_reason === 'string' ? inner.rejection_reason : '',
+          timeout_ms: timeoutMs,
+        })
+        return
+      }
+
+      default:
+        writeAppLog('debug', 'harnessclaw-engine.session', 'Unknown prompt.user kind', {
+          sessionId,
+          kind,
+        })
+    }
+  }
+
+  // ─── card.add ────────────────────────────────────────────────────────
+  private handleCardAdd(
+    sessionId: string,
+    forest: SessionForest,
+    args: {
+      cardId: string
+      parentCardId?: string
+      cardKind: string
+      agentId?: string
+      traceId: string
+      payload: Record<string, unknown>
+      hint?: Record<string, unknown>
+    },
+  ): void {
+    const card: CardState = {
+      cardId: args.cardId,
+      parentCardId: args.parentCardId,
+      cardKind: args.cardKind,
+      agentId: args.agentId,
+      payload: { ...args.payload },
+      hint: args.hint,
+      channels: new Map(),
+      artifacts: [],
+      emittedTextLength: 0,
+      emittedThinkingLength: 0,
+    }
+    forest.cards.set(args.cardId, card)
+
+    switch (args.cardKind) {
+      case 'turn': {
+        this.emitCompatEvent({
+          type: 'turn_start',
+          session_id: sessionId,
+          request_id: args.traceId,
+          message: { id: args.cardId, role: 'assistant' },
+        })
+        return
+      }
+
+      case 'message': {
+        // Sub-agent message cards carry sub-agent text — historically the
+        // server didn't stream those (renderer comment in ChatPage.tsx
+        // around line 3189 documents the v1.10+ contract). We keep that
+        // behaviour: skip turn_start so we don't kick the renderer into a
+        // fresh assistant message for a subagent's internal thinking.
+        const info = this.resolveAgentInfo(forest, args.agentId)
+        if (info.isSubagent) return
+        // We don't emit a turn_start per message — the turn card already
+        // emitted it. message cards just exist to anchor channels.
+        return
+      }
+
+      case 'tool': {
+        const toolName = typeof args.payload.name === 'string' ? args.payload.name : ''
+        const target = typeof args.payload.target === 'string' ? args.payload.target : 'server'
+        const intent = typeof args.payload.intent === 'string' ? args.payload.intent : ''
+        const input = isPlainObject(args.payload.input) ? args.payload.input : {}
+        card.toolTarget = target
+
+        this.emitToolStart(sessionId, forest, card, toolName, target, intent, input, args.traceId)
+
+        if (target === 'client') {
+          // v2 client tools: execute locally and send tool.result back.
+          void this.executeToolCall(sessionId, args.cardId, toolName, input, this.resolveAgentInfo(forest, args.agentId).isSubagent, card)
+        }
+        return
+      }
+
+      case 'agent': {
+        // Register the agent_id (== card_id per v2 §14.3) as a sub-agent.
+        forest.subagentIds.add(args.cardId)
+        const name = typeof args.payload.name === 'string' ? args.payload.name : 'subagent'
+        forest.agentNames.set(args.cardId, name)
+        const parentAgentId = typeof args.payload.parent_agent_id === 'string'
+          ? args.payload.parent_agent_id
+          : 'main'
+        forest.agentParents.set(args.cardId, parentAgentId)
+
+        this.emitCompatEvent({
+          type: 'subagent_start',
+          session_id: sessionId,
+          agent_id: args.cardId,
+          agent_name: name,
+          description: typeof args.payload.description === 'string' ? args.payload.description : '',
+          task: typeof args.payload.task_prompt === 'string' ? args.payload.task_prompt : '',
+          agent_type: typeof args.payload.agent_type === 'string' ? args.payload.agent_type : 'sync',
+          parent_agent_id: parentAgentId,
+        })
+        return
+      }
+
+      case 'plan': {
+        const planId = typeof args.payload.plan_id === 'string' ? args.payload.plan_id : args.cardId
+        const rawSteps = Array.isArray(args.payload.steps) ? args.payload.steps : []
+        const tasks = rawSteps.flatMap((step) => {
+          if (!isPlainObject(step)) return []
+          const stepId = typeof step.step_id === 'string'
+            ? step.step_id
+            : (typeof step.id === 'string' ? step.id : '')
+          if (!stepId) return []
+          return [{
+            task_id: stepId,
+            subagent_type: typeof step.subagent_type === 'string' ? step.subagent_type : undefined,
+            user_facing_title: typeof step.user_facing_title === 'string' ? step.user_facing_title : undefined,
+            user_facing_summary: typeof step.user_facing_summary === 'string' ? step.user_facing_summary : undefined,
+            depends_on: Array.isArray(step.depends_on)
+              ? step.depends_on.filter((d): d is string => typeof d === 'string')
+              : undefined,
+          }]
+        })
+        this.emitCompatEvent({
+          type: 'plan_created',
+          session_id: sessionId,
+          plan_id: planId,
+          agent_id: args.agentId || '',
+          goal: typeof args.payload.goal === 'string' ? args.payload.goal : '',
+          strategy: typeof args.payload.strategy === 'string' ? args.payload.strategy : '',
+          status: 'created',
+          tasks,
+          display: {},
+        })
+        return
+      }
+
+      case 'step': {
+        const stepId = typeof args.payload.step_id === 'string' ? args.payload.step_id : args.cardId
+        this.emitCompatEvent({
+          type: 'step_dispatched',
+          session_id: sessionId,
+          agent_id: args.agentId || '',
+          step_id: stepId,
+          subagent_type: typeof args.payload.subagent_type === 'string' ? args.payload.subagent_type : undefined,
+          input_summary: typeof args.payload.input_summary === 'string' ? args.payload.input_summary : undefined,
+          attempts: typeof args.payload.attempts === 'number' ? args.payload.attempts : undefined,
+        })
+        return
+      }
+
+      case 'artifact': {
+        // Accumulate ArtifactRef on the parent card so it can ride along with
+        // tool_end / subagent_end metadata.
+        const artifactRef = {
+          artifact_id: typeof args.payload.artifact_id === 'string' ? args.payload.artifact_id : args.cardId,
+          name: typeof args.payload.name === 'string' ? args.payload.name : '',
+          type: typeof args.payload.type === 'string' ? args.payload.type : '',
+          mime_type: typeof args.payload.mime_type === 'string' ? args.payload.mime_type : undefined,
+          size_bytes: typeof args.payload.size_bytes === 'number' ? args.payload.size_bytes : undefined,
+          description: typeof args.payload.description === 'string' ? args.payload.description : undefined,
+          role: typeof args.payload.role === 'string' ? args.payload.role : undefined,
+        }
+        if (args.parentCardId) {
+          const parent = forest.cards.get(args.parentCardId)
+          if (parent) parent.artifacts.push(artifactRef)
+        }
+        return
+      }
+
+      case 'thinking':
+      case 'memory_op':
+      case 'budget':
+      case 'todo':
+      case 'team':
+        // No clean v1 compat-event mapping. Silently drop; renderer ignores
+        // unknown types via its default case. Documented in summary.
+        return
+    }
+  }
+
+  private emitToolStart(
+    sessionId: string,
+    forest: SessionForest,
+    card: CardState,
+    toolName: string,
+    _target: string,
+    intent: string,
+    input: Record<string, unknown>,
+    traceId: string,
+  ): void {
+    if (card.toolEmitted) return
+    card.toolEmitted = true
+
+    const info = this.resolveAgentInfo(forest, card.agentId)
+    if (info.isSubagent) {
+      this.emitCompatEvent({
+        type: 'subagent_event',
+        session_id: sessionId,
+        agent_id: info.agentId,
+        agent_name: info.agentName,
+        payload: {
+          event_type: 'tool_start',
+          tool_use_id: card.cardId,
+          tool_name: toolName,
+          input,
+          intent,
+        },
+      })
+      return
+    }
+
+    this.emitCompatEvent({
+      type: 'tool_call',
+      session_id: sessionId,
+      request_id: traceId,
+      name: toolName,
+      tool_name: toolName,
+      arguments: input,
+      input,
+      call_id: card.cardId,
+      tool_use_id: card.cardId,
+      intent: intent || undefined,
+    })
+  }
+
+  // ─── card.set ────────────────────────────────────────────────────────
+  private handleCardSet(
+    sessionId: string,
+    forest: SessionForest,
+    args: {
+      cardId: string
+      cardKind: string
+      agentId?: string
+      traceId: string
+      payload: Record<string, unknown>
+    },
+  ): void {
+    const card = forest.cards.get(args.cardId)
+    if (card) {
+      card.payload = { ...card.payload, ...args.payload }
+    }
+
+    switch (args.cardKind) {
+      case 'plan': {
+        const planId = card && typeof card.payload.plan_id === 'string' ? card.payload.plan_id : args.cardId
+        const rawSteps = card && Array.isArray(card.payload.steps) ? card.payload.steps : (Array.isArray(args.payload.steps) ? args.payload.steps : [])
+        const tasks = rawSteps.flatMap((step) => {
+          if (!isPlainObject(step)) return []
+          const stepId = typeof step.step_id === 'string'
+            ? step.step_id
+            : (typeof step.id === 'string' ? step.id : '')
+          if (!stepId) return []
+          return [{
+            task_id: stepId,
+            subagent_type: typeof step.subagent_type === 'string' ? step.subagent_type : undefined,
+            user_facing_title: typeof step.user_facing_title === 'string' ? step.user_facing_title : undefined,
+            depends_on: Array.isArray(step.depends_on)
+              ? step.depends_on.filter((d): d is string => typeof d === 'string')
+              : undefined,
+          }]
+        })
+        this.emitCompatEvent({
+          type: 'plan_updated',
+          session_id: sessionId,
+          plan_id: planId,
+          agent_id: args.agentId || '',
+          goal: card && typeof card.payload.goal === 'string' ? card.payload.goal : '',
+          strategy: card && typeof card.payload.strategy === 'string' ? card.payload.strategy : '',
+          status: typeof args.payload.status === 'string' ? args.payload.status : '',
+          tasks,
+          display: {},
+        })
+        return
+      }
+
+      case 'step': {
+        const stepId = card && typeof card.payload.step_id === 'string' ? card.payload.step_id : args.cardId
+        const status = typeof args.payload.status === 'string' ? args.payload.status : ''
+        if (status === 'running') {
+          this.emitCompatEvent({
+            type: 'step_started',
+            session_id: sessionId,
+            agent_id: args.agentId || '',
+            step_id: stepId,
+            subagent_type: card && typeof card.payload.subagent_type === 'string'
+              ? card.payload.subagent_type
+              : (typeof args.payload.subagent_type === 'string' ? args.payload.subagent_type : undefined),
+          })
+        }
+        return
+      }
+    }
+  }
+
+  // ─── card.append ─────────────────────────────────────────────────────
+  private handleCardAppend(
+    sessionId: string,
+    forest: SessionForest,
+    args: {
+      cardId: string
+      cardKind: string
+      agentId?: string
+      traceId: string
+      payload: Record<string, unknown>
+    },
+  ): void {
+    const card = forest.cards.get(args.cardId)
+    if (!card) return
+
+    const channel = typeof args.payload.channel === 'string' ? args.payload.channel : ''
+    const index = typeof args.payload.index === 'number' ? args.payload.index : 0
+    const chunk = typeof args.payload.chunk === 'string' ? args.payload.chunk : ''
+    const partialJson = typeof args.payload.partial_json === 'string' ? args.payload.partial_json : ''
+    const text = chunk || partialJson
+    if (!channel || !text) return
+
+    appendChannelChunk(card, channel, index, text)
+
+    const info = this.resolveAgentInfo(forest, args.agentId)
+    // v1.10+ contract: sub-agent text is NOT streamed to the user. Skip
+    // emission for sub-agent-context message channels — accumulate-only.
+    if (info.isSubagent) return
+
+    if (channel === 'text') {
+      this.emitCompatEvent({
+        type: 'text_delta',
+        session_id: sessionId,
+        request_id: args.traceId,
+        content: chunk,
+      })
+      const accumulated = joinChannel(card, 'text')
+      card.emittedTextLength = accumulated.length
+      return
+    }
+
+    if (channel === 'thinking') {
+      const accumulated = joinChannel(card, 'thinking')
+      card.emittedThinkingLength = accumulated.length
+      this.emitCompatEvent({
+        type: 'thinking',
+        session_id: sessionId,
+        request_id: args.traceId,
+        content: accumulated,
+      })
+      return
+    }
+
+    // channel === 'tool_input' — buffered only; the matching card.add(tool)
+    // already carries the parsed input. No compat event for input_json_delta
+    // (renderer doesn't consume it).
+  }
+
+  // ─── card.tick ───────────────────────────────────────────────────────
+  private handleCardTick(
+    sessionId: string,
+    forest: SessionForest,
+    args: {
+      cardId: string
+      cardKind: string
+      agentId?: string
+      traceId: string
+      payload: Record<string, unknown>
+    },
+  ): void {
+    const kind = typeof args.payload.kind === 'string' ? args.payload.kind : ''
+    const inner = isPlainObject(args.payload.inner) ? args.payload.inner : {}
+
+    switch (kind) {
+      case 'intent': {
+        const intent = typeof inner.intent === 'string' ? inner.intent : ''
+        if (!intent) return
+        const info = this.resolveAgentInfo(forest, args.agentId)
+        const card = forest.cards.get(args.cardId)
+        // v2 §11: card.tick(kind=intent) lives on a tool card; the tool's
+        // card_id IS the tool_use_id the renderer cares about for shimmer
+        // attribution.
+        const toolUseId = card && card.cardKind === 'tool' ? card.cardId : args.cardId
+
+        this.emitCompatEvent({
+          type: 'agent_intent',
+          session_id: sessionId,
+          agent_id: info.agentId,
+          agent_name: info.agentName,
+          tool_use_id: toolUseId,
+          tool_name: card && typeof card.payload.name === 'string' ? card.payload.name : '',
+          intent,
+          from_subagent: info.isSubagent,
+        })
+        return
+      }
+
+      // progress / heartbeat / note / escalation — renderer doesn't currently
+      // surface these. Keep them as a no-op so they don't pollute logs.
+      default:
+        return
+    }
+  }
+
+  // ─── card.close ──────────────────────────────────────────────────────
+  private handleCardClose(
+    sessionId: string,
+    forest: SessionForest,
+    args: {
+      cardId: string
+      cardKind: string
+      agentId?: string
+      traceId: string
+      payload: Record<string, unknown>
+      metrics?: Record<string, unknown>
+      hint?: Record<string, unknown>
+    },
+  ): void {
+    const card = forest.cards.get(args.cardId)
+    const status = typeof args.payload.status === 'string' ? args.payload.status : 'ok'
+    const inner = isPlainObject(args.payload.inner) ? args.payload.inner : {}
+    const errorInfo = isPlainObject(args.payload.error) ? args.payload.error : undefined
+
+    if (card) {
+      card.status = status
+      card.payload = { ...card.payload, ...inner }
+    }
+
+    switch (args.cardKind) {
+      case 'turn': {
+        const usage = metricsToUsage(args.metrics)
+        const durationMs = args.metrics && typeof args.metrics.duration_ms === 'number' ? args.metrics.duration_ms : undefined
+        if (status === 'cancelled' || status === 'aborted') {
+          this.emitCompatEvent({
+            type: 'stopped',
+            session_id: sessionId,
+            request_id: args.traceId,
+            usage,
+          })
+        } else if (status === 'failed' || status === 'error') {
+          writeAppLog('warn', 'harnessclaw-engine.session', 'Turn finished with exception', {
+            sessionId,
+            traceId: args.traceId,
+            status,
+            durationMs,
+            usage,
+          })
+          this.emitCompatEvent({
+            type: 'response_end',
+            session_id: sessionId,
+            request_id: args.traceId,
+            usage,
+            status,
+            duration_ms: durationMs,
+            error: errorInfo,
+          })
+        } else {
+          logSessionSummary('Turn completed', {
+            sessionId,
+            traceId: args.traceId,
+            status,
+            durationMs,
+            usage,
+          })
+          this.emitCompatEvent({
+            type: 'response_end',
+            session_id: sessionId,
+            request_id: args.traceId,
+            usage,
+            status,
+            duration_ms: durationMs,
+          })
+        }
+        if (sessionId) this.knownSessions.set(sessionId, Date.now())
+        this.emitSessions()
+        return
+      }
+
+      case 'message': {
+        // No compat event — renderer treats text streaming as continuous and
+        // expects response_end (turn close) to clear isStreaming.
+        return
+      }
+
+      case 'tool': {
+        const info = this.resolveAgentInfo(forest, args.agentId)
+        // If we already emitted the tool_result locally during executeToolCall
+        // (client tool path), suppress this echo so the renderer doesn't get
+        // a duplicate ToolActivity entry.
+        if (card && card.localResultEmitted) {
+          return
+        }
+
+        const toolName = card && typeof card.payload.name === 'string'
+          ? card.payload.name
+          : (typeof inner.name === 'string' ? inner.name : '')
+        const output = typeof inner.output === 'string'
+          ? inner.output
+          : typeof args.payload.output === 'string' ? args.payload.output : ''
+        const errMsg = errorInfo && typeof errorInfo.user_message === 'string'
+          ? errorInfo.user_message
+          : (errorInfo && typeof errorInfo.message === 'string' ? errorInfo.message : '')
+        const content = output || errMsg || ''
+        const isError = status === 'failed' || status === 'cancelled' || !!errorInfo
+        const renderHint = typeof inner.render_hint === 'string'
+          ? inner.render_hint
+          : (typeof args.payload.render_hint === 'string' ? args.payload.render_hint : (args.hint && typeof args.hint.render_hint === 'string' ? args.hint.render_hint : undefined))
+        const language = typeof inner.language === 'string' ? inner.language : undefined
+        const filePath = typeof inner.file_path === 'string' ? inner.file_path : undefined
+        const durationMs = args.metrics && typeof args.metrics.duration_ms === 'number' ? args.metrics.duration_ms : undefined
+        const innerArtifacts = Array.isArray(inner.artifacts) ? inner.artifacts : []
+        const aggregated = card ? card.artifacts.concat(innerArtifacts) : innerArtifacts
+        const baseMetadata = isPlainObject(inner.metadata)
+          ? { ...inner.metadata }
+          : {}
+        const metadata = aggregated.length > 0
+          ? { ...baseMetadata, artifacts: aggregated }
+          : baseMetadata
+
+        if (info.isSubagent) {
+          this.emitCompatEvent({
+            type: 'subagent_event',
+            session_id: sessionId,
+            agent_id: info.agentId,
+            agent_name: info.agentName,
+            payload: {
+              event_type: 'tool_end',
+              tool_use_id: args.cardId,
+              tool_name: toolName,
+              output: content,
+              content,
+              is_error: isError,
+              status,
+              duration_ms: durationMs,
+              render_hint: renderHint,
+              language,
+              file_path: filePath,
+              artifacts: aggregated,
+              metadata,
+            },
+          })
+          return
+        }
+
+        this.emitCompatEvent({
+          type: 'tool_result',
+          session_id: sessionId,
+          request_id: args.traceId,
+          name: toolName,
+          tool_name: toolName,
+          content,
+          output: content,
+          call_id: args.cardId,
+          tool_use_id: args.cardId,
+          is_error: isError,
+          status,
+          duration_ms: durationMs,
+          render_hint: renderHint,
+          language,
+          file_path: filePath,
+          metadata,
+          error: errorInfo,
+        })
+        return
+      }
+
+      case 'agent': {
+        const usage = metricsToUsage(args.metrics)
+        const numTurns = typeof inner.num_turns === 'number'
+          ? inner.num_turns
+          : (typeof args.payload.num_turns === 'number' ? args.payload.num_turns : undefined)
+        const durationMs = args.metrics && typeof args.metrics.duration_ms === 'number' ? args.metrics.duration_ms : undefined
+        const deniedTools = asStringArray(inner.denied_tools).length > 0
+          ? asStringArray(inner.denied_tools)
+          : asStringArray(args.payload.denied_tools)
+        const innerArtifacts = Array.isArray(inner.artifacts) ? inner.artifacts : []
+        const aggregated = card ? card.artifacts.concat(innerArtifacts) : innerArtifacts
+        const agentName = forest.agentNames.get(args.cardId)
+          || (card && typeof card.payload.name === 'string' ? card.payload.name : 'subagent')
+
+        let mappedStatus: string
+        if (status === 'ok') mappedStatus = 'completed'
+        else if (status === 'failed') mappedStatus = 'error'
+        else if (status === 'cancelled') mappedStatus = 'aborted'
+        else if (status === 'skipped') mappedStatus = 'completed'
+        else mappedStatus = status
+
+        this.emitCompatEvent({
+          type: 'subagent_end',
+          session_id: sessionId,
+          agent_id: args.cardId,
+          agent_name: agentName,
+          status: mappedStatus,
+          duration_ms: durationMs,
+          num_turns: numTurns,
+          usage,
+          denied_tools: deniedTools,
+          artifacts: aggregated,
+          error: errorInfo,
+        })
+        return
+      }
+
+      case 'plan': {
+        const planId = card && typeof card.payload.plan_id === 'string' ? card.payload.plan_id : args.cardId
+        if (status === 'ok') {
+          this.emitCompatEvent({
+            type: 'plan_completed',
+            session_id: sessionId,
+            agent_id: args.agentId || '',
+            plan_id: planId,
+            status,
+          })
+        } else {
+          this.emitCompatEvent({
+            type: 'plan_failed',
+            session_id: sessionId,
+            agent_id: args.agentId || '',
+            plan_id: planId,
+            status,
+            error: errorInfo,
+          })
+        }
+        return
+      }
+
+      case 'step': {
+        const stepId = card && typeof card.payload.step_id === 'string' ? card.payload.step_id : args.cardId
+        const subagentType = card && typeof card.payload.subagent_type === 'string' ? card.payload.subagent_type : undefined
+        if (status === 'ok') {
+          this.emitCompatEvent({
+            type: 'step_completed',
+            session_id: sessionId,
+            agent_id: args.agentId || '',
+            step_id: stepId,
+            subagent_type: subagentType,
+            output_summary: typeof inner.output_summary === 'string' ? inner.output_summary : undefined,
+            deliverables: Array.isArray(inner.deliverables) ? inner.deliverables : undefined,
+            attempts: typeof inner.attempts === 'number' ? inner.attempts : undefined,
+          })
+        } else if (status === 'skipped') {
+          this.emitCompatEvent({
+            type: 'step_skipped',
+            session_id: sessionId,
+            agent_id: args.agentId || '',
+            step_id: stepId,
+            subagent_type: subagentType,
+            reason: typeof inner.reason === 'string'
+              ? inner.reason
+              : (errorInfo && typeof errorInfo.message === 'string' ? errorInfo.message : undefined),
+          })
+        } else {
+          this.emitCompatEvent({
+            type: 'step_failed',
+            session_id: sessionId,
+            agent_id: args.agentId || '',
+            step_id: stepId,
+            subagent_type: subagentType,
+            error: errorInfo,
+            attempts: typeof inner.attempts === 'number' ? inner.attempts : undefined,
+          })
+        }
+        return
+      }
+
+      case 'artifact':
+      case 'thinking':
+      case 'memory_op':
+      case 'budget':
+      case 'todo':
+      case 'team':
+        // No compat-event mapping. Documented in summary.
+        return
+    }
   }
 
   private emitCompatEvent(event: Record<string, unknown>): void {
@@ -997,7 +1526,11 @@ export class HarnessclawClient extends EventEmitter {
     this.emitCompatEvent({ type: 'sessions', sessions })
   }
 
-  async send(content: string, sessionId?: string): Promise<boolean> {
+  // ────────────────────────────────────────────────────────────────────
+  //  Outbound senders
+  // ────────────────────────────────────────────────────────────────────
+
+  async send(content: string, sessionId?: string, options?: { coordinatorMode?: 'react' | 'plan'; planConfirmation?: 'auto' | 'required' }): Promise<boolean> {
     const resolvedSessionId = sessionId || this.defaultSessionId
     if (!resolvedSessionId) {
       this.emitCompatEvent({ type: 'error', content: 'No active Harnessclaw session' })
@@ -1010,14 +1543,18 @@ export class HarnessclawClient extends EventEmitter {
         throw new Error('Harnessclaw websocket is not open')
       }
 
-      const payload = {
+      // v2 §9.1: content is now an ARRAY of typed parts.
+      const payload: Record<string, unknown> = {
         type: 'user.message',
         event_id: makeEventId(),
         session_id: resolvedSessionId,
-        content: {
-          type: 'text',
-          text: content,
-        },
+        content: [{ type: 'text', text: content }],
+      }
+      if (options?.coordinatorMode === 'plan' || options?.coordinatorMode === 'react') {
+        payload.coordinator_mode = options.coordinatorMode
+      }
+      if (options?.planConfirmation === 'required') {
+        payload.plan_confirmation = 'required'
       }
       logEngineFrame('send', payload, {
         sessionId: resolvedSessionId,
@@ -1025,6 +1562,66 @@ export class HarnessclawClient extends EventEmitter {
       })
       this.ws.send(JSON.stringify(payload))
       this.knownSessions.set(resolvedSessionId, Date.now())
+      return true
+    } catch (error) {
+      this.emitCompatEvent({
+        type: 'error',
+        session_id: resolvedSessionId,
+        content: error instanceof Error ? error.message : String(error),
+      })
+      return false
+    }
+  }
+
+  // v2 §7.3 plan_review response. Translates the legacy (planId, approved,
+  // sessionId, options{steps,reason}) signature into prompt.user_response.
+  async respondPlan(
+    planId: string,
+    approved: boolean,
+    sessionId?: string,
+    options?: { steps?: Array<Record<string, unknown>>; reason?: string },
+  ): Promise<boolean> {
+    const resolvedSessionId = sessionId || this.defaultSessionId
+    if (!resolvedSessionId || !planId) return false
+    try {
+      await this.ensureSession(resolvedSessionId)
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        throw new Error('Harnessclaw websocket is not open')
+      }
+      const forest = this.getForest(resolvedSessionId)
+      const requestId = forest.planIdToRequestId.get(planId)
+      if (!requestId) {
+        throw new Error(`No pending plan_review request for plan_id=${planId}`)
+      }
+
+      const responsePayload: Record<string, unknown> = {
+        approved,
+      }
+      if (approved && options?.steps && options.steps.length > 0) {
+        responsePayload.updated_steps = options.steps
+      }
+      if (options?.reason) {
+        responsePayload.reason = options.reason
+      }
+
+      const frame: Record<string, unknown> = {
+        type: 'prompt.user_response',
+        event_id: makeEventId(),
+        session_id: resolvedSessionId,
+        request_id: requestId,
+        decision: approved ? 'approved' : 'denied',
+        payload: responsePayload,
+      }
+      logEngineFrame('send', frame, {
+        sessionId: resolvedSessionId,
+        type: 'prompt.user_response',
+        kind: 'plan_review',
+        planId,
+      })
+      this.ws.send(JSON.stringify(frame))
+
+      forest.planIdToRequestId.delete(planId)
+      forest.planReviewRequests.delete(requestId)
       return true
     } catch (error) {
       this.emitCompatEvent({
@@ -1058,11 +1655,14 @@ export class HarnessclawClient extends EventEmitter {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
         throw new Error('Harnessclaw websocket is not open')
       }
-      const payload = {
+      const forest = this.getForest(resolvedSessionId)
+      // v2 §9: session.interrupt — server expects a trace_id (the active turn).
+      const payload: Record<string, unknown> = {
         type: 'session.interrupt',
         event_id: makeEventId(),
         session_id: resolvedSessionId,
       }
+      if (forest.activeTraceId) payload.trace_id = forest.activeTraceId
       logEngineFrame('send', payload, {
         sessionId: resolvedSessionId,
         type: 'session.interrupt',
@@ -1140,8 +1740,7 @@ export class HarnessclawClient extends EventEmitter {
       clearTimeout(this.retryTimer)
       this.retryTimer = null
     }
-    this.pendingMessages.clear()
-    this.pendingPermissionRequests.clear()
+    this.forests.clear()
     this.pendingSessionInitId = ''
     this.sessionCreateInFlight = false
     this.rejectTransportWaiters(new Error('Harnessclaw websocket disconnected by client'))
@@ -1153,6 +1752,31 @@ export class HarnessclawClient extends EventEmitter {
     this.defaultSessionId = ''
     this.subscriptions = []
     this.setStatus('disconnected')
+  }
+
+  // session.resume — used after reconnect to request gap-fill from the server.
+  async resume(sessionId?: string, traceId?: string, lastSeq?: number): Promise<boolean> {
+    const resolvedSessionId = sessionId || this.defaultSessionId
+    if (!resolvedSessionId) return false
+    try {
+      await this.ensureSession(resolvedSessionId)
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false
+      const forest = this.getForest(resolvedSessionId)
+      const tid = traceId || forest.activeTraceId
+      if (!tid) return false
+      const payload: Record<string, unknown> = {
+        type: 'session.resume',
+        event_id: makeEventId(),
+        session_id: resolvedSessionId,
+        trace_id: tid,
+        last_seq: typeof lastSeq === 'number' ? lastSeq : forest.lastSeq,
+      }
+      logEngineFrame('send', payload, { sessionId: resolvedSessionId, type: 'session.resume' })
+      this.ws.send(JSON.stringify(payload))
+      return true
+    } catch {
+      return false
+    }
   }
 
   getStatus(): { status: HarnessclawStatus; clientId: string; sessionId: string; subscriptions: string[] } {
@@ -1175,29 +1799,44 @@ export class HarnessclawClient extends EventEmitter {
     scope: 'once' | 'session' = 'once',
     message?: string,
   ): boolean {
-    const pending = this.pendingPermissionRequests.get(requestId)
-    if (!pending || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      return false
-    }
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false
 
-    const payload: Record<string, unknown> = {
-      type: 'permission.response',
-      event_id: makeEventId(),
-      session_id: pending.sessionId,
-      request_id: requestId,
+    let pending: PendingPermissionRequest | undefined
+    let owningSessionId = ''
+    for (const [sid, forest] of this.forests.entries()) {
+      const candidate = forest.permissionRequests.get(requestId)
+      if (candidate) {
+        pending = candidate
+        owningSessionId = sid
+        break
+      }
+    }
+    if (!pending || !owningSessionId) return false
+
+    // v2 §7.3 — prompt.user_response with kind=permission inferred from
+    // request_id. payload carries the approval/scope decision.
+    const responsePayload: Record<string, unknown> = {
       approved,
       scope,
     }
-    if (!approved && message) {
-      payload.message = message
+    if (message) responsePayload.message = message
+
+    const frame: Record<string, unknown> = {
+      type: 'prompt.user_response',
+      event_id: makeEventId(),
+      session_id: pending.sessionId,
+      request_id: requestId,
+      decision: approved ? 'approved' : 'denied',
+      payload: responsePayload,
     }
 
-    logEngineFrame('send', payload, {
+    logEngineFrame('send', frame, {
       sessionId: pending.sessionId,
-      type: 'permission.response',
+      type: 'prompt.user_response',
+      kind: 'permission',
     })
-    this.ws.send(JSON.stringify(payload))
-    this.pendingPermissionRequests.delete(requestId)
+    this.ws.send(JSON.stringify(frame))
+    this.forests.get(owningSessionId)?.permissionRequests.delete(requestId)
 
     this.emitCompatEvent({
       type: 'permission_result',
@@ -1221,28 +1860,89 @@ export class HarnessclawClient extends EventEmitter {
     output?: string,
     errorMessage?: string,
   ): boolean {
-    const pending = this.pendingAskQuestionRequests.get(toolUseId)
-    if (!pending || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      writeAppLog('warn', 'harnessclaw-engine.askQuestion', 'respondAskQuestion aborted: websocket not open', {
+        toolUseId,
+        wsExists: Boolean(this.ws),
+        readyState: this.ws?.readyState,
+      })
       return false
     }
 
-    const payload: ToolResultPayload = status === 'success'
-      ? { status: 'success', output: output || '' }
-      : {
-          status: 'cancelled',
-          error: {
-            code: 'user_cancelled',
-            message: errorMessage || 'User dismissed the question dialog',
-          },
-        }
+    // The renderer treats request_id as call_id for ask-question rounds.
+    const requestId = toolUseId
+    let pending: PendingAskQuestionRequest | undefined
+    let owningSessionId = ''
+    for (const [sid, forest] of this.forests.entries()) {
+      const candidate = forest.askRequests.get(requestId)
+      if (candidate) {
+        pending = candidate
+        owningSessionId = sid
+        break
+      }
+    }
+    if (!pending || !owningSessionId) {
+      const knownRequestIds: string[] = []
+      for (const [, forest] of this.forests.entries()) {
+        for (const id of forest.askRequests.keys()) knownRequestIds.push(id)
+      }
+      writeAppLog('warn', 'harnessclaw-engine.askQuestion', 'respondAskQuestion aborted: pending askRequest not found', {
+        toolUseId,
+        forestCount: this.forests.size,
+        knownRequestIds,
+      })
+      return false
+    }
 
-    this.sendToolResult(pending.sessionId, toolUseId, payload)
-    this.pendingAskQuestionRequests.delete(toolUseId)
+    let responsePayload: Record<string, unknown>
+    let decision: 'approved' | 'denied'
+    if (status === 'success') {
+      // The renderer emits a newline-joined string of (selected option labels)
+      // + (optional custom text). Reverse-engineer it back into the v2
+      // {selected_options, custom_text} shape using the option labels we
+      // captured when the prompt arrived.
+      const lines = (output || '').split('\n').map((line) => line.trim()).filter((line) => line)
+      const labelSet = new Set(pending.optionLabels)
+      const selectedOptions: string[] = []
+      const customParts: string[] = []
+      for (const line of lines) {
+        if (labelSet.has(line)) selectedOptions.push(line)
+        else customParts.push(line)
+      }
+      responsePayload = {
+        selected_options: selectedOptions,
+        custom_text: customParts.join('\n'),
+      }
+      decision = 'approved'
+    } else {
+      responsePayload = {
+        selected_options: [],
+        custom_text: '',
+        cancellation_reason: errorMessage || 'User dismissed the question dialog',
+      }
+      decision = 'denied'
+    }
+
+    const frame: Record<string, unknown> = {
+      type: 'prompt.user_response',
+      event_id: makeEventId(),
+      session_id: pending.sessionId,
+      request_id: requestId,
+      decision,
+      payload: responsePayload,
+    }
+    logEngineFrame('send', frame, {
+      sessionId: pending.sessionId,
+      type: 'prompt.user_response',
+      kind: 'question',
+    })
+    this.ws.send(JSON.stringify(frame))
+    this.forests.get(owningSessionId)?.askRequests.delete(requestId)
 
     this.emitCompatEvent({
       type: 'ask_user_question_result',
       session_id: pending.sessionId,
-      call_id: toolUseId,
+      call_id: requestId,
       status,
       output: status === 'success' ? (output || '') : '',
       error: status === 'cancelled'
@@ -1254,6 +1954,7 @@ export class HarnessclawClient extends EventEmitter {
   }
 
   private sendToolResult(sessionId: string, toolUseId: string, payload: ToolResultPayload): void {
+    // v2 §9: tool.result with tool_use_id, status, output|error, metadata.
     const message: Record<string, unknown> = {
       type: 'tool.result',
       event_id: makeEventId(),
@@ -1286,6 +1987,8 @@ export class HarnessclawClient extends EventEmitter {
     toolUseId: string,
     toolName: string,
     input: Record<string, unknown>,
+    isSubagent: boolean,
+    card: CardState,
   ): Promise<void> {
     const cfg = this.readConfig()
     if (!cfg) return
@@ -1299,14 +2002,7 @@ export class HarnessclawClient extends EventEmitter {
           message: `Tool "${toolName}" is denied by local policy`,
         },
       }
-      this.emitCompatEvent({
-        type: 'tool_result',
-        session_id: sessionId,
-        name: toolName,
-        call_id: toolUseId,
-        is_error: true,
-        content: deniedPayload.error?.message,
-      })
+      this.emitLocalToolResult(sessionId, toolUseId, toolName, deniedPayload, isSubagent, card)
       this.sendToolResult(sessionId, toolUseId, deniedPayload)
       return
     }
@@ -1319,14 +2015,7 @@ export class HarnessclawClient extends EventEmitter {
           message: `Tool "${toolName}" is not in allowed_tools`,
         },
       }
-      this.emitCompatEvent({
-        type: 'tool_result',
-        session_id: sessionId,
-        name: toolName,
-        call_id: toolUseId,
-        is_error: true,
-        content: deniedPayload.error?.message,
-      })
+      this.emitLocalToolResult(sessionId, toolUseId, toolName, deniedPayload, isSubagent, card)
       this.sendToolResult(sessionId, toolUseId, deniedPayload)
       return
     }
@@ -1350,7 +2039,7 @@ export class HarnessclawClient extends EventEmitter {
           result = await this.runGlobTool(input)
           break
         case 'grep':
-          result = await this.runGrepTool(input, Math.min(30_000, cfg.toolTimeoutMs))
+          result = await this.runGrepTool(input, Math.min(asPositiveNumber(30_000, 30_000), cfg.toolTimeoutMs))
           break
         case 'web_fetch':
           result = await this.runWebFetchTool(input, Math.min(cfg.webFetchTimeoutMs, cfg.toolTimeoutMs))
@@ -1374,15 +2063,57 @@ export class HarnessclawClient extends EventEmitter {
       }
     }
 
+    this.emitLocalToolResult(sessionId, toolUseId, toolName, result, isSubagent, card)
+    this.sendToolResult(sessionId, toolUseId, result)
+  }
+
+  private emitLocalToolResult(
+    sessionId: string,
+    toolUseId: string,
+    toolName: string,
+    result: ToolResultPayload,
+    isSubagent: boolean,
+    card: CardState,
+  ): void {
+    card.localResultEmitted = true
+    const isError = result.status !== 'success'
+    const content = result.status === 'success'
+      ? (result.output || '')
+      : (result.error?.message || 'Tool execution failed')
+
+    if (isSubagent) {
+      this.emitCompatEvent({
+        type: 'subagent_event',
+        session_id: sessionId,
+        agent_id: card.agentId || '',
+        agent_name: '',
+        payload: {
+          event_type: 'tool_end',
+          tool_use_id: toolUseId,
+          tool_name: toolName,
+          output: content,
+          content,
+          is_error: isError,
+          status: result.status,
+          metadata: result.metadata,
+        },
+      })
+      return
+    }
+
     this.emitCompatEvent({
       type: 'tool_result',
       session_id: sessionId,
       name: toolName,
+      tool_name: toolName,
       call_id: toolUseId,
-      is_error: result.status !== 'success',
-      content: result.status === 'success' ? (result.output || '') : (result.error?.message || 'Tool execution failed'),
+      tool_use_id: toolUseId,
+      is_error: isError,
+      content,
+      output: content,
+      status: result.status,
+      metadata: result.metadata,
     })
-    this.sendToolResult(sessionId, toolUseId, result)
   }
 
   private async runBashTool(input: Record<string, unknown>, timeoutMs: number): Promise<ToolResultPayload> {

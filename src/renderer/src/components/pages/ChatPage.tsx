@@ -4,9 +4,9 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import {
   Send, Plus, Copy, Check, Trash2,
   Loader2, Wrench, Brain, AlertCircle, RefreshCw, ChevronDown, ChevronUp,
-  FileText, X, ArrowDown, AtSign, GitBranch, ListTodo, Users, MessagesSquare, ChevronLeft, ChevronRight, Search, HelpCircle, FolderOpen
+  FileText, X, ArrowDown, AtSign, GitBranch, ListTodo, Users, MessagesSquare, ChevronLeft, ChevronRight, Search, HelpCircle, FolderOpen, Download,
 } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { visit, SKIP } from 'unist-util-visit'
 import { cn } from '@/lib/utils'
@@ -20,6 +20,8 @@ import {
   type SelectedSkillChip,
 } from '../common/SkillComposerInput'
 import { PastedBlocksBar, usePastedBlocks } from '../common/PastedBlocksBar'
+import { PlanDraftCard, type PlanDraftStep } from '../common/PlanDraftCard'
+import { PlanStatusButton } from '../common/PlanStatusButton'
 import { AvatarLightbox } from '../common/AvatarLightbox'
 import emmaAvatar from '../../assets/sidebar-logo.png'
 import analystAvatar from '../../assets/team/analyst.png'
@@ -92,7 +94,13 @@ function FilePathChip({ path, onOpen }: { path: string; onOpen: (path: string) =
         onOpen(path)
       }}
       title={path}
-      className="not-prose mx-0.5 inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-muted/40 px-1.5 py-0.5 align-baseline text-[12px] font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-primary/10"
+      // Force a solid white background + dark text so the chip stays readable
+      // even when it appears inside dark/contrast-heavy contexts (e.g., a
+      // shell error string like `"~/.config/amp/settings.json" E212: Can't
+      // open file for writing` rendered inside a code block / stderr panel).
+      // Without this, `bg-muted/40 + text-foreground` collapsed to white-on-
+      // white in some themes and the path became unreadable.
+      className="not-prose mx-0.5 inline-flex max-w-full items-center gap-1 rounded-md border border-slate-300 bg-white px-1.5 py-0.5 align-baseline text-[12px] font-medium text-slate-900 shadow-sm transition-colors hover:border-primary/60 hover:bg-primary/5 dark:border-slate-300 dark:bg-white dark:text-slate-900"
     >
       <FileText size={12} className="flex-shrink-0 text-primary" />
       <span className="truncate max-w-[280px]">{fileName}</span>
@@ -240,7 +248,7 @@ interface SystemNoticeData {
 
 type AttachmentItem = LocalAttachmentItem
 type RespondPermissionHandler = (requestId: string, approved: boolean, scope: 'once' | 'session') => Promise<void>
-type RespondAskQuestionHandler = (toolUseId: string, status: 'success' | 'cancelled', output?: string, errorMessage?: string) => Promise<void>
+type RespondAskQuestionHandler = (toolUseId: string, status: 'success' | 'cancelled', output?: string, errorMessage?: string) => Promise<{ ok: boolean; error?: string }>
 
 // Per-session state
 interface SessionState {
@@ -263,6 +271,56 @@ interface SessionState {
   isStopping: boolean
   pauseReason?: string
   collaboration: CollaborationState
+  /**
+   * v1.15+ pending plan-confirmation draft for this session.
+   * Set on `plan_proposed` (or implicitly on `plan_created` for auto mode);
+   * cleared on `response_end`. While `confirmed` is true the inline review
+   * card is replaced by a small top-right `PlanStatusButton` that shows
+   * live execution status.
+   *
+   * v1.16: per-step `skill` was renamed to optional `subagent_type` and
+   * `availableSkills` to `availableSubagents`. The standard frontend doesn't
+   * render the field — the server-side SubagentResolver picks the L3 at
+   * dispatch time — so we keep it on the type only for advanced overrides.
+   *
+   * v1.16 §6.13/§6.16: PlanCoordinator now emits `plan.*` / `step.*`
+   * lifecycle events. We keep the resolved subagent_type / per-step status /
+   * output summary here so PlanStatusButton can show "执行情况".
+   */
+  planDraft?: {
+    planId: string
+    agentId?: string
+    goal: string
+    rationale?: string
+    steps: Array<{
+      id: string
+      subagent_type?: string
+      description?: string
+      prompt?: string
+      depends_on?: string[]
+      /** v1.16+ live status, populated from `step.*` emit events. */
+      status?: 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'skipped'
+      /** v1.16+ short output / failure / skip summary. */
+      summary?: string
+    }>
+    availableSubagents: string[]
+    confirmed: boolean
+    /**
+     * v1.16+ overall plan status driven by `plan.*` events. `running` is the
+     * default once the plan is approved; `completed` / `failed` are terminal.
+     */
+    planStatus?: 'created' | 'running' | 'completed' | 'failed'
+  }
+  /**
+   * v1.16: tracks whether the current turn was sent with
+   * `plan_confirmation="required"`. PlanCoordinator emits `plan.created`
+   * BEFORE `plan.proposed` (per §6.16); without this flag the renderer
+   * would synthesize a `confirmed: true` draft on `plan.created` and never
+   * show the inline review card. While true, `plan_created` skips synthesis
+   * and waits for `plan_proposed`. Cleared on `plan_proposed` /
+   * `plan_approved` / `response_end`.
+   */
+  awaitingPlanProposed?: boolean
 }
 
 interface CollaborationCapabilities {
@@ -528,12 +586,15 @@ const ConversationTimeline = memo(function ConversationTimeline({
   currentThinking,
   currentIntent,
   pendingAssistantMessage,
+  planDraft,
   messagesViewportRef,
   messagesEndRef,
   onScroll,
   onOpenFilePreview,
+  onOpenArtifact,
   onRespondPermission,
   onRespondAskQuestion,
+  onRespondPlan,
 }: {
   collaboration: CollaborationState
   displayMessages: Message[]
@@ -543,12 +604,15 @@ const ConversationTimeline = memo(function ConversationTimeline({
   currentThinking: string
   currentIntent?: SessionState['currentIntent']
   pendingAssistantMessage: Message | null
+  planDraft?: SessionState['planDraft']
   messagesViewportRef: RefObject<HTMLDivElement | null>
   messagesEndRef: RefObject<HTMLDivElement | null>
   onScroll: () => void
   onOpenFilePreview: (preview: FilePreviewData) => void
+  onOpenArtifact?: (artifactId: string) => void
   onRespondPermission: RespondPermissionHandler
   onRespondAskQuestion: RespondAskQuestionHandler
+  onRespondPlan: (planId: string, approved: boolean, options?: { steps?: PlanDraftStep[]; reason?: string }) => void
 }) {
   return (
     <div
@@ -571,11 +635,41 @@ const ConversationTimeline = memo(function ConversationTimeline({
               // v1.12: Emma 的鎏光只在当前正在流式输出的助手消息上显示（紧贴 "Emma" 名字）。
               activeIntent={message.isStreaming ? currentIntent : undefined}
               onOpenFilePreview={onOpenFilePreview}
+              onOpenArtifact={onOpenArtifact}
               onRespondPermission={onRespondPermission}
               onRespondAskQuestion={onRespondAskQuestion}
             />
           </div>
         ))}
+
+        {/* v1.15+ render the editable plan draft inline while the user is
+            still reviewing. After approval the inline card collapses and the
+            plan migrates to the floating PlanStatusButton in the messages
+            area's top-right corner (rendered by ChatPage, not here), so the
+            running conversation isn't shoved down by a tall, now-read-only
+            card.
+
+            Indented by `pl-[2.625rem]` to clear the assistant avatar gutter
+            so the card lines up flush with assistant message bodies (and
+            with the Thinking… indicator below) instead of hugging the
+            container's left edge. */}
+        {planDraft && !planDraft.confirmed && (
+          <div className="flex justify-start pl-[2.625rem]" data-plan-draft-id={planDraft.planId}>
+            <PlanDraftCard
+              plan={{
+                planId: planDraft.planId,
+                agentId: planDraft.agentId,
+                goal: planDraft.goal,
+                rationale: planDraft.rationale,
+                steps: planDraft.steps,
+                availableSubagents: planDraft.availableSubagents,
+              }}
+              isConfirmed={planDraft.confirmed}
+              onConfirm={(steps) => onRespondPlan(planDraft.planId, true, { steps })}
+              onCancel={() => onRespondPlan(planDraft.planId, false, { reason: 'User declined the proposed plan' })}
+            />
+          </div>
+        )}
 
         {isProcessing && currentThinking && (
           <ThinkingIndicator content={currentThinking} />
@@ -1284,6 +1378,35 @@ function getToolFilePath(source: Record<string, unknown>): string | undefined {
 
 function getToolMetadata(source: Record<string, unknown>): Record<string, unknown> | undefined {
   return isRecord(source.metadata) ? source.metadata : undefined
+}
+
+/**
+ * v0.3 (websocket protocol §2.4.2): when the server replays an unanswered
+ * prompt after reconnect, it uses the same `request_id`. Search the whole
+ * session's tool history for an existing card with the same callId+type and
+ * replace it in-place; otherwise append to the fallback (current) message.
+ * This preserves the original turn placement so a replayed prompt rejoins
+ * its original card instead of duplicating onto the latest message.
+ */
+function upsertSessionToolByCallId(
+  messages: Message[],
+  fallbackMessageId: string,
+  activity: ToolActivity,
+): Message[] {
+  if (activity.callId) {
+    for (let i = 0; i < messages.length; i += 1) {
+      const tools = messages[i].tools
+      if (!tools) continue
+      const index = tools.findIndex((t) => t.callId === activity.callId && t.type === activity.type)
+      if (index === -1) continue
+      const nextTools = tools.slice()
+      nextTools[index] = activity
+      const nextMessages = messages.slice()
+      nextMessages[i] = { ...messages[i], tools: nextTools }
+      return nextMessages
+    }
+  }
+  return messages.map((m) => m.id === fallbackMessageId ? { ...m, tools: [...(m.tools || []), activity] } : m)
 }
 
 function summarizeInlineText(text: string, maxLength = 140): string {
@@ -2303,6 +2426,17 @@ export function ChatPage() {
   const navigate = useNavigate()
   const initialMessage = location.state?.initialMessage || ''
   const initialAttachments = (location.state?.initialAttachments || []) as AttachmentItem[]
+  // v1.14: optional coordinator_mode passed from the home/composer entry —
+  // 'plan' explicitly pins this turn to the L2 Plan coordinator; absent
+  // means the engine's heuristic ModeSelector picks ReAct/Plan automatically.
+  const initialCoordinatorMode: 'react' | 'plan' | undefined =
+    location.state?.coordinatorMode === 'plan' || location.state?.coordinatorMode === 'react'
+      ? location.state.coordinatorMode
+      : undefined
+  // v1.15: opt-in `plan_confirmation: "required"` so the engine pauses on
+  // `plan.proposed` and lets the user edit the draft DAG before running.
+  const initialPlanConfirmation: 'required' | undefined =
+    location.state?.planConfirmation === 'required' ? 'required' : undefined
   const selectedSessionIdFromRoute = typeof location.state?.sessionId === 'string' ? location.state.sessionId : ''
   const createSessionOnOpen = location.state?.createSession === true
   const routeProjectContext = useMemo(() => normalizeProjectContext(location.state?.projectContext), [location.state])
@@ -2326,9 +2460,9 @@ export function ChatPage() {
   const isNearBottomRef = useRef(true)
   const sendBurstTimerRef = useRef<number | null>(null)
   const dropBurstTimerRef = useRef<number | null>(null)
-  const pendingInitialTurn = useRef<{ content: string; attachments: AttachmentItem[] } | null>(
+  const pendingInitialTurn = useRef<{ content: string; attachments: AttachmentItem[]; coordinatorMode?: 'react' | 'plan'; planConfirmation?: 'required' } | null>(
     initialMessage || initialAttachments.length > 0
-      ? { content: initialMessage, attachments: initialAttachments }
+      ? { content: initialMessage, attachments: initialAttachments, coordinatorMode: initialCoordinatorMode, planConfirmation: initialPlanConfirmation }
       : null
   )
   const initialTurnHandledKeyRef = useRef<string | null>(
@@ -2339,6 +2473,11 @@ export function ChatPage() {
   const pendingAssistantIds = useRef<Record<string, string | null>>({})
   const activeSessionIdRef = useRef(activeSessionId)
   activeSessionIdRef.current = activeSessionId
+  // v0.3 dedup helper: synchronous read access to the latest sessionMap so
+  // event handlers can detect whether a replayed prompt's card already
+  // exists before deciding to create a new assistant message.
+  const sessionMapRef = useRef(sessionMap)
+  sessionMapRef.current = sessionMap
   const maxLength = 4000
 
   const [dbSessions, setDbSessions] = useState<DbSessionRow[]>([])
@@ -2382,7 +2521,7 @@ export function ChatPage() {
     return resolvedSessionId
   }, [navigate, routeProjectContext])
 
-  const sendInitialMessage = useCallback((sid: string, text: string, initialFiles: AttachmentItem[] = []) => {
+  const sendInitialMessage = useCallback((sid: string, text: string, initialFiles: AttachmentItem[] = [], coordinatorMode?: 'react' | 'plan', planConfirmation?: 'required') => {
     pendingInitialTurn.current = null
     const trimmedText = text.trim()
     const payload = buildMessagePayload(trimmedText, initialFiles)
@@ -2396,6 +2535,9 @@ export function ChatPage() {
       isPaused: false,
       isStopping: false,
       pauseReason: undefined,
+      // v1.16: arm the gate so `plan_created` doesn't preemptively
+      // synthesize a confirmed draft before `plan_proposed` arrives.
+      awaitingPlanProposed: planConfirmation === 'required' ? true : prev.awaitingPlanProposed,
       messages: [...prev.messages, {
         id: `usr-${Date.now()}`,
         role: 'user',
@@ -2404,7 +2546,10 @@ export function ChatPage() {
         timestamp: Date.now(),
       }],
     }))
-    void window.harnessclaw.send(payload, sid)
+    const sendOptions = (coordinatorMode || planConfirmation)
+      ? { coordinatorMode, planConfirmation }
+      : undefined
+    void window.harnessclaw.send(payload, sid, sendOptions)
   }, [ensureLocalSession, updateSession])
 
   const respondPermission = useCallback(async (requestId: string, approved: boolean, scope: 'once' | 'session') => {
@@ -2418,14 +2563,51 @@ export function ChatPage() {
   }, [])
 
   const respondAskQuestion = useCallback<RespondAskQuestionHandler>(async (toolUseId, status, output, errorMessage) => {
-    if (!toolUseId) return
-    await window.harnessclaw.respondAskQuestion(
-      toolUseId,
-      status,
-      status === 'success' ? (output || '') : undefined,
-      status === 'cancelled' ? (errorMessage || 'User dismissed the question dialog') : undefined,
-    )
+    if (!toolUseId) return { ok: false, error: 'Missing tool use id' }
+    try {
+      const result = await window.harnessclaw.respondAskQuestion(
+        toolUseId,
+        status,
+        status === 'success' ? (output || '') : undefined,
+        status === 'cancelled' ? (errorMessage || 'User dismissed the question dialog') : undefined,
+      )
+      return result || { ok: false, error: 'No response from engine' }
+    } catch (error) {
+      return { ok: false, error: String(error) }
+    }
   }, [])
+
+  // v1.15: forward plan.response to the engine. Approve sends the (possibly
+  // edited) steps; reject sends `plan_approved=false`. The local card is
+  // moved into a confirmed/read-only state immediately so the user gets
+  // feedback even before the engine ack (`plan_approved`) arrives.
+  const respondPlan = useCallback(async (
+    sid: string,
+    planId: string,
+    approved: boolean,
+    options?: { steps?: PlanDraftStep[]; reason?: string },
+  ) => {
+    if (!sid || !planId) return
+    if (approved) {
+      updateSession(sid, (prev) => (
+        prev.planDraft && prev.planDraft.planId === planId
+          ? { ...prev, planDraft: { ...prev.planDraft, confirmed: true, steps: options?.steps ?? prev.planDraft.steps } }
+          : prev
+      ))
+    } else {
+      // Rejection drops the card right away; the engine falls back and
+      // emits a regular tool.end summary instead of a plan_approved ack.
+      updateSession(sid, (prev) => (
+        prev.planDraft && prev.planDraft.planId === planId
+          ? { ...prev, planDraft: undefined }
+          : prev
+      ))
+    }
+    await window.harnessclaw.respondPlan(planId, approved, sid, {
+      steps: approved && options?.steps ? options.steps as unknown as Array<Record<string, unknown>> : undefined,
+      reason: options?.reason,
+    })
+  }, [updateSession])
 
   const updateCollaboration = useCallback((sid: string, updater: (prev: CollaborationState) => CollaborationState) => {
     updateSession(sid, (prev) => ({
@@ -2758,10 +2940,12 @@ export function ChatPage() {
     pendingInitialTurn.current = {
       content: initialMessage,
       attachments: initialAttachments,
+      coordinatorMode: initialCoordinatorMode,
+      planConfirmation: initialPlanConfirmation,
     }
     setInput(initialMessage)
     setAttachments(initialAttachments)
-  }, [initialAttachments, initialMessage, location.key])
+  }, [initialAttachments, initialMessage, initialCoordinatorMode, initialPlanConfirmation, location.key])
 
   const handleSwitchSession = useCallback((key: string) => {
     if (!key) return
@@ -2847,7 +3031,7 @@ export function ChatPage() {
     const sid = ensureLocalSession()
     const next = pendingInitialTurn.current
     if (!next) return
-    sendInitialMessage(sid, next.content, next.attachments)
+    sendInitialMessage(sid, next.content, next.attachments, next.coordinatorMode, next.planConfirmation)
   }, [ensureLocalSession, sendInitialMessage])
 
   // Handle Harnessclaw events — route by session_id
@@ -2898,6 +3082,36 @@ export function ChatPage() {
         }],
       }))
       return aid
+    }
+
+    /**
+     * v0.3 (websocket protocol §2.4.2): when the server replays an unanswered
+     * prompt after reconnect with the same `request_id`, we want the card to
+     * merge back onto its original assistant message. Calling
+     * `ensureAssistantMessage` blindly would create a new (empty) Emma block
+     * because `pendingAssistantIds[sid]` was cleared on response_end of the
+     * pre-restart turn. So: if any existing message already carries a tool
+     * with this callId+type, return that message's id and skip creation.
+     */
+    const ensureAssistantMessageForPrompt = (
+      sid: string,
+      now: number,
+      callId: string,
+      activityType: ToolActivity['type'],
+    ): string => {
+      if (callId) {
+        const session = sessionMapRef.current[sid]
+        if (session) {
+          for (const message of session.messages) {
+            const tools = message.tools
+            if (!tools) continue
+            if (tools.some((t) => t.callId === callId && t.type === activityType)) {
+              return message.id
+            }
+          }
+        }
+      }
+      return ensureAssistantMessage(sid, now)
     }
 
     const appendPassiveAssistantActivity = (sid: string, activity: ToolActivity) => {
@@ -3100,7 +3314,6 @@ export function ChatPage() {
           }
         })
 
-        const aid = ensureAssistantMessage(sid, now)
         const callId = typeof payload.tool_use_id === 'string' && payload.tool_use_id
           ? payload.tool_use_id
           : `${agentId}-${typeof event.event_id === 'string' ? event.event_id : now}`
@@ -3130,10 +3343,12 @@ export function ChatPage() {
               subagent: subagentInfo,
             }
 
-        updateSession(sid, (prev) => ({
-          ...prev,
-          messages: prev.messages.map((m) => m.id === aid ? { ...m, tools: [...(m.tools || []), activity] } : m),
-        }))
+        // Use the passive append helper so late sub-agent events arriving
+        // after `response_end` (which clears `pendingAssistantIds`) do NOT
+        // create a fresh empty assistant message and re-flip `isProcessing`
+        // back to true — that was the cause of the renderer getting stuck
+        // in the "thinking" state after the turn had actually finished.
+        appendPassiveAssistantActivity(sid, activity)
         break
       }
 
@@ -3176,7 +3391,6 @@ export function ChatPage() {
           },
         }))
 
-        const aid = ensureAssistantMessage(sid, updatedAt)
         const finalSubagentInfo = createSubagentInfo(
           agentId,
           typeof event.agent_name === 'string' ? event.agent_name : 'subagent',
@@ -3189,14 +3403,11 @@ export function ChatPage() {
           ts: updatedAt,
           subagent: finalSubagentInfo,
         }
-        updateSession(sid, (prev) => ({
-          ...prev,
-          messages: prev.messages.map((message) => (
-            message.id === aid
-              ? { ...message, tools: [...(message.tools || []), statusActivity] }
-              : message
-          )),
-        }))
+        // Use the passive append helper so a `subagent_end` arriving after
+        // `response_end` does not spawn a brand-new empty assistant message
+        // and flip `isProcessing` back on (which left the renderer stuck in
+        // the "thinking" state even after the turn had finished).
+        appendPassiveAssistantActivity(sid, statusActivity)
         break
       }
 
@@ -3632,7 +3843,8 @@ export function ChatPage() {
 
       case 'permission_request': {
         const sid = eventSessionId!
-        const aid = ensureAssistantMessage(sid, Date.now())
+        const requestId = typeof event.request_id === 'string' ? event.request_id : ''
+        const aid = ensureAssistantMessageForPrompt(sid, Date.now(), requestId, 'permission')
         const activity: ToolActivity = {
           type: 'permission',
           name: event.name as string,
@@ -3642,13 +3854,15 @@ export function ChatPage() {
             is_read_only: event.is_read_only === true,
             options: Array.isArray(event.options) ? event.options : [],
           }),
-          callId: event.request_id as string,
+          callId: requestId,
           ts: Date.now(),
           subagent,
         }
+        // v0.3 dedup: replay after reconnect reuses request_id; upsert avoids
+        // rendering two permission cards for the same request.
         updateSession(sid, (prev) => ({
           ...prev,
-          messages: prev.messages.map((m) => m.id === aid ? { ...m, tools: [...(m.tools || []), activity] } : m),
+          messages: upsertSessionToolByCallId(prev.messages, aid, activity),
         }))
         break
       }
@@ -3681,7 +3895,7 @@ export function ChatPage() {
         if (!sid) break
         const callId = typeof event.call_id === 'string' ? event.call_id : ''
         if (!callId) break
-        const aid = ensureAssistantMessage(sid, Date.now())
+        const aid = ensureAssistantMessageForPrompt(sid, Date.now(), callId, 'question')
         const rawOptions = Array.isArray(event.options) ? event.options : []
         const options = rawOptions.flatMap((option) => {
           if (!option || typeof option !== 'object' || Array.isArray(option)) return []
@@ -3704,9 +3918,11 @@ export function ChatPage() {
           ts: Date.now(),
           subagent,
         }
+        // v0.3 dedup: server replay after reconnect reuses request_id; merge
+        // back onto the original card instead of stacking duplicates.
         updateSession(sid, (prev) => ({
           ...prev,
-          messages: prev.messages.map((m) => m.id === aid ? { ...m, tools: [...(m.tools || []), activity] } : m),
+          messages: upsertSessionToolByCallId(prev.messages, aid, activity),
         }))
         break
       }
@@ -3889,6 +4105,12 @@ export function ChatPage() {
           isProcessing: false,
           currentThinking: '',
           currentIntent: undefined,
+          // v1.15: turn finished — drop any lingering plan draft so the
+          // review card never outlives the conversation it belongs to.
+          planDraft: undefined,
+          // v1.16: also reset the plan-proposed gate so the next turn
+          // starts in a clean state.
+          awaitingPlanProposed: false,
           isPaused: false,
           isStopping: false,
           pauseReason: undefined,
@@ -3903,6 +4125,261 @@ export function ChatPage() {
               : m
           ),
         }))
+        break
+      }
+
+      // v1.15: PlanCoordinator pushed a draft DAG and is blocking on user
+      // review. Surface it via SessionState so the composer area can render
+      // an editable PlanDraftCard. Clearing happens on `plan_approved`,
+      // explicit user action, or `response_end` above.
+      case 'plan_proposed': {
+        const sid = eventSessionId!
+        if (!sid) break
+        const planId = typeof event.plan_id === 'string' ? event.plan_id : ''
+        if (!planId) break
+        const rawSteps = Array.isArray(event.steps) ? event.steps : []
+        // v1.16: each step carries `subagent_type` (optional). Older engines
+        // emitted `skill` — accept both so the renderer keeps working across
+        // versions. The id is still required.
+        const steps = rawSteps.flatMap((s) => {
+          if (!s || typeof s !== 'object' || Array.isArray(s)) return []
+          const step = s as Record<string, unknown>
+          const id = typeof step.id === 'string' ? step.id : ''
+          if (!id) return []
+          const subagentTypeRaw = typeof step.subagent_type === 'string'
+            ? step.subagent_type
+            : typeof step.skill === 'string' ? step.skill : ''
+          return [{
+            id,
+            subagent_type: subagentTypeRaw || undefined,
+            description: typeof step.description === 'string' ? step.description : undefined,
+            prompt: typeof step.prompt === 'string' ? step.prompt : undefined,
+            depends_on: Array.isArray(step.depends_on)
+              ? step.depends_on.filter((d): d is string => typeof d === 'string')
+              : undefined,
+          }]
+        })
+        // v1.16: `available_subagents` (was `available_skills`).
+        const availableSubagentsRaw = Array.isArray(event.available_subagents)
+          ? event.available_subagents
+          : Array.isArray(event.available_skills) ? event.available_skills : []
+        const availableSubagents = availableSubagentsRaw.filter((s): s is string => typeof s === 'string')
+        updateSession(sid, (prev) => {
+          // v0.3 dedup: server replay after reconnect reuses the same plan_id.
+          // If we already have a draft for this plan (e.g. user is mid-edit),
+          // keep the local copy intact rather than overwriting it.
+          if (prev.planDraft && prev.planDraft.planId === planId) {
+            return { ...prev, awaitingPlanProposed: false }
+          }
+          return {
+            ...prev,
+            // v1.16: plan.proposed has arrived → release the gate.
+            awaitingPlanProposed: false,
+            planDraft: {
+              planId,
+              agentId: typeof event.agent_id === 'string' ? event.agent_id : undefined,
+              goal: typeof event.goal === 'string' ? event.goal : '',
+              rationale: typeof event.rationale === 'string' ? event.rationale : undefined,
+              steps,
+              availableSubagents,
+              confirmed: false,
+            },
+          }
+        })
+        break
+      }
+
+      // v1.15+ server ack of `plan.response`. The editable review card is
+      // already collapsed (respondPlan flips `confirmed=true` optimistically);
+      // we keep the plan in `planDraft` through execution so the chat area
+      // can render the collapsed top-right "执行计划" button + popover. It's
+      // cleared on `response_end` when the turn finishes.
+      case 'plan_approved': {
+        const sid = eventSessionId!
+        if (!sid) break
+        updateSession(sid, (prev) => (
+          prev.planDraft
+            ? {
+                ...prev,
+                awaitingPlanProposed: false,
+                planDraft: { ...prev.planDraft, confirmed: true, planStatus: prev.planDraft.planStatus ?? 'running' },
+              }
+            : { ...prev, awaitingPlanProposed: false }
+        ))
+        break
+      }
+
+      // v1.16+ §6.13/§6.16: PlanCoordinator emits the full plan/step
+      // lifecycle. We use these to drive PlanStatusButton's live status
+      // popover. `plan_created` also implicitly seeds a planDraft for the
+      // auto-confirmation path (`plan_confirmation=auto`) where no
+      // `plan_proposed` was ever sent.
+      case 'plan_created':
+      case 'plan_updated': {
+        const sid = eventSessionId!
+        if (!sid) break
+        const planId = typeof event.plan_id === 'string' ? event.plan_id : ''
+        if (!planId) break
+        const rawTasks = Array.isArray(event.tasks) ? event.tasks : []
+        const incomingSteps = rawTasks.flatMap((t) => {
+          if (!t || typeof t !== 'object' || Array.isArray(t)) return []
+          const task = t as Record<string, unknown>
+          const id = typeof task.task_id === 'string' ? task.task_id : ''
+          if (!id) return []
+          return [{
+            id,
+            subagent_type: typeof task.subagent_type === 'string' ? task.subagent_type : undefined,
+            description: typeof task.user_facing_title === 'string'
+              ? task.user_facing_title
+              : (typeof task.description === 'string' ? task.description : undefined),
+            depends_on: Array.isArray(task.depends_on)
+              ? task.depends_on.filter((d): d is string => typeof d === 'string')
+              : undefined,
+          }]
+        })
+        const goal = typeof event.goal === 'string' ? event.goal : ''
+        updateSession(sid, (prev) => {
+          // If an existing draft matches this plan_id, merge — preserve any
+          // user-edited descriptions / prompts but pick up the resolved
+          // subagent_type from the dispatched step list.
+          if (prev.planDraft && prev.planDraft.planId === planId) {
+            const byId = new Map(incomingSteps.map((s) => [s.id, s]))
+            const merged = prev.planDraft.steps.map((s) => {
+              const incoming = byId.get(s.id)
+              if (!incoming) return s
+              return {
+                ...s,
+                subagent_type: s.subagent_type || incoming.subagent_type,
+                description: s.description || incoming.description,
+                depends_on: s.depends_on ?? incoming.depends_on,
+              }
+            })
+            // Append any new steps the planner introduced (rare on update).
+            for (const step of incomingSteps) {
+              if (!merged.some((m) => m.id === step.id)) merged.push(step)
+            }
+            return {
+              ...prev,
+              planDraft: {
+                ...prev.planDraft,
+                steps: merged,
+                planStatus: prev.planDraft.planStatus ?? 'created',
+              },
+            }
+          }
+          // v1.16 §6.16: when `plan_confirmation="required"` was sent,
+          // `plan.created` arrives BEFORE `plan.proposed`. Skip synthesis
+          // here so the inline review card from `plan.proposed` isn't
+          // preempted by a `confirmed: true` button. The proposed handler
+          // will set up the draft shortly.
+          if (prev.awaitingPlanProposed) return prev
+          // Auto-confirmation path (no plan.proposed): synthesize a
+          // confirmed planDraft so the top-right status button still shows.
+          return {
+            ...prev,
+            planDraft: {
+              planId,
+              agentId: undefined,
+              goal,
+              rationale: undefined,
+              steps: incomingSteps,
+              availableSubagents: [],
+              confirmed: true,
+              planStatus: 'created',
+            },
+          }
+        })
+        break
+      }
+
+      case 'plan_completed':
+      case 'plan_failed': {
+        const sid = eventSessionId!
+        if (!sid) break
+        const completed = event.type === 'plan_completed'
+        updateSession(sid, (prev) => (
+          prev.planDraft
+            ? { ...prev, planDraft: { ...prev.planDraft, planStatus: completed ? 'completed' : 'failed' } }
+            : prev
+        ))
+        break
+      }
+
+      case 'step_dispatched':
+      case 'step_started':
+      case 'step_completed':
+      case 'step_failed':
+      case 'step_skipped':
+      case 'step_progress': {
+        const sid = eventSessionId!
+        if (!sid) break
+        const stepId = typeof event.step_id === 'string' ? event.step_id : ''
+        if (!stepId) break
+        const subagentType = typeof event.subagent_type === 'string' ? event.subagent_type : undefined
+        let nextStatus: 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'skipped' | undefined
+        let nextSummary: string | undefined
+        switch (event.type) {
+          case 'step_dispatched':
+            nextStatus = 'dispatched'
+            nextSummary = typeof event.input_summary === 'string' ? event.input_summary : undefined
+            break
+          case 'step_started':
+            nextStatus = 'running'
+            break
+          case 'step_completed':
+            nextStatus = 'completed'
+            nextSummary = typeof event.output_summary === 'string' ? event.output_summary : undefined
+            break
+          case 'step_failed': {
+            nextStatus = 'failed'
+            const err = event.error as Record<string, unknown> | undefined
+            nextSummary = typeof err?.user_message === 'string'
+              ? err.user_message
+              : typeof err?.message === 'string' ? err.message : undefined
+            break
+          }
+          case 'step_skipped':
+            nextStatus = 'skipped'
+            nextSummary = typeof event.reason === 'string' ? event.reason : undefined
+            break
+          case 'step_progress':
+            // Treat progress as "still running" without overwriting a
+            // terminal status. Stage hint becomes the summary line.
+            nextStatus = 'running'
+            nextSummary = typeof event.stage === 'string' ? event.stage : undefined
+            break
+        }
+        updateSession(sid, (prev) => {
+          if (!prev.planDraft) return prev
+          let touched = false
+          const steps = prev.planDraft.steps.map((s) => {
+            if (s.id !== stepId) return s
+            // Don't downgrade a terminal status (completed/failed/skipped)
+            // back to running on a late progress event.
+            const isTerminal = s.status === 'completed' || s.status === 'failed' || s.status === 'skipped'
+            const status = isTerminal && event.type === 'step_progress' ? s.status : (nextStatus ?? s.status)
+            const summary = nextSummary ?? s.summary
+            const subagent_type = s.subagent_type || subagentType
+            if (status === s.status && summary === s.summary && subagent_type === s.subagent_type) return s
+            touched = true
+            return { ...s, status, summary, subagent_type }
+          })
+          if (!touched) return prev
+          // If the step wasn't in the existing list, append a synthetic one
+          // so the popover doesn't lose track. Rare, but possible if a
+          // late `step.*` event arrives for an unseen plan.
+          const exists = prev.planDraft.steps.some((s) => s.id === stepId)
+          const finalSteps = exists ? steps : [
+            ...steps,
+            {
+              id: stepId,
+              subagent_type: subagentType,
+              status: nextStatus,
+              summary: nextSummary,
+            },
+          ]
+          return { ...prev, planDraft: { ...prev.planDraft, steps: finalSteps } }
+        })
         break
       }
 
@@ -4377,6 +4854,24 @@ export function ChatPage() {
           <>
             {/* Messages */}
             <div className="relative flex flex-1 min-h-0 flex-col">
+              {/* v1.15+ Once the user approves the plan the inline review
+                  card collapses and we surface a small icon button in the
+                  top-right of the conversation area. Click → popover with
+                  read-only plan steps so the user can keep tabs on the
+                  execution roadmap while sub-agents run. */}
+              {activeSession.planDraft?.confirmed && (
+                <div className="pointer-events-none absolute right-4 top-3 z-20 flex justify-end sm:right-6">
+                  <PlanStatusButton
+                    plan={{
+                      planId: activeSession.planDraft.planId,
+                      goal: activeSession.planDraft.goal,
+                      rationale: activeSession.planDraft.rationale,
+                      steps: activeSession.planDraft.steps,
+                      planStatus: activeSession.planDraft.planStatus,
+                    }}
+                  />
+                </div>
+              )}
               <ConversationTimeline
                 collaboration={displayCollaboration}
                 displayMessages={displayMessages}
@@ -4386,12 +4881,26 @@ export function ChatPage() {
                 currentThinking={activeSession.currentThinking}
                 currentIntent={activeSession.currentIntent}
                 pendingAssistantMessage={pendingAssistantMessage}
+                planDraft={activeSession.planDraft}
                 messagesViewportRef={messagesViewportRef}
                 messagesEndRef={messagesEndRef}
                 onScroll={updateScrollState}
                 onOpenFilePreview={setFilePreview}
+                onOpenArtifact={(artifactId) => {
+                  const artifact = sessionArtifacts.find((a) => a.artifact_id === artifactId)
+                  if (!artifact) return
+                  setFilePreview({
+                    path: artifact.uri || artifact.artifact_id,
+                    fileName: artifact.name || artifact.artifact_id,
+                    operation: 'read_file',
+                    content: artifact.preview_text || '',
+                  })
+                }}
                 onRespondPermission={respondPermission}
                 onRespondAskQuestion={respondAskQuestion}
+                onRespondPlan={(planId, approved, options) => {
+                  void respondPlan(activeSessionId, planId, approved, options)
+                }}
               />
               <ConversationQuickNav
                 displayMessages={displayMessages}
@@ -4790,6 +5299,7 @@ function MessageBubble({
   syncAgents,
   activeIntent,
   onOpenFilePreview,
+  onOpenArtifact,
   onRespondPermission,
   onRespondAskQuestion,
 }: {
@@ -4801,6 +5311,7 @@ function MessageBubble({
    * Only set on the currently streaming assistant message. */
   activeIntent?: SessionState['currentIntent']
   onOpenFilePreview: (preview: FilePreviewData) => void
+  onOpenArtifact?: (artifactId: string) => void
   onRespondPermission: (requestId: string, approved: boolean, scope: 'once' | 'session') => Promise<void>
   onRespondAskQuestion: RespondAskQuestionHandler
 }) {
@@ -5024,11 +5535,63 @@ function MessageBubble({
         )}>
           <ReactMarkdown
             remarkPlugins={[remarkGfm, remarkFilePaths]}
+            // react-markdown v9 sanitizes hrefs by protocol via a default
+            // `urlTransform` (only http/https/mailto/tel/... are kept). That
+            // strips our custom `artifact://` and `filepath://` schemes to ''
+            // so the `<a>` handler below can never see them. Whitelist them
+            // explicitly while still falling back to the safe default for
+            // every other URL.
+            urlTransform={(url) => {
+              if (typeof url === 'string' && (url.startsWith('artifact:') || url.startsWith(FILEPATH_HREF_PREFIX))) {
+                return url
+              }
+              return defaultUrlTransform(url)
+            }}
             components={{
               a: ({ href, children, ...props }) => {
                 if (typeof href === 'string' && href.startsWith(FILEPATH_HREF_PREFIX)) {
                   const path = href.slice(FILEPATH_HREF_PREFIX.length)
                   return <FilePathChip path={path} onOpen={openFilePathPreview} />
+                }
+                // `artifact://art_xxx` links produced by agents must not be
+                // treated as navigations (which would land on the homepage
+                // because the renderer can't resolve the protocol). Intercept
+                // the click and open the artifact in the file preview drawer.
+                if (typeof href === 'string' && href.startsWith('artifact:')) {
+                  const artifactId = href.replace(/^artifact:(\/\/)?/, '')
+                  return (
+                    <a
+                      href={href}
+                      onClick={(event) => {
+                        event.preventDefault()
+                        if (artifactId && onOpenArtifact) onOpenArtifact(artifactId)
+                      }}
+                      {...props}
+                    >
+                      {children}
+                    </a>
+                  )
+                }
+                // External URLs (http/https/mailto) MUST NOT take over the
+                // BrowserWindow. Force `target="_blank"` so the click is
+                // routed through the main process `setWindowOpenHandler`,
+                // which calls `shell.openExternal` to open in the user's
+                // default system browser. `noopener noreferrer` blocks the
+                // opened page from reaching back into our window.
+                const isExternal =
+                  typeof href === 'string' &&
+                  /^(https?:|mailto:)/i.test(href)
+                if (isExternal) {
+                  return (
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      {...props}
+                    >
+                      {children}
+                    </a>
+                  )
                 }
                 return <a href={href} {...props}>{children}</a>
               },
@@ -6036,6 +6599,7 @@ function AskUserQuestionCard({
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [customText, setCustomText] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
 
   const hasCustomText = customText.trim().length > 0
 
@@ -6078,8 +6642,14 @@ function AskUserQuestionCard({
     const output = buildOutput()
     if (!output) return
     setSubmitting(true)
+    setSubmitError(null)
     try {
-      await onRespondAskQuestion(request.callId, 'success', output)
+      const result = await onRespondAskQuestion(request.callId, 'success', output)
+      if (!result.ok) {
+        setSubmitError(result.error
+          ? `答复发送失败：${result.error}。该问题可能已失效（服务端可能已重启），请发起新的会话或刷新后重试。`
+          : '答复发送失败，请稍后重试。')
+      }
     } finally {
       setSubmitting(false)
     }
@@ -6088,8 +6658,14 @@ function AskUserQuestionCard({
   const handleCancel = async () => {
     if (isResolved || submitting || !request.callId) return
     setSubmitting(true)
+    setSubmitError(null)
     try {
-      await onRespondAskQuestion(request.callId, 'cancelled', undefined, 'User dismissed the question dialog')
+      const result = await onRespondAskQuestion(request.callId, 'cancelled', undefined, 'User dismissed the question dialog')
+      if (!result.ok) {
+        setSubmitError(result.error
+          ? `取消失败：${result.error}。该问题可能已失效（服务端可能已重启）。`
+          : '取消失败，请稍后重试。')
+      }
     } finally {
       setSubmitting(false)
     }
@@ -6209,6 +6785,12 @@ function AskUserQuestionCard({
                     {submitting ? '发送中…' : '发送'}
                   </button>
                 </div>
+
+                {submitError && (
+                  <div className="mt-2 rounded-lg border border-red-300 bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300">
+                    {submitError}
+                  </div>
+                )}
               </>
             )}
 
@@ -6235,11 +6817,53 @@ function FilePreviewDrawer({ preview, onClose }: { preview: FilePreviewData | nu
   const titleId = useId()
   const dialogRef = useRef<HTMLElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
+  const [copied, setCopied] = useState(false)
+  const [exportNotice, setExportNotice] = useState<{ ok: boolean; text: string } | null>(null)
 
   useEffect(() => {
     if (!preview) return
     closeButtonRef.current?.focus()
+    // Reset transient feedback when a different file opens.
+    setCopied(false)
+    setExportNotice(null)
   }, [preview])
+
+  // Auto-clear feedback after a short delay so the button reverts to default.
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(timer)
+  }, [copied])
+
+  useEffect(() => {
+    if (!exportNotice) return
+    const timer = setTimeout(() => setExportNotice(null), 2500)
+    return () => clearTimeout(timer)
+  }, [exportNotice])
+
+  const handleCopy = async () => {
+    if (!preview?.content) return
+    try {
+      await navigator.clipboard.writeText(preview.content)
+      setCopied(true)
+    } catch (error) {
+      console.error('Failed to copy file content:', error)
+      setExportNotice({ ok: false, text: '复制失败，请重试。' })
+    }
+  }
+
+  const handleExport = async () => {
+    if (!preview) return
+    const result = await window.files.save({
+      defaultFileName: preview.fileName || 'untitled.txt',
+      content: preview.content || '',
+    })
+    if (result.ok && result.path) {
+      setExportNotice({ ok: true, text: `已导出到：${result.path}` })
+    } else if (!result.cancelled) {
+      setExportNotice({ ok: false, text: result.error ? `导出失败：${result.error}` : '导出失败，请重试。' })
+    }
+  }
 
   useEffect(() => {
     if (!preview) return
@@ -6325,15 +6949,66 @@ function FilePreviewDrawer({ preview, onClose }: { preview: FilePreviewData | nu
                 <p className="mt-1 text-[10px] text-muted-foreground">展示写入文件时提交的内容</p>
               )}
             </div>
-            <button
-              ref={closeButtonRef}
-              onClick={onClose}
-              className="relative z-10 flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl border border-border bg-card transition-colors hover:bg-muted"
-              aria-label="关闭文件预览"
-            >
-              <X size={15} className="text-muted-foreground" />
-            </button>
+            <div className="flex items-center gap-2">
+              <div className="group relative">
+                <button
+                  type="button"
+                  onClick={() => void handleCopy()}
+                  disabled={!preview.content}
+                  className={cn(
+                    'relative z-10 flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl border transition-colors disabled:cursor-not-allowed disabled:opacity-60',
+                    copied
+                      ? 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-300'
+                      : 'border-border bg-card text-foreground hover:bg-muted'
+                  )}
+                  aria-label="复制"
+                >
+                  {copied ? <Check size={15} /> : <Copy size={15} className="text-muted-foreground" />}
+                </button>
+                <span
+                  role="tooltip"
+                  className="pointer-events-none absolute left-1/2 top-full z-20 mt-1.5 -translate-x-1/2 whitespace-nowrap rounded-md bg-foreground px-2 py-1 text-[11px] font-medium text-background opacity-0 shadow-sm transition-opacity duration-150 delay-[100ms] group-hover:opacity-100"
+                >
+                  复制
+                </span>
+              </div>
+              <div className="group relative">
+                <button
+                  type="button"
+                  onClick={() => void handleExport()}
+                  disabled={!preview.content}
+                  className="relative z-10 flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl border border-border bg-card transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
+                  aria-label="导出"
+                >
+                  <Download size={15} className="text-muted-foreground" />
+                </button>
+                <span
+                  role="tooltip"
+                  className="pointer-events-none absolute left-1/2 top-full z-20 mt-1.5 -translate-x-1/2 whitespace-nowrap rounded-md bg-foreground px-2 py-1 text-[11px] font-medium text-background opacity-0 shadow-sm transition-opacity duration-150 delay-[100ms] group-hover:opacity-100"
+                >
+                  导出
+                </span>
+              </div>
+              <button
+                ref={closeButtonRef}
+                onClick={onClose}
+                className="relative z-10 flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl border border-border bg-card transition-colors hover:bg-muted"
+                aria-label="关闭文件预览"
+              >
+                <X size={15} className="text-muted-foreground" />
+              </button>
+            </div>
           </div>
+          {exportNotice && (
+            <div className={cn(
+              'mt-3 rounded-lg border px-3 py-1.5 text-[11px]',
+              exportNotice.ok
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-300'
+                : 'border-red-200 bg-red-50 text-red-600 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300'
+            )}>
+              {exportNotice.text}
+            </div>
+          )}
         </div>
 
         <div className="min-h-0 flex-1 overflow-auto bg-background/65 p-5">
