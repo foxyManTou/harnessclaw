@@ -420,7 +420,10 @@ export function readStructuredLogs(options: GetLogsOptions = {}): GetLogsResult 
   const threshold = normalizeLogThreshold(options.level)
   const query = typeof options.query === 'string' ? options.query.trim().toLowerCase() : ''
   const file = options.file === 'harnessclaw' ? options.file : 'all'
-  const limit = Math.min(Math.max(options.limit ?? 500, 1), 1000)
+  const requestedLimit = options.limit
+  const limit = !requestedLimit || requestedLimit <= 0
+    ? Number.POSITIVE_INFINITY
+    : Math.max(requestedLimit, 1)
 
   const entries = parseLogFile(LATEST_LOG_PATH)
     .sort((left, right) => {

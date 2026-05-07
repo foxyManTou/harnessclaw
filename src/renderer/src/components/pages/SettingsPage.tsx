@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
 import {
   Wifi, Shield, Palette, HardDrive,
@@ -2110,14 +2110,12 @@ function mergeLogEntries(current: LogEntry[], incoming: LogEntry[]): LogEntry[] 
   for (const entry of incoming) {
     merged.set(entry.cursor, entry)
   }
-  return [...merged.values()]
-    .sort((left, right) => {
-      if (left.timestamp !== right.timestamp) {
-        return right.timestamp - left.timestamp
-      }
-      return right.cursor.localeCompare(left.cursor)
-    })
-    .slice(0, 500)
+  return [...merged.values()].sort((left, right) => {
+    if (left.timestamp !== right.timestamp) {
+      return right.timestamp - left.timestamp
+    }
+    return right.cursor.localeCompare(left.cursor)
+  })
 }
 
 function LogsSection() {
@@ -2137,6 +2135,28 @@ function LogsSection() {
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({})
   const [reloadKey, setReloadKey] = useState(0)
+  const logScrollRef = useRef<HTMLDivElement | null>(null)
+
+  const displayedEntries = useMemo(() => {
+    if (viewMode === 'raw') {
+      return [...entries].sort((left, right) => {
+        if (left.timestamp !== right.timestamp) {
+          return left.timestamp - right.timestamp
+        }
+        return left.cursor.localeCompare(right.cursor)
+      })
+    }
+    return entries
+  }, [entries, viewMode])
+
+  useEffect(() => {
+    if (viewMode !== 'raw') return
+    const node = logScrollRef.current
+    if (!node) return
+    requestAnimationFrame(() => {
+      node.scrollTop = node.scrollHeight
+    })
+  }, [viewMode, displayedEntries])
 
   useEffect(() => {
     if (!loading) {
@@ -2151,10 +2171,10 @@ function LogsSection() {
     setLoadingLogs(true)
 
     void window.appRuntime.getLogs({
-      level: selectedLevel,
+      level: viewMode === 'raw' ? 'trace' : selectedLevel,
       file: selectedFile,
       query: query.trim() || undefined,
-      limit: 500,
+      limit: 0,
     }).then((result) => {
       if (cancelled) return
       setEntries(result.items as LogEntry[])
@@ -2172,7 +2192,7 @@ function LogsSection() {
     return () => {
       cancelled = true
     }
-  }, [loading, query, reloadKey, selectedFile, selectedLevel])
+  }, [loading, query, reloadKey, selectedFile, selectedLevel, viewMode])
 
   useEffect(() => {
     if (loading || !followMode || !cursor) return
@@ -2181,10 +2201,10 @@ function LogsSection() {
     const timer = setInterval(() => {
       void window.appRuntime.getLogs({
         after: cursor,
-        level: selectedLevel,
+        level: viewMode === 'raw' ? 'trace' : selectedLevel,
         file: selectedFile,
         query: query.trim() || undefined,
-        limit: 200,
+        limit: 0,
       }).then((result) => {
         if (cancelled) return
         if (result.items.length > 0) {
@@ -2202,7 +2222,7 @@ function LogsSection() {
       cancelled = true
       clearInterval(timer)
     }
-  }, [loading, followMode, cursor, query, selectedFile, selectedLevel])
+  }, [loading, followMode, cursor, query, selectedFile, selectedLevel, viewMode])
 
   const handleLevelChange = (value: string) => {
     const nextLevel = value as LogViewerLevel
@@ -2357,8 +2377,8 @@ function LogsSection() {
           </div>
         )}
 
-        <div className="flex-1 min-h-0 rounded-2xl border border-border bg-card shadow-sm overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+        <div className="flex-1 min-h-0 rounded-2xl border border-border bg-card shadow-sm overflow-hidden flex flex-col">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
             <div>
               <p className="text-sm font-semibold text-foreground">日志列表</p>
             </div>
@@ -2370,7 +2390,7 @@ function LogsSection() {
             )}
           </div>
 
-          <div className="h-full overflow-y-auto">
+          <div ref={logScrollRef} className="flex-1 min-h-0 overflow-y-auto">
             {!loadingLogs && entries.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-center px-6">
                 <FileText size={28} className="text-muted-foreground mb-3" />
@@ -2381,18 +2401,18 @@ function LogsSection() {
                   {query.trim() ? '可以尝试放宽关键词或切换日志等级。' : '新的日志会在这里自动追加显示。'}
                 </p>
               </div>
+            ) : viewMode === 'raw' ? (
+              <div className="overflow-x-auto">
+                <pre className="whitespace-pre text-xs text-foreground font-mono px-4 py-3 min-w-max">
+                  {displayedEntries.map((entry) => entry.raw).join('\n')}
+                </pre>
+              </div>
             ) : (
-              <div className={cn(viewMode === 'raw' && 'overflow-x-auto')}>
-                <div className={cn('divide-y divide-border', viewMode === 'raw' && 'min-w-max')}>
-                {entries.map((entry) => {
+              <div>
+                <div className="divide-y divide-border">
+                {displayedEntries.map((entry) => {
                   const expanded = Boolean(expandedRows[entry.cursor])
-                  return viewMode === 'raw' ? (
-                    <div key={entry.cursor} className="px-4 py-2">
-                      <pre className="whitespace-pre text-xs text-foreground font-mono">
-                        {entry.raw}
-                      </pre>
-                    </div>
-                  ) : (
+                  return (
                     <div key={entry.cursor} className="px-4 py-3">
                       <button onClick={() => toggleExpanded(entry.cursor)} className="w-full text-left">
                         <div className="flex items-start justify-between gap-3">
