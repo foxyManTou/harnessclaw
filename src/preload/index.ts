@@ -65,7 +65,7 @@ const appRuntimeAPI = {
 const harnessclawAPI = {
   connect: () => ipcRenderer.invoke('harnessclaw:connect'),
   disconnect: () => ipcRenderer.invoke('harnessclaw:disconnect'),
-  send: (content: string, sessionId?: string) => ipcRenderer.invoke('harnessclaw:send', content, sessionId),
+  send: (content: string, sessionId?: string, options?: { coordinatorMode?: 'react' | 'plan'; planConfirmation?: 'auto' | 'required' }) => ipcRenderer.invoke('harnessclaw:send', content, sessionId, options),
   command: (cmd: string, sessionId?: string) => ipcRenderer.invoke('harnessclaw:command', cmd, sessionId),
   stop: (sessionId?: string) => ipcRenderer.invoke('harnessclaw:stop', sessionId),
   subscribe: (sessionId: string) => ipcRenderer.invoke('harnessclaw:subscribe', sessionId),
@@ -74,6 +74,7 @@ const harnessclawAPI = {
   probe: () => ipcRenderer.invoke('harnessclaw:probe'),
   respondPermission: (requestId: string, approved: boolean, scope?: 'once' | 'session', message?: string) => ipcRenderer.invoke('harnessclaw:respondPermission', requestId, approved, scope, message),
   respondAskQuestion: (toolUseId: string, status: 'success' | 'cancelled', output?: string, errorMessage?: string) => ipcRenderer.invoke('harnessclaw:respondAskQuestion', toolUseId, status, output, errorMessage),
+  respondPlan: (planId: string, approved: boolean, sessionId?: string, options?: { steps?: Array<Record<string, unknown>>; reason?: string }) => ipcRenderer.invoke('harnessclaw:respondPlan', planId, approved, sessionId, options),
   getStatus: () => ipcRenderer.invoke('harnessclaw:status'),
   onStatus: (callback: (status: string) => void) => {
     const handler = (_: Electron.IpcRendererEvent, status: string): void => callback(status)

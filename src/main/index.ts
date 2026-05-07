@@ -1743,8 +1743,8 @@ app.whenReady().then(() => {
     return { ok: true }
   })
 
-  ipcMain.handle('harnessclaw:send', async (_, content: string, sessionId?: string) => {
-    const ok = await harnessclawClient.send(content, sessionId)
+  ipcMain.handle('harnessclaw:send', async (_, content: string, sessionId?: string, options?: { coordinatorMode?: 'react' | 'plan'; planConfirmation?: 'auto' | 'required' }) => {
+    const ok = await harnessclawClient.send(content, sessionId, options)
     if (!ok) {
       return { ok: false, error: 'Failed to send message to Harnessclaw' }
     }
@@ -1809,8 +1809,30 @@ app.whenReady().then(() => {
 
   ipcMain.handle('harnessclaw:respondAskQuestion', (_, toolUseId: string, status: 'success' | 'cancelled', output?: string, errorMessage?: string) => {
     const normalizedStatus: 'success' | 'cancelled' = status === 'cancelled' ? 'cancelled' : 'success'
+    writeAppLog('info', 'harnessclaw-engine.askQuestion', 'IPC respondAskQuestion received', {
+      toolUseId,
+      status: normalizedStatus,
+      outputLength: output?.length ?? 0,
+      hasErrorMessage: Boolean(errorMessage),
+    })
     const ok = harnessclawClient.respondAskQuestion(toolUseId, normalizedStatus, output, errorMessage)
+    if (!ok) {
+      writeAppLog('warn', 'harnessclaw-engine.askQuestion', 'respondAskQuestion failed (request lost or socket not open)', {
+        toolUseId,
+      })
+    }
     return ok ? { ok: true } : { ok: false, error: 'AskUserQuestion request not found or socket unavailable' }
+  })
+
+  ipcMain.handle('harnessclaw:respondPlan', async (
+    _,
+    planId: string,
+    approved: boolean,
+    sessionId?: string,
+    options?: { steps?: Array<Record<string, unknown>>; reason?: string },
+  ) => {
+    const ok = await harnessclawClient.respondPlan(planId, approved, sessionId, options)
+    return ok ? { ok: true } : { ok: false, error: 'Failed to send plan response' }
   })
 
   ipcMain.handle('harnessclaw:status', () => {

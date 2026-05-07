@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Paperclip, Send } from 'lucide-react'
+import { Paperclip, Send, ListChecks } from 'lucide-react'
 import { useHarnessclawStatus } from '../../hooks/useHarnessclawStatus'
 import { cn } from '../../lib/utils'
 import {
@@ -37,6 +37,9 @@ export function HomePage() {
   const [selectedSkills, setSelectedSkills] = useState<SelectedSkillChip[]>([])
   const [attachments, setAttachments] = useState<AttachmentItem[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
+  // v1.14: opt-in Plan mode pin for the upcoming turn. When false the engine
+  // picks ReAct/Plan automatically via its ModeSelector heuristic.
+  const [planMode, setPlanMode] = useState(false)
   const pasted = usePastedBlocks()
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const navigate = useNavigate()
@@ -85,7 +88,19 @@ export function HomePage() {
     if (!payload && attachments.length === 0 && pasted.blocks.length === 0) return
     const pastedSuffix = pasted.buildPastedSuffix()
     const fullMessage = [payload, pastedSuffix].filter(Boolean).join('\n\n')
-    navigate('/chat', { state: { initialMessage: fullMessage, initialAttachments: attachments } })
+    navigate('/chat', {
+      state: {
+        initialMessage: fullMessage,
+        initialAttachments: attachments,
+        // v1.14: only forward when explicitly enabled, so the engine keeps
+        // its automatic ModeSelector heuristic in the default case.
+        coordinatorMode: planMode ? 'plan' : undefined,
+        // v1.15: opting into Plan mode also implies the user wants to
+        // review the draft step DAG before execution. This couples the two
+        // toggles so the user only has to flip one switch.
+        planConfirmation: planMode ? 'required' : undefined,
+      },
+    })
     setInput('')
     setSelectedSkills([])
     setAttachments([])
@@ -225,6 +240,21 @@ export function HomePage() {
                 >
                   <Paperclip size={12} />
                   <span>添加文件</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPlanMode((v) => !v)}
+                  aria-pressed={planMode}
+                  title={planMode ? '已开启 Plan 模式：本次提问将显式拆步执行' : '点击开启 Plan 模式（多步骤、复杂任务推荐）'}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-full border px-3 py-2 text-xs transition-colors',
+                    planMode
+                      ? 'border-primary bg-primary/10 text-primary hover:bg-primary/15'
+                      : 'border-border text-muted-foreground hover:border-primary hover:text-foreground'
+                  )}
+                >
+                  <ListChecks size={12} />
+                  <span>Plan 模式</span>
                 </button>
                 <span className="text-xs text-muted-foreground">
                   支持拖拽，{shortcutHint}
