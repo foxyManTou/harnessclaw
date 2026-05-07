@@ -277,6 +277,8 @@ interface FilesAPI {
   pick: () => Promise<PickedLocalFile[]>
   resolve: (paths: string[]) => Promise<PickedLocalFile[]>
   read: (path: string) => Promise<{ ok: boolean; content?: string; path?: string; size?: number; error?: string }>
+  save: (options: { defaultFileName?: string; content?: string }) =>
+    Promise<{ ok: boolean; path?: string; cancelled?: boolean; error?: string }>
 }
 
 interface ConsoleAgentDefinition {
