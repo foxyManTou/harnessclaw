@@ -755,6 +755,37 @@ function createWindow(): BrowserWindow {
     return { action: 'deny' }
   })
 
+  // Plain `<a href="https://...">` clicks (without target=_blank) trigger
+  // `will-navigate` instead of going through `setWindowOpenHandler`. Without
+  // this guard, the BrowserWindow would replace the renderer app with the
+  // external URL — for example, clicking an artifact preview link in chat
+  // would navigate the whole app away from the React shell.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    let parsed: URL | null = null
+    try {
+      parsed = new URL(url)
+    } catch {
+      return
+    }
+    // Allow the renderer's own host (dev server) and local file:// pages.
+    const currentURL = mainWindow.webContents.getURL()
+    let currentHost = ''
+    try {
+      currentHost = new URL(currentURL).host
+    } catch {
+      currentHost = ''
+    }
+    const isInternal =
+      parsed.protocol === 'file:' ||
+      (currentHost && parsed.host === currentHost)
+    if (isInternal) return
+
+    event.preventDefault()
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'mailto:') {
+      void shell.openExternal(parsed.toString())
+    }
+  })
+
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
