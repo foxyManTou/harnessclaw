@@ -146,6 +146,8 @@ const filesAPI = {
   pick: () => ipcRenderer.invoke('files:pick'),
   resolve: (paths: string[]) => ipcRenderer.invoke('files:resolve', paths),
   read: (path: string) => ipcRenderer.invoke('files:read', path),
+  save: (options: { defaultFileName?: string; content?: string }) =>
+    ipcRenderer.invoke('files:save', options),
 }
 
 const agentAPI = {

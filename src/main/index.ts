@@ -1200,6 +1200,38 @@ app.whenReady().then(() => {
     return buildPickedLocalFiles(Array.isArray(filePaths) ? filePaths : [])
   })
 
+  ipcMain.handle('files:save', async (event, options: { defaultFileName?: string; content?: string } | undefined) => {
+    try {
+      writeAppLog('info', 'files:save', 'IPC files:save received', {
+        hasDefaultFileName: Boolean(options?.defaultFileName),
+        contentLength: options?.content?.length ?? 0,
+      })
+      const fileName = typeof options?.defaultFileName === 'string' && options.defaultFileName.trim()
+        ? options.defaultFileName.trim()
+        : 'untitled.txt'
+      const content = typeof options?.content === 'string' ? options.content : ''
+      // Anchor the dialog to the parent BrowserWindow so it shows as a sheet
+      // on macOS instead of a free-floating window the user can miss.
+      const parentWindow = BrowserWindow.fromWebContents(event.sender)
+        || BrowserWindow.getFocusedWindow()
+        || BrowserWindow.getAllWindows()[0]
+      const dialogOptions = { defaultPath: fileName }
+      const result = parentWindow
+        ? await dialog.showSaveDialog(parentWindow, dialogOptions)
+        : await dialog.showSaveDialog(dialogOptions)
+      if (result.canceled || !result.filePath) {
+        writeAppLog('info', 'files:save', 'Save dialog cancelled')
+        return { ok: false, cancelled: true as const }
+      }
+      writeFileSync(result.filePath, content, 'utf-8')
+      writeAppLog('info', 'files:save', 'File saved', { path: result.filePath })
+      return { ok: true as const, path: result.filePath }
+    } catch (error) {
+      writeAppLog('error', 'files:save', 'files:save failed', { error: String(error) })
+      return { ok: false as const, error: String((error as Error)?.message || error) }
+    }
+  })
+
   ipcMain.handle('files:read', (_, rawPath: unknown) => {
     try {
       if (typeof rawPath !== 'string' || !rawPath.trim()) {
