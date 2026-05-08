@@ -24,6 +24,7 @@ import { cn } from '../../lib/utils'
 import { useHarnessclawStatus } from '../../hooks/useHarnessclawStatus'
 import sidebarLogo from '../../assets/sidebar-logo.png'
 import { AvatarLightbox } from '../common/AvatarLightbox'
+import { ConfirmDeleteSessionDialog } from '../common/ConfirmDeleteSessionDialog'
 
 interface NavItem {
   icon: React.ElementType
@@ -101,6 +102,7 @@ export function Sidebar() {
   const [recentScrollFade, setRecentScrollFade] = useState({ top: false, bottom: false })
   const [projects, setProjects] = useState<DbProjectRow[]>([])
   const [assignDialog, setAssignDialog] = useState<AssignProjectDialogState | null>(null)
+  const [confirmDeleteSession, setConfirmDeleteSession] = useState<{ sessionId: string; title: string } | null>(null)
   const floatingMenuRef = useRef<HTMLDivElement | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const recentScrollRef = useRef<HTMLDivElement | null>(null)
@@ -787,7 +789,13 @@ export function Sidebar() {
             </button>
           )}
           <button
-            onClick={() => void handleDeleteRecentSession(activeMenuItem.id)}
+            onClick={() => {
+              setConfirmDeleteSession({
+                sessionId: activeMenuItem.id,
+                title: activeMenuItem.title.trim() || activeMenuItem.label,
+              })
+              setMenuState(null)
+            }}
             className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-600 transition-colors hover:bg-red-50 dark:hover:bg-red-950/20"
           >
             <Trash2 size={14} />
@@ -1026,6 +1034,18 @@ export function Sidebar() {
         </div>,
         document.body
       )}
+
+      <ConfirmDeleteSessionDialog
+        open={confirmDeleteSession !== null}
+        title={confirmDeleteSession?.title || ''}
+        onCancel={() => setConfirmDeleteSession(null)}
+        onConfirm={() => {
+          if (!confirmDeleteSession) return
+          const sessionId = confirmDeleteSession.sessionId
+          setConfirmDeleteSession(null)
+          void handleDeleteRecentSession(sessionId)
+        }}
+      />
     </>
   )
 }
