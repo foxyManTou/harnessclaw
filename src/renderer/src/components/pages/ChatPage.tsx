@@ -3154,6 +3154,35 @@ export function ChatPage() {
     return null
   }, [activeSession.isPaused, activeSession.isStopping, harnessclawStatus])
 
+  // While a `prompt.user` (AskUserQuestion / permission / plan_review) is open
+  // and unanswered, the engine's turn is technically still streaming
+  // (`isProcessing=true`), but nothing is actually executing — it is parked
+  // waiting for the user. Showing the bottom-right red "stop" pill in that
+  // state reads as "Agent 正在跑"，which is ambiguous: the user thinks code
+  // is running and might mash 停止 instead of answering the prompt above.
+  // Detect any unresolved prompt.user and suppress the running indicator
+  // for its duration so the composer reflects "等你回复" instead of "运行中".
+  //
+  // SCOPE: only inspect the *currently streaming* assistant message and the
+  // unconfirmed planDraft for the active turn. Walking the full message
+  // history would let stale orphans from earlier turns (an interrupted run,
+  // a closed session that never received `*_result`, etc.) permanently
+  // suppress the indicator even after a brand-new turn starts streaming.
+  const isAwaitingPromptResponse = useMemo(() => {
+    if (activeSession.planDraft && !activeSession.planDraft.confirmed) return true
+    const active = pendingAssistantMessage
+    if (!active || !active.isStreaming) return false
+    const tools = active.tools
+    if (!tools || tools.length === 0) return false
+    for (const t of tools) {
+      if (t.type !== 'question' && t.type !== 'permission') continue
+      const resultType = t.type === 'question' ? 'question_result' : 'permission_result'
+      const answered = tools.some((r) => r.type === resultType && r.callId === t.callId)
+      if (!answered) return true
+    }
+    return false
+  }, [activeSession.planDraft, pendingAssistantMessage])
+
   const updateScrollState = useCallback(() => {
     const viewport = messagesViewportRef.current
     if (!viewport) return
@@ -4475,31 +4504,47 @@ export function ChatPage() {
         }
 
         pendingAssistantIds.current[sid] = null
-        updateSession(sid, (prev) => ({
-          ...prev,
-          isProcessing: false,
-          currentThinking: '',
-          currentIntent: undefined,
+        updateSession(sid, (prev) => {
           // v1.15: turn finished — drop any lingering plan draft so the
           // review card never outlives the conversation it belongs to.
-          planDraft: undefined,
-          // v1.16: also reset the plan-proposed gate so the next turn
-          // starts in a clean state.
-          awaitingPlanProposed: false,
-          isPaused: false,
-          isStopping: false,
-          pauseReason: undefined,
-          messages: prev.messages.map((m) =>
-            m.id === aid
-              ? {
-                  ...m,
-                  isStreaming: false,
-                  toolsUsed: event.tools_used as string[] | undefined,
-                  usage: event.usage as Message['usage'],
-                }
-              : m
-          ),
-        }))
+          //
+          // BUT: a confirmed plan can outlive the LLM response that
+          // proposed it — sub-agents keep streaming `step_*` / `card.*`
+          // events until `plan_completed` / `plan_failed`. If we wipe
+          // planDraft here while planStatus is still `created` / `running`
+          // / undefined-but-running, the top-right `PlanStatusButton`
+          // disappears and every subsequent `step_*` is silently dropped
+          // by its `!prev.planDraft` guard, so the button can never come
+          // back. Only clear the draft when (a) the user never confirmed
+          // it (an abandoned proposal) or (b) the plan reached a terminal
+          // state (`completed` / `failed`).
+          const draft = prev.planDraft
+          const planTerminal = draft?.planStatus === 'completed' || draft?.planStatus === 'failed'
+          const keepDraft = !!draft && draft.confirmed && !planTerminal
+          return {
+            ...prev,
+            isProcessing: false,
+            currentThinking: '',
+            currentIntent: undefined,
+            planDraft: keepDraft ? draft : undefined,
+            // v1.16: also reset the plan-proposed gate so the next turn
+            // starts in a clean state.
+            awaitingPlanProposed: false,
+            isPaused: false,
+            isStopping: false,
+            pauseReason: undefined,
+            messages: prev.messages.map((m) =>
+              m.id === aid
+                ? {
+                    ...m,
+                    isStreaming: false,
+                    toolsUsed: event.tools_used as string[] | undefined,
+                    usage: event.usage as Message['usage'],
+                  }
+                : m
+            ),
+          }
+        })
         break
       }
 
@@ -4725,9 +4770,31 @@ export function ChatPage() {
             break
         }
         updateSession(sid, (prev) => {
-          if (!prev.planDraft) return prev
-          let touched = false
-          const steps = prev.planDraft.steps.map((s) => {
+          // Recovery: if the renderer lost its `planDraft` (app restart
+          // mid-execution, premature `response_end`, or an interrupted
+          // session that never received `plan_proposed/created`),
+          // step.* events would otherwise be silently dropped and the
+          // top-right `PlanStatusButton` would never re-appear despite
+          // the engine still emitting steps. Synthesize a minimal
+          // confirmed planDraft from this event so the button can
+          // resurrect itself and accumulate the remaining steps.
+          let draft = prev.planDraft
+          if (!draft) {
+            const planIdFromEvent = typeof event.plan_id === 'string' ? event.plan_id : ''
+            if (!planIdFromEvent) return prev
+            draft = {
+              planId: planIdFromEvent,
+              agentId: undefined,
+              goal: '',
+              rationale: undefined,
+              steps: [],
+              availableSubagents: [],
+              confirmed: true,
+              planStatus: 'running',
+            }
+          }
+          let touched = !prev.planDraft
+          const steps = draft.steps.map((s) => {
             if (s.id !== stepId) return s
             // Don't downgrade a terminal status (completed/failed/skipped)
             // back to running on a late progress event.
@@ -4743,7 +4810,7 @@ export function ChatPage() {
           // If the step wasn't in the existing list, append a synthetic one
           // so the popover doesn't lose track. Rare, but possible if a
           // late `step.*` event arrives for an unseen plan.
-          const exists = prev.planDraft.steps.some((s) => s.id === stepId)
+          const exists = draft.steps.some((s) => s.id === stepId)
           const finalSteps = exists ? steps : [
             ...steps,
             {
@@ -4753,7 +4820,7 @@ export function ChatPage() {
               summary: nextSummary,
             },
           ]
-          return { ...prev, planDraft: { ...prev.planDraft, steps: finalSteps } }
+          return { ...prev, planDraft: { ...draft, steps: finalSteps } }
         })
         break
       }
@@ -5408,7 +5475,7 @@ export function ChatPage() {
                       </button>
 
                       <div className="flex items-center gap-2">
-                        {activeSession.isProcessing ? (
+                        {activeSession.isProcessing && !isAwaitingPromptResponse ? (
                           <button
                             onClick={handleStop}
                             disabled={activeSession.isStopping}
@@ -5440,7 +5507,22 @@ export function ChatPage() {
         )}
       </div>
 
-      <FilePreviewDrawer preview={filePreview} onClose={() => setFilePreview(null)} />
+      <FilePreviewDrawer
+        preview={filePreview}
+        onClose={() => setFilePreview(null)}
+        artifacts={sessionArtifacts}
+        onSelectArtifact={(artifact) => {
+          // Mirror the builder used by the top-bar artifact dropdown so the
+          // drawer stays consistent whether the user enters via the dropdown
+          // or via this in-drawer file list.
+          setFilePreview({
+            path: artifact.uri || artifact.artifact_id,
+            fileName: artifact.name || artifact.artifact_id,
+            operation: 'read_file',
+            content: artifact.preview_text || '',
+          })
+        }}
+      />
       <WebPreviewDrawer preview={webPreview} onClose={() => setWebPreview(null)} />
     </div>
     </WebPreviewContext.Provider>
@@ -7238,12 +7320,48 @@ function AskUserQuestionCard({
   )
 }
 
-function FilePreviewDrawer({ preview, onClose }: { preview: FilePreviewData | null; onClose: () => void }) {
+function FilePreviewDrawer({
+  preview,
+  onClose,
+  artifacts,
+  onSelectArtifact,
+}: {
+  preview: FilePreviewData | null
+  onClose: () => void
+  /**
+   * Optional list of session-level artifacts. When supplied AND the user is
+   * currently previewing one of them AND there is more than one artifact,
+   * a left-side file list is rendered so they can quickly hop between
+   * outputs without closing the drawer.
+   */
+  artifacts?: ArtifactRef[]
+  onSelectArtifact?: (artifact: ArtifactRef) => void
+}) {
   const titleId = useId()
   const dialogRef = useRef<HTMLElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const [copied, setCopied] = useState(false)
   const [exportNotice, setExportNotice] = useState<{ ok: boolean; text: string } | null>(null)
+  // Collapsed by default so the file list never compresses the preview area;
+  // user explicitly opens it via the handle on the drawer's left edge.
+  const [artifactListOpen, setArtifactListOpen] = useState(false)
+
+  // Match the active preview to one of the artifacts so the sidebar only
+  // becomes available while the user is actually browsing artifact outputs
+  // (the same drawer is reused for read_file/write_file tool previews where
+  // mixing in an unrelated artifact list would be confusing).
+  const activeArtifactKey = preview?.path || ''
+  const matchedArtifactIndex = useMemo(() => {
+    if (!artifacts || artifacts.length === 0 || !activeArtifactKey) return -1
+    return artifacts.findIndex((a) => a.uri === activeArtifactKey || a.artifact_id === activeArtifactKey)
+  }, [artifacts, activeArtifactKey])
+  const canShowArtifactList = !!artifacts && artifacts.length > 1 && matchedArtifactIndex >= 0 && !!onSelectArtifact
+
+  // Auto-collapse the panel when navigating to a non-artifact preview so it
+  // can't linger open over an unrelated read_file/write_file file.
+  useEffect(() => {
+    if (!canShowArtifactList) setArtifactListOpen(false)
+  }, [canShowArtifactList])
 
   useEffect(() => {
     if (!preview) return
@@ -7338,6 +7456,124 @@ function FilePreviewDrawer({ preview, onClose }: { preview: FilePreviewData | nu
         onClick={onClose}
         aria-hidden="true"
       />
+
+      {/* Collapsible artifact list. Pops out to the LEFT of the drawer
+          (positioned absolutely, anchored against the drawer's right edge)
+          so it never steals horizontal space from the preview itself. The
+          handle on the drawer's left edge toggles it open/closed. */}
+      {canShowArtifactList && artifacts && (
+        <>
+          <button
+            type="button"
+            onClick={() => setArtifactListOpen((v) => !v)}
+            aria-expanded={artifactListOpen}
+            aria-controls={`${titleId}-artifact-list`}
+            title={artifactListOpen ? '收起文件列表' : '展开文件列表'}
+            className={cn(
+              'absolute top-4 z-[210] inline-flex h-9 items-center gap-1 rounded-l-lg border border-r-0 border-border bg-card px-2 text-[11px] font-medium text-foreground shadow-md transition-[right] duration-200 ease-out hover:bg-muted',
+              // Open → handle sits on the panel's left edge.
+              // Closed → handle sits on the drawer's left edge.
+              artifactListOpen
+                ? 'right-[calc(min(48rem,100vw)+15rem)]'
+                : 'right-[min(48rem,100vw)]',
+            )}
+          >
+            <FolderOpen size={13} className="text-primary" />
+            <span className="hidden sm:inline">文件</span>
+            <span className="rounded-full bg-muted px-1.5 py-px text-[10px] font-semibold text-muted-foreground">
+              {artifacts.length}
+            </span>
+            {artifactListOpen ? (
+              <ChevronRight size={13} className="text-muted-foreground" />
+            ) : (
+              <ChevronLeft size={13} className="text-muted-foreground" />
+            )}
+          </button>
+
+          <nav
+            id={`${titleId}-artifact-list`}
+            aria-label="本对话产出文件"
+            aria-hidden={!artifactListOpen}
+            className={cn(
+              // No explicit z-index → relies on document order: this <nav>
+              // appears BEFORE <aside> in JSX, so the drawer naturally
+              // paints over any portion of the panel that overlaps it.
+              // Without that we'd either block the preview (panel on top)
+              // or have to slide out the wrong direction.
+              'absolute inset-y-0 flex w-60 flex-col border-l border-r border-border bg-card shadow-xl transition-transform duration-200 ease-out',
+              // 48rem === max-w-3xl === drawer width. Anchor the panel's
+              // RIGHT edge to the drawer's left edge.
+              'right-[min(48rem,100vw)]',
+              // Open → at natural position, fully visible to the LEFT of
+              // the drawer. Closed → translate RIGHT by its own width so
+              // it sits inside the drawer area, hidden behind the aside.
+              // The transition then reads as "drawer 边 → 左侧弹出".
+              artifactListOpen
+                ? 'translate-x-0'
+                : 'pointer-events-none translate-x-full',
+            )}
+          >
+            <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
+              <span className="text-[11px] font-semibold tracking-wide text-foreground">产出文件</span>
+              <span className="rounded-full bg-muted px-1.5 py-px text-[10px] font-semibold text-muted-foreground">
+                {artifacts.length}
+              </span>
+            </div>
+            <ul className="flex-1 overflow-y-auto py-1.5">
+              {artifacts.map((artifact, idx) => {
+                const isActive = idx === matchedArtifactIndex
+                const title = artifact.name || artifact.artifact_id
+                const subtitle = artifact.description || artifact.mime_type || artifact.type || ''
+                const sizeLabel = formatArtifactSize(artifact.size_bytes)
+                return (
+                  <li key={artifact.artifact_id}>
+                    <button
+                      type="button"
+                      onClick={() => onSelectArtifact?.(artifact)}
+                      className={cn(
+                        'group flex w-full items-start gap-2 px-3 py-2 text-left transition-colors',
+                        isActive
+                          ? 'bg-primary/10 text-foreground'
+                          : 'text-foreground/80 hover:bg-muted/60',
+                      )}
+                      aria-current={isActive ? 'true' : undefined}
+                    >
+                      <FileText
+                        size={13}
+                        className={cn(
+                          'mt-0.5 flex-shrink-0',
+                          isActive ? 'text-primary' : 'text-muted-foreground',
+                        )}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div
+                          className={cn(
+                            'truncate text-[12px] font-medium leading-5',
+                            isActive ? 'text-primary' : 'text-foreground',
+                          )}
+                          title={title}
+                        >
+                          {title}
+                        </div>
+                        {(subtitle || sizeLabel) && (
+                          <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                            {subtitle && <span className="truncate" title={subtitle}>{subtitle}</span>}
+                            {sizeLabel && (
+                              <span className="rounded bg-muted px-1 py-px font-mono text-[9.5px]">
+                                {sizeLabel}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          </nav>
+        </>
+      )}
 
       <aside
         ref={dialogRef}
