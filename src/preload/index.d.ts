@@ -86,6 +86,7 @@ interface AppRuntimeAPI {
     sessionId?: string
   }) => Promise<{ ok: boolean }>
   exportData: (type: 'logs' | 'chat' | 'config') => Promise<{ ok: boolean; path?: string; error?: string }>
+  openExternal: (url: string) => Promise<{ ok: boolean; error?: string }>
   onStatus: (callback: (status: AppRuntimeStatus) => void) => () => void
 }
 

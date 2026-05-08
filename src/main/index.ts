@@ -718,6 +718,10 @@ function createWindow(): BrowserWindow {
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
+      // Enable the <webview> tag so the chat search-result drawer can preview
+      // external URLs in-app without leaving the React shell. Each <webview>
+      // runs in an isolated guest renderer.
+      webviewTag: true,
     }
   })
 
@@ -924,6 +928,31 @@ app.whenReady().then(() => {
       return { ok: true, path }
     } catch (error) {
       return { ok: false, error: String(error) }
+    }
+  })
+
+  // Allowlisted external URL launcher. The renderer asks the main process to
+  // open a URL in the user's default browser (used by the chat web-preview
+  // drawer's "Open in browser" button). Only http(s) and mailto are honored
+  // so a malicious or buggy caller can't pivot into shell:// / file:// etc.
+  ipcMain.handle('app-runtime:openExternal', async (_, rawUrl: unknown) => {
+    if (typeof rawUrl !== 'string' || !rawUrl.trim()) {
+      return { ok: false as const, error: 'invalid url' }
+    }
+    let parsed: URL
+    try {
+      parsed = new URL(rawUrl)
+    } catch {
+      return { ok: false as const, error: 'invalid url' }
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:' && parsed.protocol !== 'mailto:') {
+      return { ok: false as const, error: 'protocol not allowed' }
+    }
+    try {
+      await shell.openExternal(parsed.toString())
+      return { ok: true as const }
+    } catch (error) {
+      return { ok: false as const, error: String((error as Error)?.message || error) }
     }
   })
 
