@@ -55,6 +55,7 @@ const appRuntimeAPI = {
     sessionId?: string
   }) => ipcRenderer.invoke('app-runtime:trackUsage', entry),
   exportData: (type: 'logs' | 'chat' | 'config') => ipcRenderer.invoke('app-runtime:exportData', type),
+  openExternal: (url: string) => ipcRenderer.invoke('app-runtime:openExternal', url),
   onStatus: (callback: (status: Record<string, unknown>) => void) => {
     const handler = (_: Electron.IpcRendererEvent, status: Record<string, unknown>): void => callback(status)
     ipcRenderer.on('app-runtime:status', handler)

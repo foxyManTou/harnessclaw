@@ -1,10 +1,11 @@
-import { memo, useState, useRef, useEffect, useCallback, useMemo, useId, useSyncExternalStore, type ReactNode, type RefObject, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { memo, useState, useRef, useEffect, useCallback, useMemo, useId, useSyncExternalStore, useContext, createContext, type ReactNode, type RefObject, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
   Send, Plus, Copy, Check, Trash2,
   Loader2, Wrench, Brain, AlertCircle, RefreshCw, ChevronDown, ChevronUp,
   FileText, X, ArrowDown, AtSign, GitBranch, ListTodo, Users, MessagesSquare, ChevronLeft, ChevronRight, Search, HelpCircle, FolderOpen, Download,
+  Globe, ExternalLink,
 } from 'lucide-react'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -244,6 +245,34 @@ interface SystemNoticeData {
   reason?: string
   sessionId?: string
   hint?: string
+}
+
+/**
+ * Search-result URL extracted from a tool result's metadata.urls (WebSearch /
+ * TavilySearch). Rendered as a clickable chip in the tool card; clicking
+ * opens the WebPreviewDrawer.
+ */
+interface SearchResultUrl {
+  url: string
+  title?: string
+}
+
+interface WebPreviewData {
+  url: string
+  title?: string
+  query?: string
+}
+
+/**
+ * Lightweight context so any tool card (or any future surface) can request
+ * an in-app web preview without prop-drilling through MessageBubble /
+ * ToolActivityList. The provider lives at the ChatPage root so the drawer
+ * outlives session switching and bubble re-renders.
+ */
+const WebPreviewContext = createContext<((data: WebPreviewData) => void) | null>(null)
+
+function useOpenWebPreview(): ((data: WebPreviewData) => void) | null {
+  return useContext(WebPreviewContext)
 }
 
 type AttachmentItem = LocalAttachmentItem
@@ -1381,6 +1410,46 @@ function getToolMetadata(source: Record<string, unknown>): Record<string, unknow
 }
 
 /**
+ * Pull a clickable URL list out of a tool-result's metadata. WebSearch and
+ * TavilySearch populate `metadata.urls` as `[{url, title}, ...]` per the
+ * current engine protocol (card.close inner.metadata.urls).
+ */
+function extractSearchResultUrls(metadata?: Record<string, unknown>): SearchResultUrl[] {
+  if (!metadata) return []
+  const raw = metadata.urls
+  if (!Array.isArray(raw)) return []
+  const out: SearchResultUrl[] = []
+  for (const entry of raw) {
+    if (!isRecord(entry)) continue
+    const url = typeof entry.url === 'string' ? entry.url.trim() : ''
+    if (!/^https?:\/\//i.test(url)) continue
+    const title = typeof entry.title === 'string' && entry.title.trim() ? entry.title.trim() : undefined
+    out.push({ url, title })
+  }
+  return out
+}
+
+function extractSearchQuery(metadata?: Record<string, unknown>): string | undefined {
+  if (!metadata) return undefined
+  return typeof metadata.query === 'string' && metadata.query.trim() ? metadata.query.trim() : undefined
+}
+
+function extractSearchResultCount(metadata?: Record<string, unknown>): number | undefined {
+  if (!metadata) return undefined
+  return typeof metadata.result_count === 'number' && Number.isFinite(metadata.result_count)
+    ? metadata.result_count
+    : undefined
+}
+
+function safeUrlHostname(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '')
+  } catch {
+    return url
+  }
+}
+
+/**
  * v0.3 (websocket protocol §2.4.2): when the server replays an unanswered
  * prompt after reconnect, it uses the same `request_id`. Search the whole
  * session's tool history for an existing card with the same callId+type and
@@ -2444,6 +2513,11 @@ export function ChatPage() {
   const [activeSessionId, setActiveSessionId] = useState('')
   const [sessionProjectContexts, setSessionProjectContexts] = useState<Record<string, ProjectContext>>({})
   const [filePreview, setFilePreview] = useState<FilePreviewData | null>(null)
+  const [webPreview, setWebPreview] = useState<WebPreviewData | null>(null)
+  const openWebPreview = useCallback((data: WebPreviewData) => {
+    if (!data?.url || !/^https?:\/\//i.test(data.url)) return
+    setWebPreview(data)
+  }, [])
   const [input, setInput] = useState(initialMessage)
   const [selectedSkills, setSelectedSkills] = useState<SelectedSkillChip[]>([])
   const [attachments, setAttachments] = useState<AttachmentItem[]>(initialAttachments)
@@ -4759,6 +4833,7 @@ export function ChatPage() {
   }, [])
 
   return (
+    <WebPreviewContext.Provider value={openWebPreview}>
     <div className="relative flex h-full overflow-hidden bg-background">
       {/* Main chat area */}
       <div className="relative flex-1 flex min-w-0 flex-col overflow-hidden">
@@ -5070,7 +5145,9 @@ export function ChatPage() {
       </div>
 
       <FilePreviewDrawer preview={filePreview} onClose={() => setFilePreview(null)} />
+      <WebPreviewDrawer preview={webPreview} onClose={() => setWebPreview(null)} />
     </div>
+    </WebPreviewContext.Provider>
   )
 }
 
@@ -6303,7 +6380,14 @@ function ToolCallCard({
   const toolName = getToolDisplayName(call.name)
   const durationLabel = formatDurationMs(result?.durationMs)
   const renderHintLabel = result?.renderHint ? getToolRenderHintLabel(result.renderHint) : ''
-  const metadataText = result?.metadata ? JSON.stringify(result.metadata, null, 2) : ''
+  const isSearchResult = result?.renderHint === 'search'
+  const searchUrls = isSearchResult ? extractSearchResultUrls(result?.metadata) : []
+  const searchQuery = isSearchResult ? extractSearchQuery(result?.metadata) : undefined
+  const searchResultCount = isSearchResult ? extractSearchResultCount(result?.metadata) : undefined
+  const openWebPreview = useOpenWebPreview()
+  // Search render hints render through the dedicated URL list; for every
+  // other render hint we surface the raw metadata blob as a JSON pre.
+  const metadataText = !isSearchResult && result?.metadata ? JSON.stringify(result.metadata, null, 2) : ''
 
   return (
     <div className="mb-1.5">
@@ -6409,6 +6493,51 @@ function ToolCallCard({
             <div>
               <p className="mb-1 text-[10px] text-muted-foreground">关联文件</p>
               <pre className="rounded-lg bg-muted p-2 text-[11px] font-mono text-foreground/80">{result.filePath}</pre>
+            </div>
+          )}
+          {isSearchResult && searchUrls.length > 0 && (
+            <div>
+              <div className="mb-1 flex items-center gap-2">
+                <p className="text-[10px] text-muted-foreground">搜索结果</p>
+                {searchQuery && (
+                  <span className="inline-flex max-w-[220px] items-center gap-1 truncate rounded-full border border-border bg-background px-1.5 text-[10px] leading-4 text-muted-foreground" title={searchQuery}>
+                    <Search size={10} className="flex-shrink-0" />
+                    <span className="truncate">{searchQuery}</span>
+                  </span>
+                )}
+                <span className="text-[10px] text-muted-foreground">
+                  共 {searchResultCount ?? searchUrls.length} 条
+                </span>
+              </div>
+              <ul className="space-y-1">
+                {searchUrls.map((entry, idx) => {
+                  const host = safeUrlHostname(entry.url)
+                  const label = entry.title || host
+                  return (
+                    <li key={`${entry.url}-${idx}`}>
+                      <button
+                        type="button"
+                        onClick={() => openWebPreview?.({ url: entry.url, title: entry.title, query: searchQuery })}
+                        className="group flex w-full items-start gap-2 rounded-lg border border-border bg-background px-2 py-1.5 text-left transition-colors hover:border-primary/60 hover:bg-primary/5"
+                        title={entry.url}
+                      >
+                        <span className="mt-0.5 inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary">
+                          <Globe size={11} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[12px] font-medium text-foreground group-hover:text-primary">
+                            {label}
+                          </span>
+                          <span className="block truncate text-[10px] text-muted-foreground">
+                            {host}
+                          </span>
+                        </span>
+                        <ExternalLink size={11} className="mt-1 flex-shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
             </div>
           )}
           {metadataText && (
@@ -7051,6 +7180,235 @@ function FilePreviewDrawer({ preview, onClose }: { preview: FilePreviewData | nu
                 ))}
               </pre>
             </div>
+          )}
+        </div>
+      </aside>
+    </div>,
+    document.body
+  )
+}
+
+// ─── Web Preview Drawer ─────────────────────────────────────────────────────
+//
+// In-app preview of a search-result URL using Electron's <webview> tag (each
+// guest renderer is isolated, so untrusted external content cannot reach the
+// app's IPC bridge). Mirrors FilePreviewDrawer's right-side aside layout so
+// the chat UX feels consistent.
+
+function WebPreviewDrawer({ preview, onClose }: { preview: WebPreviewData | null; onClose: () => void }) {
+  const titleId = useId()
+  const dialogRef = useRef<HTMLElement>(null)
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
+  const webviewRef = useRef<HTMLWebViewElement>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [didFail, setDidFail] = useState<{ code: number; message: string } | null>(null)
+  const [currentUrl, setCurrentUrl] = useState<string>('')
+
+  useEffect(() => {
+    if (!preview) return
+    closeButtonRef.current?.focus()
+    setIsLoading(true)
+    setDidFail(null)
+    setCurrentUrl(preview.url)
+  }, [preview])
+
+  // Wire up <webview> lifecycle events. Webview is a custom element so we
+  // attach listeners imperatively after the node mounts.
+  useEffect(() => {
+    if (!preview) return
+    const node = webviewRef.current as unknown as (HTMLElement & {
+      reload?: () => void
+      goBack?: () => void
+      canGoBack?: () => boolean
+      getURL?: () => string
+    }) | null
+    if (!node) return
+
+    const onStartLoading = () => {
+      setIsLoading(true)
+      setDidFail(null)
+    }
+    const onStopLoading = () => setIsLoading(false)
+    const onDidFinishLoad = () => {
+      setIsLoading(false)
+      try {
+        const url = node.getURL?.()
+        if (url) setCurrentUrl(url)
+      } catch {
+        // ignore — webview may not be ready yet
+      }
+    }
+    const onDidFailLoad = (event: Event) => {
+      const e = event as Event & { errorCode?: number; errorDescription?: string; isMainFrame?: boolean }
+      // Sub-frame failures are noisy and not actionable — only show the
+      // fallback for main-frame failures.
+      if (e.isMainFrame === false) return
+      setIsLoading(false)
+      setDidFail({ code: e.errorCode ?? -1, message: e.errorDescription || '加载失败' })
+    }
+    const onNavigate = (event: Event) => {
+      const e = event as Event & { url?: string }
+      if (e.url) setCurrentUrl(e.url)
+    }
+
+    node.addEventListener('did-start-loading', onStartLoading)
+    node.addEventListener('did-stop-loading', onStopLoading)
+    node.addEventListener('did-finish-load', onDidFinishLoad)
+    node.addEventListener('did-fail-load', onDidFailLoad)
+    node.addEventListener('did-navigate', onNavigate)
+    node.addEventListener('did-navigate-in-page', onNavigate)
+
+    return () => {
+      node.removeEventListener('did-start-loading', onStartLoading)
+      node.removeEventListener('did-stop-loading', onStopLoading)
+      node.removeEventListener('did-finish-load', onDidFinishLoad)
+      node.removeEventListener('did-fail-load', onDidFailLoad)
+      node.removeEventListener('did-navigate', onNavigate)
+      node.removeEventListener('did-navigate-in-page', onNavigate)
+    }
+  }, [preview])
+
+  useEffect(() => {
+    if (!preview) return
+    const dialog = dialogRef.current
+    if (!dialog) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+      }
+    }
+    dialog.addEventListener('keydown', handleKeyDown)
+    return () => dialog.removeEventListener('keydown', handleKeyDown)
+  }, [preview, onClose])
+
+  const handleReload = () => {
+    const node = webviewRef.current as unknown as (HTMLElement & { reload?: () => void }) | null
+    node?.reload?.()
+  }
+
+  const handleOpenExternal = () => {
+    if (!preview) return
+    const fn = window.appRuntime?.openExternal
+    if (typeof fn === 'function') {
+      void Promise.resolve(fn(preview.url)).catch(() => undefined)
+    }
+  }
+
+  if (!preview) return null
+
+  const host = safeUrlHostname(preview.url)
+  const headerLabel = preview.title || host
+
+  return createPortal(
+    <div className="fixed inset-0 z-[200] flex" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+      <div
+        className="absolute inset-0 bg-slate-950/25 backdrop-blur-[2px]"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+
+      <aside
+        ref={dialogRef}
+        className="relative ml-auto flex h-full w-full max-w-3xl flex-col border-l border-border bg-card shadow-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+      >
+        <div className="border-b border-border bg-card/95 px-5 py-4 backdrop-blur-sm">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-2xl bg-accent shadow-sm">
+              <Globe size={18} className="text-primary" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <h3 id={titleId} className="truncate text-sm font-semibold text-foreground" title={preview.title}>
+                  {headerLabel}
+                </h3>
+                {preview.query && (
+                  <span className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] text-muted-foreground" title={preview.query}>
+                    搜索：{preview.query}
+                  </span>
+                )}
+              </div>
+              <p className="mt-1 break-all text-[11px] text-muted-foreground">{currentUrl || preview.url}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleReload}
+                className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl border border-border bg-card transition-colors hover:bg-muted"
+                aria-label="刷新"
+                title="刷新"
+              >
+                <RefreshCw size={14} className="text-muted-foreground" />
+              </button>
+              <button
+                type="button"
+                onClick={handleOpenExternal}
+                className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl border border-border bg-card transition-colors hover:bg-muted"
+                aria-label="在浏览器中打开"
+                title="在浏览器中打开"
+              >
+                <ExternalLink size={14} className="text-muted-foreground" />
+              </button>
+              <button
+                ref={closeButtonRef}
+                onClick={onClose}
+                className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl border border-border bg-card transition-colors hover:bg-muted"
+                aria-label="关闭网页预览"
+              >
+                <X size={14} className="text-muted-foreground" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="relative min-h-0 flex-1 bg-background">
+          {isLoading && !didFail && (
+            <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center gap-2 bg-card/85 px-4 py-1.5 text-[11px] text-muted-foreground backdrop-blur-sm">
+              <Loader2 size={11} className="animate-spin" />
+              <span>正在加载…</span>
+            </div>
+          )}
+
+          {didFail ? (
+            <div className="flex h-full items-center justify-center p-8 text-center">
+              <div>
+                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-red-50 text-red-500 dark:bg-red-950/30 dark:text-red-300">
+                  <AlertCircle size={20} />
+                </div>
+                <p className="text-sm font-medium text-foreground">无法加载该页面</p>
+                <p className="mt-1 break-all text-xs text-muted-foreground">{didFail.message}（{didFail.code}）</p>
+                <div className="mt-4 flex items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleReload}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-muted"
+                  >
+                    <RefreshCw size={12} />
+                    重试
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleOpenExternal}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-muted"
+                  >
+                    <ExternalLink size={12} />
+                    在浏览器中打开
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <webview
+              ref={webviewRef}
+              src={preview.url}
+              allowpopups={true}
+              partition="persist:web-preview"
+              style={{ width: '100%', height: '100%', display: 'inline-flex', border: 0 }}
+            />
           )}
         </div>
       </aside>
