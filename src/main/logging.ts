@@ -121,6 +121,31 @@ function dayKeyFor(timestamp: number): string {
   return `${year}-${month}-${day}`
 }
 
+/**
+ * Format a timestamp as a local-time ISO-8601 string with timezone offset
+ * (e.g. `2026-05-08T11:00:00.000+08:00`) so log lines reflect the user's
+ * system clock instead of UTC. Stays parseable by `Date.parse` so the
+ * structured-log reader keeps working.
+ */
+function formatLocalIsoTime(date: Date = new Date()): string {
+  const pad = (n: number, len = 2) => String(n).padStart(len, '0')
+  const year = date.getFullYear()
+  const month = pad(date.getMonth() + 1)
+  const day = pad(date.getDate())
+  const hours = pad(date.getHours())
+  const minutes = pad(date.getMinutes())
+  const seconds = pad(date.getSeconds())
+  const ms = pad(date.getMilliseconds(), 3)
+
+  const offsetMinutes = -date.getTimezoneOffset()
+  const sign = offsetMinutes >= 0 ? '+' : '-'
+  const absOffset = Math.abs(offsetMinutes)
+  const offsetHours = pad(Math.floor(absOffset / 60))
+  const offsetMins = pad(absOffset % 60)
+
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${ms}${sign}${offsetHours}:${offsetMins}`
+}
+
 export function getDailyLogPath(date: Date = new Date()): string {
   return join(LOG_DIR, `harnessclaw-${dayKeyFor(date.getTime())}.log`)
 }
@@ -263,7 +288,7 @@ export function initializeLogging(): void {
 export function writeLog(level: LogLevel, source: string, message: string, meta?: unknown): void {
   const safeSource = source.trim() || 'app'
   const metaText = serializeMeta(meta)
-  appendLine(`[${new Date().toISOString()}] [${level.toUpperCase()}] [${safeSource}] ${message}${metaText ? ` ${metaText}` : ''}`)
+  appendLine(`[${formatLocalIsoTime()}] [${level.toUpperCase()}] [${safeSource}] ${message}${metaText ? ` ${metaText}` : ''}`)
 }
 
 export function writeAppLog(level: LogLevel, source: string, message: string, meta?: unknown): void {
