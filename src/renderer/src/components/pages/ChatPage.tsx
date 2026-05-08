@@ -5,7 +5,7 @@ import {
   Send, Plus, Copy, Check, Trash2,
   Loader2, Wrench, Brain, AlertCircle, RefreshCw, ChevronDown, ChevronUp,
   FileText, X, ArrowDown, AtSign, GitBranch, ListTodo, Users, MessagesSquare, ChevronLeft, ChevronRight, Search, HelpCircle, FolderOpen, Download,
-  Globe, ExternalLink,
+  Globe, ExternalLink, Pencil, FolderPlus, FolderMinus,
 } from 'lucide-react'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -24,6 +24,7 @@ import { PastedBlocksBar, usePastedBlocks } from '../common/PastedBlocksBar'
 import { PlanDraftCard, type PlanDraftStep } from '../common/PlanDraftCard'
 import { PlanStatusButton } from '../common/PlanStatusButton'
 import { AvatarLightbox } from '../common/AvatarLightbox'
+import { ConfirmDeleteSessionDialog } from '../common/ConfirmDeleteSessionDialog'
 import emmaAvatar from '../../assets/sidebar-logo.png'
 import analystAvatar from '../../assets/team/analyst.png'
 import developerAvatar from '../../assets/team/developer.png'
@@ -2488,6 +2489,306 @@ function SessionArtifactsButton({
   )
 }
 
+/**
+ * Top-bar session title with an inline dropdown menu mirroring the sidebar's
+ * per-session "more" menu: 重命名 / 加入项目（或 退出项目）/ 删除. Rename
+ * happens inline (the title swaps to an input). 加入项目 opens a project
+ * picker dialog; 退出项目 detaches immediately. 删除 delegates to the
+ * provided onDelete handler.
+ */
+function SessionTitleMenu({
+  sessionId,
+  title,
+  currentProjectId,
+  onDelete,
+}: {
+  sessionId: string
+  title: string
+  currentProjectId: string | null
+  onDelete: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [isRenaming, setIsRenaming] = useState(false)
+  const [renameValue, setRenameValue] = useState('')
+  const [assignOpen, setAssignOpen] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const renameInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!containerRef.current) return
+      if (!containerRef.current.contains(event.target as Node)) setOpen(false)
+    }
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleKey)
+    }
+  }, [open])
+
+  // When the active session changes, drop any in-progress rename/assign UI so
+  // we don't leak state between sessions.
+  useEffect(() => {
+    setIsRenaming(false)
+    setAssignOpen(false)
+    setConfirmDelete(false)
+    setOpen(false)
+  }, [sessionId])
+
+  useEffect(() => {
+    if (isRenaming) {
+      renameInputRef.current?.focus()
+      renameInputRef.current?.select()
+    }
+  }, [isRenaming])
+
+  const startRename = () => {
+    setRenameValue(title.trim())
+    setIsRenaming(true)
+    setOpen(false)
+  }
+
+  const submitRename = async () => {
+    const next = renameValue.trim()
+    if (!next || next === title.trim()) {
+      setIsRenaming(false)
+      return
+    }
+    const result = await window.db.updateSessionTitle(sessionId, next)
+    if (result?.ok) {
+      setIsRenaming(false)
+    } else {
+      // Keep the input open so the user can retry.
+      renameInputRef.current?.focus()
+    }
+  }
+
+  const handleDetachProject = async () => {
+    setOpen(false)
+    await window.db.updateSessionProject(sessionId, null)
+  }
+
+  if (isRenaming) {
+    return (
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <input
+          ref={renameInputRef}
+          value={renameValue}
+          onChange={(event) => setRenameValue(event.target.value)}
+          onBlur={() => void submitRename()}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              void submitRename()
+            } else if (event.key === 'Escape') {
+              event.preventDefault()
+              setIsRenaming(false)
+            }
+          }}
+          className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-0.5 text-lg font-semibold tracking-tight text-foreground outline-none focus:border-primary"
+          aria-label="重命名对话"
+        />
+        <AssignProjectDialog
+          open={assignOpen}
+          sessionId={sessionId}
+          currentProjectId={currentProjectId}
+          onClose={() => setAssignOpen(false)}
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div ref={containerRef} className="relative min-w-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        title={title}
+        className="inline-flex min-w-0 max-w-full items-center gap-3 rounded-md px-1 py-0.5 text-left text-foreground transition-colors hover:bg-muted/60"
+      >
+        <h1 className="truncate text-lg font-semibold tracking-tight">{title}</h1>
+        <ChevronDown
+          size={14}
+          className={cn(
+            'flex-shrink-0 text-muted-foreground transition-transform',
+            open && 'rotate-180'
+          )}
+        />
+      </button>
+
+      {open && (
+        <div
+          role="menu"
+          className="absolute left-0 top-[calc(100%+6px)] z-50 w-48 overflow-hidden rounded-xl border border-border bg-card py-1 shadow-lg"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={startRename}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
+          >
+            <Pencil size={14} />
+            <span>重命名</span>
+          </button>
+          {currentProjectId ? (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => void handleDetachProject()}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
+            >
+              <FolderMinus size={14} />
+              <span>退出项目</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false)
+                setAssignOpen(true)
+              }}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
+            >
+              <FolderPlus size={14} />
+              <span>加入项目</span>
+            </button>
+          )}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false)
+              setConfirmDelete(true)
+            }}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-600 transition-colors hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30"
+          >
+            <Trash2 size={14} />
+            <span>删除</span>
+          </button>
+        </div>
+      )}
+
+      <AssignProjectDialog
+        open={assignOpen}
+        sessionId={sessionId}
+        currentProjectId={currentProjectId}
+        onClose={() => setAssignOpen(false)}
+      />
+      <ConfirmDeleteSessionDialog
+        open={confirmDelete}
+        title={title}
+        onCancel={() => setConfirmDelete(false)}
+        onConfirm={() => {
+          setConfirmDelete(false)
+          onDelete()
+        }}
+      />
+    </div>
+  )
+}
+
+/**
+ * Modal project picker shared with the sidebar's "加入项目" action. Lists all
+ * projects the user has created; clicking one assigns the session to it (or
+ * detaches if the session is already in that project).
+ */
+function AssignProjectDialog({
+  open,
+  sessionId,
+  currentProjectId,
+  onClose,
+}: {
+  open: boolean
+  sessionId: string
+  currentProjectId: string | null
+  onClose: () => void
+}) {
+  const [projects, setProjects] = useState<DbProjectRow[]>([])
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setLoading(true)
+    void window.db.listProjects().then((rows) => {
+      if (cancelled) return
+      setProjects(rows || [])
+      setLoading(false)
+    }).catch(() => {
+      if (!cancelled) setLoading(false)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [open])
+
+  if (!open) return null
+
+  const handleAssign = async (projectId: string, isCurrent: boolean) => {
+    await window.db.updateSessionProject(sessionId, isCurrent ? null : projectId)
+    onClose()
+  }
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/45 px-4 backdrop-blur-[6px]"
+      onPointerDown={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+    >
+      <div className="w-full max-w-sm rounded-2xl border border-border/80 bg-card p-5 shadow-[0_24px_80px_rgba(15,23,42,0.28)]">
+        <h3 className="mb-1 text-base font-semibold text-foreground">加入项目</h3>
+        <p className="mb-3 text-xs text-muted-foreground">选择要将此对话归入的项目</p>
+
+          {loading ? (
+            <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
+              <Loader2 size={14} className="mr-2 animate-spin" />
+              加载中…
+            </div>
+          ) : projects.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">暂无可用项目</p>
+          ) : (
+            <div className="max-h-60 overflow-y-auto rounded-xl border border-border">
+              {projects.map((project) => {
+                const isCurrentProject = currentProjectId === project.project_id
+                return (
+                  <button
+                    key={project.project_id}
+                    onClick={() => void handleAssign(project.project_id, isCurrentProject)}
+                    className={cn(
+                      'flex w-full items-start gap-3 border-b border-border px-3.5 py-3 text-left transition-colors last:border-b-0 hover:bg-muted/60',
+                      isCurrentProject && 'bg-accent'
+                    )}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-foreground">{project.name}</p>
+                      {project.description && (
+                        <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{project.description}</p>
+                      )}
+                    </div>
+                    {isCurrentProject && (
+                      <span className="mt-0.5 shrink-0 text-xs text-primary">当前</span>
+                    )}
+                  </button>
+                )
+              })}
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body
+  )
+}
+
 // ─── Chat Page ──────────────────────────────────────────────────────────────
 
 export function ChatPage() {
@@ -4843,13 +5144,15 @@ export function ChatPage() {
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-foreground">
                 <MessagesSquare size={16} className="flex-shrink-0 text-muted-foreground" />
-                <h1 className="truncate text-lg font-semibold tracking-tight">
-                  {activeSessionId ? activeSessionPrompt : '新对话'}
-                </h1>
-                {activeSessionId && activeSession.messages.length > 0 && (
-                  <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                    {activeSession.messages.filter((m) => m.role !== 'system').length}
-                  </span>
+                {activeSessionId ? (
+                  <SessionTitleMenu
+                    sessionId={activeSessionId}
+                    title={activeSessionPrompt || '新对话'}
+                    currentProjectId={activeProjectContext?.projectId || null}
+                    onDelete={handleClearHistory}
+                  />
+                ) : (
+                  <h1 className="truncate text-lg font-semibold tracking-tight">新对话</h1>
                 )}
               </div>
               {activeProjectContext ? (
@@ -4868,13 +5171,6 @@ export function ChatPage() {
                   artifacts={sessionArtifacts}
                   onOpenFilePreview={setFilePreview}
                 />
-                <button
-                  onClick={handleClearHistory}
-                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-border px-3.5 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
-                  <Trash2 size={14} />
-                  <span>清空历史</span>
-                </button>
               </div>
             )}
           </div>
