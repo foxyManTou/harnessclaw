@@ -220,6 +220,19 @@ export class HarnessclawClient extends EventEmitter {
   private transportWaiters: Array<{ resolve: () => void; reject: (error: Error) => void }> = []
   private sessionInitWaiters: Array<{ resolve: (sessionId: string) => void; reject: (error: Error) => void }> = []
   private pendingPongWaiters: Array<(ok: boolean) => void> = []
+  // v0.3 §2.4.2 deferred prompt responses. When the user clicks "answer" on
+  // a card that was restored from local UI state (typical after app restart
+  // or WS bounce) before the server has finished replaying the matching
+  // `prompt.user` frame, the corresponding request_id is not yet in any
+  // forest and `this.ws` may not be open. Instead of dropping the reply with
+  // "pending askRequest not found", we queue a thunk here and flush it as
+  // soon as `handlePromptUser` registers that request_id (or — for plan
+  // reviews — the matching plan_id). A 30s safety timer surfaces a hard
+  // failure to the renderer if the replay never arrives so the UI doesn't
+  // hang silently.
+  private deferredAskResponses = new Map<string, { fire: () => boolean; timer: ReturnType<typeof setTimeout>; sessionId?: string }>()
+  private deferredPlanResponses = new Map<string, { fire: () => Promise<boolean>; timer: ReturnType<typeof setTimeout>; sessionId: string }>()
+  private static readonly DEFERRED_RESPONSE_TIMEOUT_MS = 30_000
 
   connect(): void {
     const wasReconnecting = this.shouldReconnect
@@ -337,12 +350,25 @@ export class HarnessclawClient extends EventEmitter {
             })
           }
         }
+        this.forests.clear()
       } else {
-        writeAppLog('info', 'harnessclaw-engine.askQuestion', 'WebSocket closed; pending prompts will be replayed by server (recovery=true)', {
+        writeAppLog('info', 'harnessclaw-engine.session', 'WebSocket closed; preserving prompt request_id maps for v0.3 replay', {
           pendingForests: this.forests.size,
         })
+        // Preserve `permissionRequests / askRequests / planReviewRequests /
+        // planIdToRequestId` so user replies that arrive during the
+        // reconnect window can still find their target. Reset transient
+        // card-forest state — server replay will rebuild it via the same
+        // request_id mappings (Map.set is idempotent on duplicate keys).
+        for (const forest of this.forests.values()) {
+          forest.cards.clear()
+          forest.subagentIds.clear()
+          forest.agentNames.clear()
+          forest.agentParents.clear()
+          forest.lastSeq = 0
+          forest.activeTraceId = undefined
+        }
       }
-      this.forests.clear()
       this.clientId = ''
       this.defaultSessionId = ''
       this.subscriptions = []
@@ -522,6 +548,95 @@ export class HarnessclawClient extends EventEmitter {
       this.forests.set(sessionId, forest)
     }
     return forest
+  }
+
+  // ─── v0.3 deferred response queue ────────────────────────────────────
+  // See §2.4.2: when the server replays an unanswered prompt after
+  // reconnect, the user may have already clicked the answer in a card
+  // restored from local UI state. The reply IPC arrives before the replay
+  // populates `forest.askRequests` / `forest.planIdToRequestId`, so the old
+  // implementation dropped it with "pending askRequest not found". We now
+  // queue the reply here and flush it the moment `handlePromptUser`
+  // registers the matching request_id (or plan_id).
+
+  private queueDeferredAskResponse(requestId: string, sessionId: string | undefined, fire: () => boolean): void {
+    const existing = this.deferredAskResponses.get(requestId)
+    if (existing) clearTimeout(existing.timer)
+    const timer = setTimeout(() => {
+      if (this.deferredAskResponses.delete(requestId)) {
+        writeAppLog('warn', 'harnessclaw-engine.askQuestion', 'Deferred respondAskQuestion timed out before v0.3 replay arrived', {
+          requestId,
+          sessionId: sessionId || null,
+          timeoutMs: HarnessclawClient.DEFERRED_RESPONSE_TIMEOUT_MS,
+        })
+        this.emitCompatEvent({
+          type: 'ask_user_question_result',
+          session_id: sessionId || this.defaultSessionId,
+          call_id: requestId,
+          status: 'cancelled',
+          output: '',
+          error: { code: 'recovery_timeout', message: '回答提交超时，对话可能已结束，请发起新的问题。' },
+        })
+      }
+    }, HarnessclawClient.DEFERRED_RESPONSE_TIMEOUT_MS)
+    this.deferredAskResponses.set(requestId, { fire, timer, sessionId })
+  }
+
+  private flushDeferredAskResponse(requestId: string): void {
+    const entry = this.deferredAskResponses.get(requestId)
+    if (!entry) return
+    clearTimeout(entry.timer)
+    this.deferredAskResponses.delete(requestId)
+    writeAppLog('info', 'harnessclaw-engine.askQuestion', 'Flushing deferred respondAskQuestion after prompt replay', {
+      requestId,
+      sessionId: entry.sessionId || null,
+    })
+    // Defer to next tick so handlePromptUser finishes registering state
+    // (emitCompatEvent etc.) before we send the reply.
+    setImmediate(() => entry.fire())
+  }
+
+  private queueDeferredPlanResponse(planId: string, sessionId: string, fire: () => Promise<boolean>): void {
+    const existing = this.deferredPlanResponses.get(planId)
+    if (existing) clearTimeout(existing.timer)
+    const timer = setTimeout(() => {
+      if (this.deferredPlanResponses.delete(planId)) {
+        writeAppLog('warn', 'harnessclaw-engine.plan', 'Deferred respondPlan timed out before v0.3 replay arrived', {
+          planId,
+          sessionId,
+          timeoutMs: HarnessclawClient.DEFERRED_RESPONSE_TIMEOUT_MS,
+        })
+        this.emitCompatEvent({
+          type: 'error',
+          session_id: sessionId,
+          content: `Plan response submit timeout for plan_id=${planId}`,
+        })
+      }
+    }, HarnessclawClient.DEFERRED_RESPONSE_TIMEOUT_MS)
+    this.deferredPlanResponses.set(planId, { fire, timer, sessionId })
+  }
+
+  private flushDeferredPlanResponse(planId: string): void {
+    const entry = this.deferredPlanResponses.get(planId)
+    if (!entry) return
+    clearTimeout(entry.timer)
+    this.deferredPlanResponses.delete(planId)
+    writeAppLog('info', 'harnessclaw-engine.plan', 'Flushing deferred respondPlan after plan_review replay', {
+      planId,
+      sessionId: entry.sessionId,
+    })
+    setImmediate(() => {
+      entry.fire().catch((error) => {
+        writeAppLog('error', 'harnessclaw-engine.plan', 'Deferred respondPlan invocation rejected', {
+          planId,
+          error: String(error),
+        })
+      })
+    })
+  }
+
+  private isWebSocketOpen(): boolean {
+    return Boolean(this.ws && this.ws.readyState === WebSocket.OPEN)
   }
 
   private isSubagentContext(forest: SessionForest, agentId?: string): boolean {
@@ -791,6 +906,11 @@ export class HarnessclawClient extends EventEmitter {
           multi,
         })
 
+        // v0.3 §2.4.2 — if the user already clicked answer before the
+        // replay arrived (typical after app restart), flush the queued
+        // reply now that the request_id is registered.
+        this.flushDeferredAskResponse(requestId)
+
         this.emitCompatEvent({
           type: 'ask_user_question',
           session_id: sessionId,
@@ -832,6 +952,10 @@ export class HarnessclawClient extends EventEmitter {
 
         forest.planReviewRequests.set(requestId, { sessionId, planId })
         if (planId) forest.planIdToRequestId.set(planId, requestId)
+
+        // v0.3 §2.4.2 — flush any queued plan response that arrived before
+        // this replay re-registered the plan_id ↔ request_id mapping.
+        if (planId) this.flushDeferredPlanResponse(planId)
 
         this.emitCompatEvent({
           type: 'plan_proposed',
@@ -1585,13 +1709,28 @@ export class HarnessclawClient extends EventEmitter {
     if (!resolvedSessionId || !planId) return false
     try {
       await this.ensureSession(resolvedSessionId)
-      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-        throw new Error('Harnessclaw websocket is not open')
-      }
       const forest = this.getForest(resolvedSessionId)
       const requestId = forest.planIdToRequestId.get(planId)
-      if (!requestId) {
-        throw new Error(`No pending plan_review request for plan_id=${planId}`)
+
+      // v0.3 §2.4.2 recovery — same race as respondAskQuestion. After app
+      // restart the user can click "开始执行 / 拒绝" before the server has
+      // replayed prompt.user(plan_review). Defer instead of throwing so
+      // handlePromptUser can flush it once the plan_id ↔ request_id
+      // mapping is rebuilt.
+      const ws = this.ws
+      if (!ws || ws.readyState !== WebSocket.OPEN || !requestId) {
+        writeAppLog('info', 'harnessclaw-engine.plan', 'Deferring respondPlan until v0.3 replay arrives', {
+          planId,
+          sessionId: resolvedSessionId,
+          wsOpen: this.isWebSocketOpen(),
+          requestIdFound: Boolean(requestId),
+        })
+        this.queueDeferredPlanResponse(
+          planId,
+          resolvedSessionId,
+          () => this.respondPlan(planId, approved, sessionId, options),
+        )
+        return true
       }
 
       const responsePayload: Record<string, unknown> = {
@@ -1618,7 +1757,7 @@ export class HarnessclawClient extends EventEmitter {
         kind: 'plan_review',
         planId,
       })
-      this.ws.send(JSON.stringify(frame))
+      ws.send(JSON.stringify(frame))
 
       forest.planIdToRequestId.delete(planId)
       forest.planReviewRequests.delete(requestId)
@@ -1860,17 +1999,9 @@ export class HarnessclawClient extends EventEmitter {
     output?: string,
     errorMessage?: string,
   ): boolean {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      writeAppLog('warn', 'harnessclaw-engine.askQuestion', 'respondAskQuestion aborted: websocket not open', {
-        toolUseId,
-        wsExists: Boolean(this.ws),
-        readyState: this.ws?.readyState,
-      })
-      return false
-    }
-
     // The renderer treats request_id as call_id for ask-question rounds.
     const requestId = toolUseId
+
     let pending: PendingAskQuestionRequest | undefined
     let owningSessionId = ''
     for (const [sid, forest] of this.forests.entries()) {
@@ -1881,17 +2012,30 @@ export class HarnessclawClient extends EventEmitter {
         break
       }
     }
-    if (!pending || !owningSessionId) {
+
+    // v0.3 §2.4.2 recovery — when WS is mid-reconnect or the server hasn't
+    // replayed prompt.user(question) yet, the request_id may not be in any
+    // forest. Instead of dropping the user's reply, queue it and let
+    // handlePromptUser flush it once the replay registers the same id.
+    const ws = this.ws
+    if (!ws || ws.readyState !== WebSocket.OPEN || !pending || !owningSessionId) {
       const knownRequestIds: string[] = []
       for (const [, forest] of this.forests.entries()) {
         for (const id of forest.askRequests.keys()) knownRequestIds.push(id)
       }
-      writeAppLog('warn', 'harnessclaw-engine.askQuestion', 'respondAskQuestion aborted: pending askRequest not found', {
+      writeAppLog('info', 'harnessclaw-engine.askQuestion', 'Deferring respondAskQuestion until v0.3 replay arrives', {
         toolUseId,
+        wsOpen: this.isWebSocketOpen(),
+        pendingFound: Boolean(pending),
         forestCount: this.forests.size,
         knownRequestIds,
       })
-      return false
+      this.queueDeferredAskResponse(
+        requestId,
+        pending?.sessionId,
+        () => this.respondAskQuestion(toolUseId, status, output, errorMessage),
+      )
+      return true
     }
 
     let responsePayload: Record<string, unknown>
@@ -1936,7 +2080,7 @@ export class HarnessclawClient extends EventEmitter {
       type: 'prompt.user_response',
       kind: 'question',
     })
-    this.ws.send(JSON.stringify(frame))
+    ws.send(JSON.stringify(frame))
     this.forests.get(owningSessionId)?.askRequests.delete(requestId)
 
     this.emitCompatEvent({
