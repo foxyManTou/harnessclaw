@@ -5,6 +5,7 @@ import {
   House,
   Zap,
   Puzzle,
+  FlaskConical,
   Search,
   FolderKanban,
   FolderMinus,
@@ -65,6 +66,9 @@ const navGroups: NavGroup[] = [
   {
     items: [
       { icon: House, path: '/', label: '首页' },
+      // The search button is rendered immediately after `/` (see
+      // `renderSearchButton` below), so X·LAB lands between 搜索 and 技能.
+      { icon: FlaskConical, path: '/x-lab', label: 'X·LAB' },
       { icon: Puzzle, path: '/skills', label: '技能' },
     ],
   },
