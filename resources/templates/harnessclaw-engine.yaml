@@ -18,15 +18,22 @@ log:
 llm:
   default_provider: "anthropic"              # Switch to "openai" to use OpenAI
   max_retries: 3
-  api_timeout: "120s"
+  api_timeout: "900s"
+  # First-byte watchdog: max wait between Chat() returning and the first
+  # stream chunk. Disarms once any chunk arrives, so legitimate slow
+  # streams aren't penalised — only catches "gateway accepted the
+  # request but never sent a byte" (the 10-min orphan-timeout
+  # pathology). Tune up to 180s+ if upstream models commonly take
+  # 60-90s to start streaming.
+  first_byte_timeout: "120s"
   # proxy_url: "http://proxy:8888"
   # custom_headers:
   #   X-Custom: "value"
   providers:
     anthropic:
-      base_url: ""
-      api_key: ""
-      model: ""
+      base_url: "your-api-url"
+      api_key: "your-api-key-here"
+      model: "your-model-id"
       max_tokens: 16384
 #    openai:
 #      base_url: "https://api.openai.com"
@@ -44,7 +51,6 @@ engine:
 session:
   max_messages: 200
   idle_timeout: "30m"
-  storage: "memory"      # memory, sqlite
 
 # --- Channels ---
 channels:
@@ -57,7 +63,26 @@ channels:
     ping_interval: "30s"
     write_timeout: "10s"
     max_message_size: 524288   # 512KB
-    client_tools: true
+    # client_tools sets the DEFAULT routing for tools that don't opt in
+    # to a specific side. Per-tool overrides (e.g. AskUserQuestion always
+    # client, regardless of this flag) take precedence — see
+    # internal/tool.ClientRoutedTool.
+    #
+    #   true  — delegate-everything mode (Claude Code CLI style: client
+    #           runs Bash/Edit/Read/etc.). Pick this when your client
+    #           knows how to execute every registered tool.
+    #   false — server-runs-everything mode (web UI style: server has API
+    #           keys for WebSearch, spawns sub-agents, etc.). The client
+    #           still receives tool.call for tools marked client-routed
+    #           (AskUserQuestion). This is the right setting for emma's
+    #           web UI.
+    client_tools: false
+    # trace_frames toggles a per-outgoing-frame INFO log line capturing
+    # type / card_kind / card_id / parent / seq / status / error. Off in
+    # production (this flag generates one line per wire frame — 80-200
+    # per plan run); flip on while debugging "step never closes" /
+    # "card lineage wrong" UI issues, then grep "ws send" service.log.
+    trace_frames: false
   http:
     enabled: true
     host: "0.0.0.0"
@@ -88,20 +113,35 @@ tools:
     enabled: true
   web_fetch:
     enabled: true
+  web_search:
+  # enabled: true
+  # api_key:
+  # api_secret:
+  # app_id:
+  # host: "cbm-search-api.cn-huabei-1.xf-yun.com"
+  # path: "/biz/search"
+  # limit: 5
+
   tavily_search:
-    enabled: true
-    api_key: "tvly-xxx"
-    max_results: 5
+    enabled: false
+    api_key: ""          # set via CLAUDE_TOOLS_TAVILY_SEARCH_API_KEY or config_self.yaml
+    # max_results: 5
 
 # --- Skills ---
 # Skills are loaded from the directories listed below, in order.
 # Earlier directories have higher priority on name conflicts.
 # Each directory is scanned for:
 #   - skill-name/SKILL.md  (directory format)
-#   - skill-name.md        (flat file format)
+# Default: ~/.harnessclaw/workspace/skills/ (when dirs is null or empty)
 skills:
   dirs:
-    # - "${HOME}/.harnessclaw/workspace/skills/"
+  # - "~/.harnessclaw/workspace/skills/"
+
+# --- Console Management API ---
+console:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8090
 
 # --- Permission ---
 permission:
