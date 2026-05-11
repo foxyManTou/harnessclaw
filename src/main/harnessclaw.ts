@@ -1441,7 +1441,19 @@ export class HarnessclawClient extends EventEmitter {
 
     if (card) {
       card.status = status
-      card.payload = { ...card.payload, ...inner }
+      // Merge inner into the cached payload, but never let a server-sent empty
+      // string overwrite an existing non-empty value (e.g. orphan_timeout / late
+      // close frames frequently arrive with inner.step_id="" which would wipe
+      // out the original step_id from card.add and cause downstream events to
+      // be dropped). Non-string fields fall through to a plain overwrite.
+      const mergedPayload: Record<string, unknown> = { ...card.payload }
+      for (const [key, value] of Object.entries(inner)) {
+        if (typeof value === 'string' && value === '' && typeof mergedPayload[key] === 'string' && mergedPayload[key] !== '') {
+          continue
+        }
+        mergedPayload[key] = value
+      }
+      card.payload = mergedPayload
     }
 
     switch (args.cardKind) {
