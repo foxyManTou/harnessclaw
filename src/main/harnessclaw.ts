@@ -52,6 +52,19 @@ interface PendingPlanReviewRequest {
   planId: string
 }
 
+// v0.5.0 §7.1 kind=step_decision — Scheduler / PlanCoordinator surfaces a
+// "continue / retry / cancel" decision gate to the user when a step's retry
+// budget or the plan's re-plan budget is exhausted, instead of silently
+// falling back. We track the request so respondStepDecision can map the UI
+// reply (continue / retry / cancel + optional note) back to the v2 wire
+// frame.
+interface PendingStepDecisionRequest {
+  sessionId: string
+  scope: 'step' | 'plan'
+  stepId: string
+  allowRetry: boolean
+}
+
 // v2 protocol — per-session card forest. We track cards keyed by card_id and
 // accumulate streaming channels (text / tool_input / thinking) per
 // (channel, index). When a card closes we emit the appropriate v1-shaped
@@ -93,6 +106,8 @@ interface SessionForest {
   permissionRequests: Map<string, PendingPermissionRequest>
   askRequests: Map<string, PendingAskQuestionRequest>
   planReviewRequests: Map<string, PendingPlanReviewRequest>
+  // v0.5.0 step_decision request bookkeeping (continue / retry / cancel).
+  stepDecisionRequests: Map<string, PendingStepDecisionRequest>
   // plan_id → request_id, so respondPlan(planId,...) can find the right req.
   planIdToRequestId: Map<string, string>
 }
@@ -543,6 +558,7 @@ export class HarnessclawClient extends EventEmitter {
         permissionRequests: new Map(),
         askRequests: new Map(),
         planReviewRequests: new Map(),
+        stepDecisionRequests: new Map(),
         planIdToRequestId: new Map(),
       }
       this.forests.set(sessionId, forest)
@@ -968,6 +984,49 @@ export class HarnessclawClient extends EventEmitter {
           steps,
           available_subagents: availableSubagents,
           rejection_reason: typeof inner.rejection_reason === 'string' ? inner.rejection_reason : '',
+          timeout_ms: timeoutMs,
+        })
+        return
+      }
+
+      // v0.5.0 §7.1 kind=step_decision — failure decision gate from
+      // Scheduler (per-step retry budget exhausted) or PlanCoordinator
+      // (re-plan budget exhausted / planner error / budget overrun). The
+      // server stops trying and asks the user to pick continue / retry /
+      // cancel. We surface it as a `step_decision_request` compat event
+      // and track the (request_id → scope/step_id/allow_retry) mapping so
+      // respondStepDecision can build the right `prompt.user_response`.
+      case 'step_decision': {
+        const scope: 'step' | 'plan' = inner.scope === 'plan' ? 'plan' : 'step'
+        const stepId = typeof inner.step_id === 'string' ? inner.step_id : ''
+        const stepDescription = typeof inner.step_description === 'string'
+          ? inner.step_description
+          : ''
+        const reason = typeof inner.reason === 'string' ? inner.reason : ''
+        const attempts = typeof inner.attempts === 'number'
+          ? inner.attempts
+          : 0
+        // Default to false: if the server omits `allow_retry`, treat as
+        // unsafe-to-retry (PlanCoordinator-scope is the typical case).
+        const allowRetry = inner.allow_retry === true
+
+        forest.stepDecisionRequests.set(requestId, {
+          sessionId,
+          scope,
+          stepId,
+          allowRetry,
+        })
+
+        this.emitCompatEvent({
+          type: 'step_decision_request',
+          session_id: sessionId,
+          request_id: requestId,
+          scope,
+          step_id: stepId,
+          step_description: stepDescription,
+          reason,
+          attempts,
+          allow_retry: allowRetry,
           timeout_ms: timeoutMs,
         })
         return
@@ -1835,6 +1894,84 @@ export class HarnessclawClient extends EventEmitter {
       })
       return false
     }
+  }
+
+  // v0.5.0 §7.3 step_decision response. The renderer hands us
+  // (requestId, decision, sessionId, note) where decision is one of
+  // `continue` / `retry` / `cancel`; we translate that into a v2
+  // `prompt.user_response` envelope. Unknown decisions are coerced to
+  // `cancel` to match the server's lenient parser (§7.3 last paragraph).
+  respondStepDecision(
+    requestId: string,
+    decision: 'continue' | 'retry' | 'cancel',
+    sessionId?: string,
+    note?: string,
+  ): boolean {
+    if (!requestId) return false
+
+    let pending: PendingStepDecisionRequest | undefined
+    let owningSessionId = sessionId || ''
+    if (owningSessionId) {
+      pending = this.forests.get(owningSessionId)?.stepDecisionRequests.get(requestId)
+    }
+    if (!pending) {
+      for (const [sid, forest] of this.forests.entries()) {
+        const candidate = forest.stepDecisionRequests.get(requestId)
+        if (candidate) {
+          pending = candidate
+          owningSessionId = sid
+          break
+        }
+      }
+    }
+
+    const ws = this.ws
+    if (!ws || ws.readyState !== WebSocket.OPEN || !pending || !owningSessionId) {
+      writeAppLog('warn', 'harnessclaw-engine.stepDecision', 'respondStepDecision dropped — request not found or socket not open', {
+        requestId,
+        decision,
+        wsOpen: this.isWebSocketOpen(),
+        pendingFound: Boolean(pending),
+      })
+      return false
+    }
+
+    const allowed: ReadonlySet<string> = new Set(['continue', 'retry', 'cancel'])
+    const safeDecision: 'continue' | 'retry' | 'cancel' = allowed.has(decision)
+      ? decision
+      : 'cancel'
+
+    const payload: Record<string, unknown> = {}
+    if (note && note.trim()) payload.note = note.trim()
+
+    const frame: Record<string, unknown> = {
+      type: 'prompt.user_response',
+      event_id: makeEventId(),
+      session_id: pending.sessionId,
+      request_id: requestId,
+      decision: safeDecision,
+      payload,
+    }
+    logEngineFrame('send', frame, {
+      sessionId: pending.sessionId,
+      type: 'prompt.user_response',
+      kind: 'step_decision',
+    })
+    ws.send(JSON.stringify(frame))
+
+    this.forests.get(owningSessionId)?.stepDecisionRequests.delete(requestId)
+
+    this.emitCompatEvent({
+      type: 'step_decision_result',
+      session_id: pending.sessionId,
+      request_id: requestId,
+      decision: safeDecision,
+      scope: pending.scope,
+      step_id: pending.stepId,
+      note: payload.note,
+    })
+
+    return true
   }
 
   command(cmd: string, sessionId?: string): void {

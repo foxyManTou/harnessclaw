@@ -167,7 +167,19 @@ interface ArtifactRef {
 }
 
 interface ToolActivity {
-  type: 'hint' | 'call' | 'result' | 'status' | 'permission' | 'permission_result' | 'question' | 'question_result'
+  type:
+    | 'hint'
+    | 'call'
+    | 'result'
+    | 'status'
+    | 'permission'
+    | 'permission_result'
+    | 'question'
+    | 'question_result'
+    // v0.5.0 — failure decision gate (continue / retry / cancel) surfaced
+    // by Scheduler / PlanCoordinator when retries / re-plans run out.
+    | 'step_decision'
+    | 'step_decision_result'
   name?: string
   content: string
   callId?: string
@@ -238,6 +250,27 @@ interface AskQuestionResultData {
   output: string
   errorMessage?: string
 }
+
+// v0.5.0 §7.1 kind=step_decision — payload shape used by StepDecisionCard.
+interface StepDecisionRequestData {
+  scope: 'step' | 'plan'
+  stepId: string
+  stepDescription: string
+  reason: string
+  attempts: number
+  allowRetry: boolean
+}
+
+interface StepDecisionResultData {
+  decision: 'continue' | 'retry' | 'cancel'
+  note?: string
+}
+
+type RespondStepDecisionHandler = (
+  requestId: string,
+  decision: 'continue' | 'retry' | 'cancel',
+  note?: string,
+) => Promise<{ ok: boolean; error?: string }>
 
 interface SystemNoticeData {
   kind: 'error'
@@ -317,6 +350,19 @@ interface SessionState {
    * lifecycle events. We keep the resolved subagent_type / per-step status /
    * output summary here so PlanStatusButton can show "执行情况".
    */
+  /**
+   * v0.5.0 §11 — transient engine note (e.g. retry-status from Scheduler).
+   * Shown as a colored banner above the composer until a newer note arrives
+   * or the current turn ends.
+   */
+  engineNote?: {
+    text: string
+    severity: 'info' | 'warn' | 'error' | string
+    stepId?: string
+    stepDescription?: string
+    agentName?: string
+    ts: number
+  }
   planDraft?: {
     planId: string
     agentId?: string
@@ -624,6 +670,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   onOpenArtifact,
   onRespondPermission,
   onRespondAskQuestion,
+  onRespondStepDecision,
   onRespondPlan,
 }: {
   collaboration: CollaborationState
@@ -642,6 +689,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
   onOpenArtifact?: (artifactId: string) => void
   onRespondPermission: RespondPermissionHandler
   onRespondAskQuestion: RespondAskQuestionHandler
+  /** v0.5.0 — continue/retry/cancel decision reply for step_decision. */
+  onRespondStepDecision: RespondStepDecisionHandler
   onRespondPlan: (planId: string, approved: boolean, options?: { steps?: PlanDraftStep[]; reason?: string }) => void
 }) {
   return (
@@ -664,10 +713,12 @@ const ConversationTimeline = memo(function ConversationTimeline({
               syncAgents={collaboration.syncAgents}
               // v1.12: Emma 的鎏光只在当前正在流式输出的助手消息上显示（紧贴 "Emma" 名字）。
               activeIntent={message.isStreaming ? currentIntent : undefined}
+              hasPendingPlanDraft={!!planDraft && !planDraft.confirmed}
               onOpenFilePreview={onOpenFilePreview}
               onOpenArtifact={onOpenArtifact}
               onRespondPermission={onRespondPermission}
               onRespondAskQuestion={onRespondAskQuestion}
+              onRespondStepDecision={onRespondStepDecision}
             />
           </div>
         ))}
@@ -683,6 +734,16 @@ const ConversationTimeline = memo(function ConversationTimeline({
             so the card lines up flush with assistant message bodies (and
             with the Thinking… indicator below) instead of hugging the
             container's left edge. */}
+        {/* Inline card visibility:
+            • While the user is reviewing the proposed plan (`!confirmed`)
+              the editable card is shown so the user can edit / approve.
+            • Once the user confirms, the inline card collapses and the
+              floating PlanStatusButton takes over while the engine is
+              executing.
+            • After the engine reaches a terminal state (`completed` /
+              `failed`), the inline card is no longer shown in the chat
+              area; the floating PlanStatusButton in the top-right
+              continues to expose the final plan for review. */}
         {planDraft && !planDraft.confirmed && (
           <div className="flex justify-start pl-[2.625rem]" data-plan-draft-id={planDraft.planId}>
             <PlanDraftCard
@@ -2174,6 +2235,31 @@ function parseAskQuestionResultData(raw: string): AskQuestionResultData | null {
   }
 }
 
+function parseStepDecisionRequestData(raw: string): StepDecisionRequestData | null {
+  const parsed = parseJsonObject(raw)
+  if (!parsed) return null
+  return {
+    scope: parsed.scope === 'plan' ? 'plan' : 'step',
+    stepId: typeof parsed.step_id === 'string' ? parsed.step_id : '',
+    stepDescription: typeof parsed.step_description === 'string' ? parsed.step_description : '',
+    reason: typeof parsed.reason === 'string' ? parsed.reason : '',
+    attempts: typeof parsed.attempts === 'number' ? parsed.attempts : 0,
+    allowRetry: parsed.allow_retry === true,
+  }
+}
+
+function parseStepDecisionResultData(raw: string): StepDecisionResultData | null {
+  const parsed = parseJsonObject(raw)
+  if (!parsed) return null
+  const decision = parsed.decision === 'continue' || parsed.decision === 'retry' || parsed.decision === 'cancel'
+    ? parsed.decision
+    : 'cancel'
+  return {
+    decision,
+    note: typeof parsed.note === 'string' ? parsed.note : undefined,
+  }
+}
+
 function getConversationLabel(title = '', firstMessage = ''): string {
   const raw = title.trim() || firstMessage.trim() || '新对话'
   return raw.length > 24 ? `${raw.slice(0, 24)}...` : raw
@@ -2984,6 +3070,24 @@ export function ChatPage() {
     })
   }, [updateSession])
 
+  // v0.5.0 §7.3 — forward the user's step_decision pick (continue / retry /
+  // cancel) to the engine. The optional `note` ends up in the server's
+  // fallback summary so the next agent turn can reference it.
+  const respondStepDecision = useCallback<RespondStepDecisionHandler>(async (requestId, decision, note) => {
+    if (!requestId) return { ok: false, error: 'Missing request id' }
+    try {
+      const result = await window.harnessclaw.respondStepDecision(
+        requestId,
+        decision,
+        activeSessionIdRef.current || undefined,
+        note,
+      )
+      return result || { ok: false, error: 'No response from engine' }
+    } catch (error) {
+      return { ok: false, error: String(error) }
+    }
+  }, [])
+
   const updateCollaboration = useCallback((sid: string, updater: (prev: CollaborationState) => CollaborationState) => {
     updateSession(sid, (prev) => ({
       ...prev,
@@ -3154,6 +3258,51 @@ export function ChatPage() {
     return null
   }, [activeSession.isPaused, activeSession.isStopping, harnessclawStatus])
 
+  // v0.5.0 §11 — engine_note banner (retry-status from Scheduler etc.). Lives
+  // on the session and is cleared on response_end.
+  const engineNoteBanner = activeSession.engineNote
+
+  // v0.5.0 §7.1 — find any unanswered step_decision prompt on the active
+  // streaming message so we can surface it as a banner above the composer.
+  // The decision card is also rendered inline inside the message stream;
+  // duplicating it as a banner keeps it from being missed when the user has
+  // scrolled away.
+  const pendingStepDecision = useMemo(() => {
+    const active = pendingAssistantMessage
+    const tools = active?.tools
+    if (!tools || tools.length === 0) return null
+    for (const t of tools) {
+      if (t.type !== 'step_decision') continue
+      const answered = tools.some((r) => r.type === 'step_decision_result' && r.callId === t.callId)
+      if (answered) continue
+      // Parse the JSON body stuffed into `content` when the event was
+      // ingested (see case 'step_decision_request').
+      let body: {
+        scope?: string
+        step_id?: string
+        step_description?: string
+        reason?: string
+        attempts?: number
+        allow_retry?: boolean
+      } = {}
+      try {
+        body = JSON.parse(typeof t.content === 'string' ? t.content : '') || {}
+      } catch {
+        body = {}
+      }
+      return {
+        requestId: t.callId || '',
+        scope: body.scope === 'plan' ? 'plan' : 'step',
+        stepId: typeof body.step_id === 'string' ? body.step_id : '',
+        stepDescription: typeof body.step_description === 'string' ? body.step_description : '',
+        reason: typeof body.reason === 'string' ? body.reason : '',
+        attempts: typeof body.attempts === 'number' ? body.attempts : 0,
+        allowRetry: body.allow_retry === true,
+      }
+    }
+    return null
+  }, [pendingAssistantMessage])
+
   // While a `prompt.user` (AskUserQuestion / permission / plan_review) is open
   // and unanswered, the engine's turn is technically still streaming
   // (`isProcessing=true`), but nothing is actually executing — it is parked
@@ -3175,8 +3324,12 @@ export function ChatPage() {
     const tools = active.tools
     if (!tools || tools.length === 0) return false
     for (const t of tools) {
-      if (t.type !== 'question' && t.type !== 'permission') continue
-      const resultType = t.type === 'question' ? 'question_result' : 'permission_result'
+      if (t.type !== 'question' && t.type !== 'permission' && t.type !== 'step_decision') continue
+      const resultType = t.type === 'question'
+        ? 'question_result'
+        : t.type === 'permission'
+          ? 'permission_result'
+          : 'step_decision_result'
       const answered = tools.some((r) => r.type === resultType && r.callId === t.callId)
       if (!answered) return true
     }
@@ -4166,6 +4319,33 @@ export function ChatPage() {
         break
       }
 
+      case 'engine_note': {
+        // v0.5.0 §11 — transient status note from the engine (retry banner,
+        // backoff warning, etc.). Stash on the session so it can render in
+        // the colored area above the composer. The latest note replaces the
+        // previous one; we clear it on response_end.
+        const sid = eventSessionId!
+        if (!sid) break
+        const text = typeof event.text === 'string' ? event.text : ''
+        if (!text) break
+        const severity = typeof event.severity === 'string' ? event.severity : 'info'
+        const stepId = typeof event.step_id === 'string' ? event.step_id : ''
+        const stepDescription = typeof event.step_description === 'string' ? event.step_description : ''
+        const agentName = typeof event.agent_name === 'string' ? event.agent_name : ''
+        updateSession(sid, (prev) => ({
+          ...prev,
+          engineNote: {
+            text,
+            severity,
+            stepId: stepId || undefined,
+            stepDescription: stepDescription || undefined,
+            agentName: agentName || undefined,
+            ts: Date.now(),
+          },
+        }))
+        break
+      }
+
       case 'tool_hint': {
         const sid = eventSessionId!
         const aid = ensureAssistantMessage(sid, Date.now())
@@ -4360,6 +4540,68 @@ export function ChatPage() {
         break
       }
 
+      // v0.5.0 §7.1 kind=step_decision — Scheduler / PlanCoordinator pushed
+      // a continue / retry / cancel decision gate. Render a dedicated card
+      // (StepDecisionCard) so the user can decide what to do next instead
+      // of the engine silently falling back.
+      case 'step_decision_request': {
+        const sid = eventSessionId!
+        if (!sid) break
+        const requestId = typeof event.request_id === 'string' ? event.request_id : ''
+        if (!requestId) break
+        const aid = ensureAssistantMessageForPrompt(sid, Date.now(), requestId, 'step_decision')
+        const activity: ToolActivity = {
+          type: 'step_decision',
+          name: 'StepDecision',
+          content: JSON.stringify({
+            scope: event.scope === 'plan' ? 'plan' : 'step',
+            step_id: typeof event.step_id === 'string' ? event.step_id : '',
+            step_description: typeof event.step_description === 'string' ? event.step_description : '',
+            reason: typeof event.reason === 'string' ? event.reason : '',
+            attempts: typeof event.attempts === 'number' ? event.attempts : 0,
+            allow_retry: event.allow_retry === true,
+          }),
+          callId: requestId,
+          ts: Date.now(),
+          subagent,
+        }
+        // v0.3 dedup: server replay after reconnect reuses request_id; merge
+        // back onto the existing card instead of stacking duplicates.
+        updateSession(sid, (prev) => ({
+          ...prev,
+          messages: upsertSessionToolByCallId(prev.messages, aid, activity),
+        }))
+        break
+      }
+
+      case 'step_decision_result': {
+        const sid = eventSessionId!
+        if (!sid) break
+        const requestId = typeof event.request_id === 'string' ? event.request_id : ''
+        if (!requestId) break
+        const aid = ensureAssistantMessage(sid, Date.now())
+        const decision = event.decision === 'continue' || event.decision === 'retry' || event.decision === 'cancel'
+          ? event.decision
+          : 'cancel'
+        const activity: ToolActivity = {
+          type: 'step_decision_result',
+          name: 'StepDecision',
+          content: JSON.stringify({
+            decision,
+            note: typeof event.note === 'string' ? event.note : undefined,
+          }),
+          callId: requestId,
+          isError: decision === 'cancel',
+          ts: Date.now(),
+          subagent,
+        }
+        updateSession(sid, (prev) => ({
+          ...prev,
+          messages: prev.messages.map((m) => m.id === aid ? { ...m, tools: [...(m.tools || []), activity] } : m),
+        }))
+        break
+      }
+
       case 'text_delta': {
         const sid = eventSessionId!
         let aid = pendingAssistantIds.current[sid]
@@ -4510,22 +4752,20 @@ export function ChatPage() {
           //
           // BUT: a confirmed plan can outlive the LLM response that
           // proposed it — sub-agents keep streaming `step_*` / `card.*`
-          // events until `plan_completed` / `plan_failed`. If we wipe
-          // planDraft here while planStatus is still `created` / `running`
-          // / undefined-but-running, the top-right `PlanStatusButton`
-          // disappears and every subsequent `step_*` is silently dropped
-          // by its `!prev.planDraft` guard, so the button can never come
-          // back. Only clear the draft when (a) the user never confirmed
-          // it (an abandoned proposal) or (b) the plan reached a terminal
-          // state (`completed` / `failed`).
+          // events until `plan_completed` / `plan_failed`, and we want the
+          // inline plan card to remain visible afterwards in its terminal
+          // (completed / failed) state so the user can review what ran.
+          // So only clear the draft when the user never confirmed it
+          // (an abandoned proposal). Confirmed drafts — whether still
+          // running or already terminal — are kept on session state.
           const draft = prev.planDraft
-          const planTerminal = draft?.planStatus === 'completed' || draft?.planStatus === 'failed'
-          const keepDraft = !!draft && draft.confirmed && !planTerminal
+          const keepDraft = !!draft && draft.confirmed
           return {
             ...prev,
             isProcessing: false,
             currentThinking: '',
             currentIntent: undefined,
+            engineNote: undefined,
             planDraft: keepDraft ? draft : undefined,
             // v1.16: also reset the plan-proposed gate so the next turn
             // starts in a clean state.
@@ -5336,6 +5576,7 @@ export function ChatPage() {
                 }}
                 onRespondPermission={respondPermission}
                 onRespondAskQuestion={respondAskQuestion}
+                onRespondStepDecision={respondStepDecision}
                 onRespondPlan={(planId, approved, options) => {
                   void respondPlan(activeSessionId, planId, approved, options)
                 }}
@@ -5360,6 +5601,88 @@ export function ChatPage() {
             {/* Input area */}
             <div className="bg-card/45 px-4 py-2.5 backdrop-blur-sm">
               <div className="mx-auto w-full max-w-4xl">
+                {pendingStepDecision && (
+                  <div className="mb-3 rounded-2xl border border-orange-300 bg-orange-50 px-3.5 py-3 dark:border-orange-700/50 dark:bg-orange-950/30">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle size={14} className="mt-0.5 flex-shrink-0 text-orange-600 dark:text-orange-300" />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-semibold text-orange-900 dark:text-orange-100">
+                          需要你来决定：{pendingStepDecision.scope === 'plan' ? '整个计划' : `步骤 ${pendingStepDecision.stepId || ''}`} 已重试 {pendingStepDecision.attempts} 次仍未成功
+                        </p>
+                        {pendingStepDecision.stepDescription && (
+                          <p className="mt-0.5 truncate text-[11px] text-orange-800/80 dark:text-orange-200/80">
+                            {pendingStepDecision.stepDescription}
+                          </p>
+                        )}
+                        {pendingStepDecision.reason && (
+                          <p className="mt-1 line-clamp-2 text-xs leading-5 text-orange-800 dark:text-orange-200">
+                            失败原因：{pendingStepDecision.reason}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="mt-2.5 flex flex-wrap items-center gap-2 pl-6">
+                      {pendingStepDecision.allowRetry && (
+                        <button
+                          onClick={() => respondStepDecision(pendingStepDecision.requestId, 'retry')}
+                          className="inline-flex items-center gap-1.5 rounded-full border border-orange-400 bg-white px-3 py-1 text-xs font-medium text-orange-700 transition hover:bg-orange-100 dark:border-orange-600 dark:bg-orange-900/30 dark:text-orange-200 dark:hover:bg-orange-900/50"
+                        >
+                          <RefreshCw size={12} />
+                          再试一次
+                        </button>
+                      )}
+                      <button
+                        onClick={() => respondStepDecision(pendingStepDecision.requestId, 'continue')}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-orange-400 bg-white px-3 py-1 text-xs font-medium text-orange-700 transition hover:bg-orange-100 dark:border-orange-600 dark:bg-orange-900/30 dark:text-orange-200 dark:hover:bg-orange-900/50"
+                      >
+                        跳过，继续后续步骤
+                      </button>
+                      <button
+                        onClick={() => respondStepDecision(pendingStepDecision.requestId, 'cancel')}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-red-300 bg-white px-3 py-1 text-xs font-medium text-red-700 transition hover:bg-red-50 dark:border-red-700/60 dark:bg-red-950/30 dark:text-red-200 dark:hover:bg-red-950/60"
+                      >
+                        放弃任务
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {engineNoteBanner && !pendingStepDecision && (
+                  <div
+                    className={cn(
+                      'mb-3 flex items-start gap-2 rounded-2xl border px-3.5 py-2.5',
+                      engineNoteBanner.severity === 'error'
+                        ? 'border-red-200 bg-red-50 dark:border-red-900/40 dark:bg-red-950/20'
+                        : engineNoteBanner.severity === 'warn'
+                          ? 'border-amber-200 bg-amber-50 dark:border-amber-900/40 dark:bg-amber-950/20'
+                          : 'border-sky-200 bg-sky-50 dark:border-sky-900/40 dark:bg-sky-950/20'
+                    )}
+                  >
+                    {engineNoteBanner.severity === 'warn' || engineNoteBanner.severity === 'error' ? (
+                      <RefreshCw size={14} className={cn('mt-0.5 flex-shrink-0 animate-spin', engineNoteBanner.severity === 'error' ? 'text-red-600 dark:text-red-300' : 'text-amber-600 dark:text-amber-300')} />
+                    ) : (
+                      <AlertCircle size={14} className="mt-0.5 flex-shrink-0 text-sky-600 dark:text-sky-300" />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p
+                        className={cn(
+                          'text-xs leading-5',
+                          engineNoteBanner.severity === 'error'
+                            ? 'text-red-800 dark:text-red-200'
+                            : engineNoteBanner.severity === 'warn'
+                              ? 'text-amber-800 dark:text-amber-200'
+                              : 'text-sky-800 dark:text-sky-200'
+                        )}
+                      >
+                        {engineNoteBanner.text}
+                        {engineNoteBanner.stepId && (
+                          <span className="ml-1.5 opacity-60">· 步骤 {engineNoteBanner.stepId}</span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {composerNotice && (
                   <div
                     className={cn(
@@ -5753,10 +6076,12 @@ function MessageBubble({
   message,
   syncAgents,
   activeIntent,
+  hasPendingPlanDraft,
   onOpenFilePreview,
   onOpenArtifact,
   onRespondPermission,
   onRespondAskQuestion,
+  onRespondStepDecision,
 }: {
   message: Message
   /** v1.12: per-agent state used to render the sub-agent task expander and
@@ -5765,10 +6090,16 @@ function MessageBubble({
   /** v1.12: main-agent (Emma) intent shimmer rendered after the agent name.
    * Only set on the currently streaming assistant message. */
   activeIntent?: SessionState['currentIntent']
+  /** True while a `plan.proposed` PlanDraftCard is awaiting the user. The
+   * engine's turn is parked, so we suppress the breathing-dot indicator on
+   * the streaming assistant message during that window. */
+  hasPendingPlanDraft?: boolean
   onOpenFilePreview: (preview: FilePreviewData) => void
   onOpenArtifact?: (artifactId: string) => void
   onRespondPermission: (requestId: string, approved: boolean, scope: 'once' | 'session') => Promise<void>
   onRespondAskQuestion: RespondAskQuestionHandler
+  /** v0.5.0: continue / retry / cancel decision reply for step_decision. */
+  onRespondStepDecision: RespondStepDecisionHandler
 }) {
   const [copied, setCopied] = useState(false)
   const isUser = message.role === 'user'
@@ -5836,6 +6167,7 @@ function MessageBubble({
     | { kind: 'tool'; call: ToolActivity; result?: ToolActivity; isRunning: boolean; ts: number; subagent?: SubagentInfo }
     | { kind: 'permission'; request: ToolActivity; result?: ToolActivity; ts: number; subagent?: SubagentInfo }
     | { kind: 'question'; request: ToolActivity; result?: ToolActivity; ts: number; subagent?: SubagentInfo }
+    | { kind: 'step_decision'; request: ToolActivity; result?: ToolActivity; ts: number; subagent?: SubagentInfo }
     | { kind: 'text'; text: string; ts: number; subagent?: SubagentInfo }
 
   type AgentTeamMember = {
@@ -5853,6 +6185,7 @@ function MessageBubble({
   const toolResults = tools.filter((a) => a.type === 'result')
   const permissionResults = tools.filter((a) => a.type === 'permission_result')
   const questionResults = tools.filter((a) => a.type === 'question_result')
+  const stepDecisionResults = tools.filter((a) => a.type === 'step_decision_result')
 
   for (const t of tools) {
     if (t.type === 'status') {
@@ -5869,6 +6202,9 @@ function MessageBubble({
     } else if (t.type === 'question') {
       const result = questionResults.find((r) => r.callId === t.callId)
       segments.push({ kind: 'question', request: t, result, ts: t.ts, subagent: t.subagent || result?.subagent })
+    } else if (t.type === 'step_decision') {
+      const result = stepDecisionResults.find((r) => r.callId === t.callId)
+      segments.push({ kind: 'step_decision', request: t, result, ts: t.ts, subagent: t.subagent || result?.subagent })
     }
   }
 
@@ -5936,10 +6272,20 @@ function MessageBubble({
 
   const attachments = message.attachments || []
   const lastVisibleActivityTs = segments.reduce((latest, seg) => Math.max(latest, seg.ts), message.timestamp)
+  // While a `prompt.user` (AskUserQuestion / permission / plan_review) is
+  // awaiting the user's reply, the engine's turn is parked — nothing is
+  // actually running. Suppress the breathing dot in that case so the UI
+  // doesn't suggest "服务仍在继续" while we are really waiting on the user.
+  const hasUnresolvedPromptUser = segments.some(
+    (seg) =>
+      (seg.kind === 'question' || seg.kind === 'permission' || seg.kind === 'step_decision') && !seg.result,
+  )
   const shouldShowBreathingDot = !isUser
     && !isSystem
     && !!message.isStreaming
     && segments.length > 0
+    && !hasUnresolvedPromptUser
+    && !hasPendingPlanDraft
     && now - lastVisibleActivityTs > 1000
   const shouldShowTimestamp = !message.isStreaming
   const hasRenderableAssistantBody = displaySegments.length > 0 || attachments.length > 0 || !!errorNotice
@@ -6181,6 +6527,16 @@ function MessageBubble({
                       />
                     )
                   }
+                  if (item.kind === 'step_decision') {
+                    return (
+                      <StepDecisionCard
+                        key={item.request.callId || `${i}-${itemIndex}`}
+                        request={item.request}
+                        result={item.result}
+                        onRespondStepDecision={onRespondStepDecision}
+                      />
+                    )
+                  }
                   return renderTextBlock(item.text, `text-${i}-${itemIndex}`)
                 })}
               </div>
@@ -6291,6 +6647,16 @@ function MessageBubble({
                               />
                             )
                           }
+                          if (item.kind === 'step_decision') {
+                            return (
+                              <StepDecisionCard
+                                key={item.request.callId || `sub-decision-${i}-${agentIdx}-${itemIndex}`}
+                                request={item.request}
+                                result={item.result}
+                                onRespondStepDecision={onRespondStepDecision}
+                              />
+                            )
+                          }
                           return renderTextBlock(item.text, `sub-text-${i}-${agentIdx}-${itemIndex}`)
                         })
                       )}
@@ -6339,6 +6705,7 @@ function AgentTeamPanel({
   onOpenFilePreview,
   onRespondPermission,
   onRespondAskQuestion,
+  onRespondStepDecision,
   renderHint,
   renderTextBlock,
 }: {
@@ -6350,6 +6717,7 @@ function AgentTeamPanel({
       | { kind: 'tool'; call: ToolActivity; result?: ToolActivity; isRunning: boolean; ts: number; subagent?: SubagentInfo }
       | { kind: 'permission'; request: ToolActivity; result?: ToolActivity; ts: number; subagent?: SubagentInfo }
       | { kind: 'question'; request: ToolActivity; result?: ToolActivity; ts: number; subagent?: SubagentInfo }
+      | { kind: 'step_decision'; request: ToolActivity; result?: ToolActivity; ts: number; subagent?: SubagentInfo }
       | { kind: 'text'; text: string; ts: number; subagent?: SubagentInfo }
     >
     ts: number
@@ -6357,6 +6725,7 @@ function AgentTeamPanel({
   onOpenFilePreview: (preview: FilePreviewData) => void
   onRespondPermission: (requestId: string, approved: boolean, scope: 'once' | 'session') => Promise<void>
   onRespondAskQuestion: RespondAskQuestionHandler
+  onRespondStepDecision: RespondStepDecisionHandler
   renderHint: (text: string, key: string, compact?: boolean) => JSX.Element
   renderTextBlock: (text: string, key: string, compact?: boolean) => JSX.Element
 }) {
@@ -6673,7 +7042,9 @@ function AgentTeamPanel({
                           ? `team-tool-${item.call.callId || index}`
                           : item.kind === 'permission'
                             ? `team-perm-${item.request.callId || index}`
-                            : `team-question-${item.request.callId || index}`
+                            : item.kind === 'step_decision'
+                              ? `team-decision-${item.request.callId || index}`
+                              : `team-question-${item.request.callId || index}`
                     const itemIsLive = activeVisualStatus === 'running' && liveNow - item.ts < 1500
 
                     if (item.kind === 'hint') {
@@ -6716,6 +7087,18 @@ function AgentTeamPanel({
                             request={item.request}
                             result={item.result}
                             onRespondAskQuestion={onRespondAskQuestion}
+                          />
+                        </div>
+                      )
+                    }
+
+                    if (item.kind === 'step_decision') {
+                      return (
+                        <div key={itemKey} className="subagent-stream-item" data-live={itemIsLive ? 'true' : undefined}>
+                          <StepDecisionCard
+                            request={item.request}
+                            result={item.result}
+                            onRespondStepDecision={onRespondStepDecision}
                           />
                         </div>
                       )
@@ -7312,6 +7695,179 @@ function AskUserQuestionCard({
 
             {isResolved && resultData?.status === 'cancelled' && (
               <p className="mt-2 text-[11px] text-muted-foreground">已取消追问，对话继续。</p>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * v0.5.0 §7.1 kind=step_decision — failure decision gate.
+ *
+ * Shown when Scheduler exhausts its per-step retry budget or PlanCoordinator
+ * exhausts its re-plan budget; the engine has stopped trying and asks the
+ * user to pick:
+ *   • 继续  — accept the failure and let the plan move on (`continue`)
+ *   • 重试  — try the same step / re-plan again (`retry`, only when the
+ *           server marks `allow_retry=true`)
+ *   • 取消  — abort the plan (`cancel`)
+ *
+ * Optional note is forwarded as `payload.note` and ends up in the engine's
+ * fallback summary so the next agent turn can reference it.
+ */
+function StepDecisionCard({
+  request,
+  result,
+  onRespondStepDecision,
+}: {
+  request: ToolActivity
+  result?: ToolActivity
+  onRespondStepDecision: RespondStepDecisionHandler
+}) {
+  const requestData = parseStepDecisionRequestData(request.content)
+  const resultData = result ? parseStepDecisionResultData(result.content) : null
+  const isResolved = !!resultData
+
+  const [note, setNote] = useState('')
+  const [submitting, setSubmitting] = useState<null | 'continue' | 'retry' | 'cancel'>(null)
+  const [submitError, setSubmitError] = useState<string | null>(null)
+
+  const handleSubmit = async (decision: 'continue' | 'retry' | 'cancel') => {
+    if (isResolved || submitting || !request.callId) return
+    setSubmitting(decision)
+    setSubmitError(null)
+    try {
+      const res = await onRespondStepDecision(request.callId, decision, note.trim() || undefined)
+      if (!res.ok) {
+        setSubmitError(res.error
+          ? `决议发送失败：${res.error}。请稍后重试。`
+          : '决议发送失败，请稍后重试。')
+      }
+    } finally {
+      setSubmitting(null)
+    }
+  }
+
+  const scope = requestData?.scope || 'step'
+  const reason = requestData?.reason || '未提供失败原因'
+  const attempts = requestData?.attempts || 0
+  const stepDescription = requestData?.stepDescription || ''
+  const allowRetry = requestData?.allowRetry === true
+
+  const decisionLabel = (decision: StepDecisionResultData['decision']): string => {
+    if (decision === 'continue') return '已选择继续'
+    if (decision === 'retry') return '已选择重试'
+    return '已取消'
+  }
+
+  const statusLabel = isResolved
+    ? decisionLabel(resultData!.decision)
+    : '等待决策'
+
+  return (
+    <div className="mb-1.5">
+      <div className="overflow-hidden rounded-xl border border-amber-300/80 bg-amber-50/70 shadow-sm dark:border-amber-900/40 dark:bg-amber-950/20">
+        <div className="flex items-start gap-2 px-3 py-2">
+          <AlertTriangle
+            size={14}
+            className={cn(
+              'mt-0.5 flex-shrink-0',
+              isResolved
+                ? resultData?.decision === 'cancel'
+                  ? 'text-muted-foreground'
+                  : 'text-emerald-600'
+                : 'text-amber-600',
+            )}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="flex-1 truncate text-xs font-medium text-foreground">
+                {scope === 'plan' ? '计划失败 · 等你决定' : '步骤失败 · 等你决定'}
+              </span>
+              <span className={cn(
+                'flex-shrink-0 text-[10px]',
+                isResolved
+                  ? resultData?.decision === 'cancel' ? 'text-muted-foreground' : 'text-emerald-700 dark:text-emerald-300'
+                  : 'text-amber-700 dark:text-amber-300',
+              )}>
+                {statusLabel}
+              </span>
+            </div>
+
+            <div className="mt-1 space-y-1 text-[12px] leading-5">
+              {scope === 'step' && stepDescription && (
+                <p className="text-foreground/90">
+                  <span className="font-medium">步骤：</span>
+                  <span className="break-words">{stepDescription}</span>
+                </p>
+              )}
+              <p className="text-foreground/90">
+                <span className="font-medium">原因：</span>
+                <span className="break-words">{reason}</span>
+                {attempts > 0 && (
+                  <span className="ml-1 text-muted-foreground">（已尝试 {attempts} 次）</span>
+                )}
+              </p>
+            </div>
+
+            {!isResolved && (
+              <>
+                <div className="mt-2">
+                  <textarea
+                    value={note}
+                    onChange={(event) => setNote(event.target.value)}
+                    disabled={!!submitting}
+                    rows={2}
+                    placeholder="可选：补充给后续 fallback summary 的备注…"
+                    className="w-full resize-none rounded-lg border border-border bg-background px-2.5 py-1.5 text-[11px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-amber-500/40 disabled:cursor-not-allowed disabled:opacity-60"
+                  />
+                </div>
+
+                <div className="mt-2 grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleSubmit('cancel')}
+                    disabled={!!submitting}
+                    className="min-h-9 w-full rounded-lg border border-border bg-background px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {submitting === 'cancel' ? '发送中…' : '取消'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleSubmit('retry')}
+                    disabled={!!submitting || !allowRetry}
+                    title={allowRetry ? undefined : '当前失败不支持重试'}
+                    className="min-h-9 w-full rounded-lg border border-amber-400 bg-amber-100 px-2.5 py-1 text-[11px] font-medium text-amber-900 transition-colors hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200 dark:hover:bg-amber-900/50"
+                  >
+                    {submitting === 'retry' ? '发送中…' : '重试'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleSubmit('continue')}
+                    disabled={!!submitting}
+                    className="min-h-9 w-full rounded-lg bg-emerald-600 px-3 py-1 text-[11px] font-medium text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {submitting === 'continue' ? '发送中…' : '继续'}
+                  </button>
+                </div>
+
+                {submitError && (
+                  <div className="mt-2 rounded-lg border border-red-300 bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300">
+                    {submitError}
+                  </div>
+                )}
+              </>
+            )}
+
+            {isResolved && resultData?.note && (
+              <div className="mt-2 rounded-lg border border-amber-200/70 bg-white/70 px-2.5 py-1.5 dark:border-amber-900/30 dark:bg-background/80">
+                <p className="text-[10px] text-muted-foreground">备注</p>
+                <p className="mt-0.5 whitespace-pre-wrap break-words text-[12px] text-foreground/90">
+                  {resultData.note}
+                </p>
+              </div>
             )}
           </div>
         </div>

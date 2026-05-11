@@ -1864,6 +1864,18 @@ app.whenReady().then(() => {
     return ok ? { ok: true } : { ok: false, error: 'Failed to send plan response' }
   })
 
+  // v0.5.0 §7.3 — step_decision (continue / retry / cancel) reply.
+  ipcMain.handle('harnessclaw:respondStepDecision', (
+    _,
+    requestId: string,
+    decision: 'continue' | 'retry' | 'cancel',
+    sessionId?: string,
+    note?: string,
+  ) => {
+    const ok = harnessclawClient.respondStepDecision(requestId, decision, sessionId, note)
+    return ok ? { ok: true } : { ok: false, error: 'Failed to send step_decision response' }
+  })
+
   ipcMain.handle('harnessclaw:status', () => {
     return harnessclawClient.getStatus()
   })

@@ -76,6 +76,8 @@ const harnessclawAPI = {
   respondPermission: (requestId: string, approved: boolean, scope?: 'once' | 'session', message?: string) => ipcRenderer.invoke('harnessclaw:respondPermission', requestId, approved, scope, message),
   respondAskQuestion: (toolUseId: string, status: 'success' | 'cancelled', output?: string, errorMessage?: string) => ipcRenderer.invoke('harnessclaw:respondAskQuestion', toolUseId, status, output, errorMessage),
   respondPlan: (planId: string, approved: boolean, sessionId?: string, options?: { steps?: Array<Record<string, unknown>>; reason?: string }) => ipcRenderer.invoke('harnessclaw:respondPlan', planId, approved, sessionId, options),
+  // v0.5.0 §7.3 — step_decision reply (continue / retry / cancel).
+  respondStepDecision: (requestId: string, decision: 'continue' | 'retry' | 'cancel', sessionId?: string, note?: string) => ipcRenderer.invoke('harnessclaw:respondStepDecision', requestId, decision, sessionId, note),
   getStatus: () => ipcRenderer.invoke('harnessclaw:status'),
   onStatus: (callback: (status: string) => void) => {
     const handler = (_: Electron.IpcRendererEvent, status: string): void => callback(status)
