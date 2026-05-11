@@ -1419,8 +1419,48 @@ export class HarnessclawClient extends EventEmitter {
         return
       }
 
-      // progress / heartbeat / note / escalation — renderer doesn't currently
-      // surface these. Keep them as a no-op so they don't pollute logs.
+      // v0.5.0 §11 card.tick(kind=note) — Scheduler / retry policy emits a
+      // short status note ("重试中 (3/3, 1.5s 后再试) — network_error") on the
+      // active worker agent card. We surface it to the renderer so it can be
+      // shown as a transient banner above the composer.
+      case 'note': {
+        const text = typeof inner.text === 'string' ? inner.text : ''
+        if (!text) return
+        const severity = typeof inner.severity === 'string' ? inner.severity : 'info'
+        const info = this.resolveAgentInfo(forest, args.agentId)
+        // Walk up the card tree to find the owning step (if any) so the
+        // banner can attribute the note to a plan step.
+        let stepId = ''
+        let stepDescription = ''
+        let cursor: CardState | undefined = forest.cards.get(args.cardId)
+        let hops = 0
+        while (cursor && hops < 16) {
+          if (cursor.cardKind === 'step') {
+            const sid = cursor.payload.step_id
+            stepId = typeof sid === 'string' && sid ? sid : cursor.cardId
+            const desc = cursor.payload.input_summary
+            if (typeof desc === 'string') stepDescription = desc
+            break
+          }
+          if (!cursor.parentCardId) break
+          cursor = forest.cards.get(cursor.parentCardId)
+          hops += 1
+        }
+        this.emitCompatEvent({
+          type: 'engine_note',
+          session_id: sessionId,
+          agent_id: info.agentId,
+          agent_name: info.agentName,
+          step_id: stepId,
+          step_description: stepDescription,
+          text,
+          severity,
+        })
+        return
+      }
+
+      // progress / heartbeat / escalation — renderer doesn't currently surface
+      // these. Keep them as a no-op so they don't pollute logs.
       default:
         return
     }
