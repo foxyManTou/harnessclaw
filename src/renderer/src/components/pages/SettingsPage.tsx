@@ -7,7 +7,8 @@ import {
   Search, Cpu,
   Bot, Radio, Wrench, FileText,
   Pause, Play, RotateCcw, AlertTriangle,
-  ChevronDown, ChevronRight, ExternalLink
+  ChevronDown, ChevronRight, ExternalLink,
+  SlidersHorizontal
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { NoticeToast } from '../common/NoticeToast'
@@ -2119,9 +2120,7 @@ function mergeLogEntries(current: LogEntry[], incoming: LogEntry[]): LogEntry[] 
 }
 
 function LogsSection() {
-  const { config, loading, updateConfig } = useAppConfig()
-  const logging = (config?.logging || {}) as { level?: LogViewerLevel }
-  const persistedLevel = logging.level || 'info'
+  const { loading } = useAppConfig()
 
   const [selectedLevel, setSelectedLevel] = useState<LogViewerLevel>('info')
   const [selectedFile, setSelectedFile] = useState<LogViewerFile>('all')
@@ -2157,12 +2156,6 @@ function LogsSection() {
       node.scrollTop = node.scrollHeight
     })
   }, [viewMode, displayedEntries])
-
-  useEffect(() => {
-    if (!loading) {
-      setSelectedLevel(persistedLevel)
-    }
-  }, [loading, persistedLevel])
 
   useEffect(() => {
     if (loading) return
@@ -2227,13 +2220,12 @@ function LogsSection() {
   const handleLevelChange = (value: string) => {
     const nextLevel = value as LogViewerLevel
     setSelectedLevel(nextLevel)
-    updateConfig({ logging: { ...logging, level: nextLevel } })
   }
 
   const handleReset = () => {
     setQuery('')
     setSelectedFile('all')
-    setSelectedLevel(persistedLevel)
+    setSelectedLevel('info')
     setFollowMode(true)
     setViewMode('parsed')
     setExpandedRows({})
@@ -2269,7 +2261,7 @@ function LogsSection() {
   return (
     <div className="h-full overflow-hidden">
       <div className="h-full max-w-5xl mx-auto px-8 py-8 flex flex-col">
-        <SectionHeader icon={FileText} title="日志" subtitle="统一查看 latest.log，支持按等级、模块与关键词筛选。" />
+        <SectionHeader icon={FileText} title="日志" subtitle="统一查看 latest.log，等级仅用于筛选当前展示，不会更改日志记录等级（请前往「软件设置」调整）。" />
 
         <div className="rounded-2xl border border-border bg-card shadow-sm p-4 mb-5">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
@@ -2470,9 +2462,47 @@ function LogsSection() {
   )
 }
 
+// ─── Software Section ──────────────────────────────────────────────────────
+
+function SoftwareSection() {
+  const { config, loading, updateConfig } = useAppConfig()
+  const logging = (config?.logging || {}) as { level?: LogViewerLevel }
+  const persistedLevel = logging.level || 'info'
+
+  const handleLevelChange = (value: string) => {
+    updateConfig({ logging: { ...logging, level: value as LogViewerLevel } })
+  }
+
+  if (loading) {
+    return <div className="flex items-center justify-center py-20"><Loader2 size={20} className="animate-spin text-muted-foreground" /></div>
+  }
+
+  return (
+    <div>
+      <SectionHeader icon={SlidersHorizontal} title="软件设置" subtitle="应用级别的运行选项" />
+      <GroupCard title="日志">
+        <SettingRow label="日志等级" description="控制写入日志文件的最低等级。等级越低，记录的内容越详细（fatal 最少，trace 最多）。">
+          <SelectInput
+            value={persistedLevel}
+            onChange={handleLevelChange}
+            options={[
+              { label: '致命 (fatal)', value: 'fatal' },
+              { label: '错误 (error)', value: 'error' },
+              { label: '警告 (warn)', value: 'warn' },
+              { label: '标准 (info)', value: 'info' },
+              { label: '调试 (debug)', value: 'debug' },
+              { label: '追踪 (trace)', value: 'trace' },
+            ]}
+          />
+        </SettingRow>
+      </GroupCard>
+    </div>
+  )
+}
+
 // ─── Nav ───────────────────────────────────────────────────────────────────
 
-type SectionKey = 'connection' | 'auth' | 'models' | 'agents' | 'channels' | 'tools' | 'ui' | 'storage' | 'logs' | 'updates'
+type SectionKey = 'connection' | 'auth' | 'models' | 'agents' | 'channels' | 'tools' | 'ui' | 'storage' | 'logs' | 'updates' | 'software'
 
 const navGroups: { title: string; items: { key: SectionKey; icon: React.ElementType; label: string }[] }[] = [
   {
@@ -2487,10 +2517,11 @@ const navGroups: { title: string; items: { key: SectionKey; icon: React.ElementT
   {
     title: '应用配置',
     items: [
-      { key: 'updates', icon: RotateCcw, label: '应用更新' },
+      { key: 'software', icon: SlidersHorizontal, label: '软件设置' },
       { key: 'logs', icon: FileText, label: '日志' },
       { key: 'ui', icon: Palette, label: 'UI 设置' },
       { key: 'storage', icon: HardDrive, label: '数据与存储' },
+      { key: 'updates', icon: RotateCcw, label: '应用更新' },
     ],
   },
 ]
@@ -2558,6 +2589,7 @@ export function SettingsPage() {
             {active === 'agents' && <AgentSection />}
             {active === 'tools' && <ToolsSection />}
             {active === 'updates' && <UpdateSection />}
+            {active === 'software' && <SoftwareSection />}
             {active === 'ui' && <UISection />}
             {active === 'storage' && <StorageSection />}
           </div>
