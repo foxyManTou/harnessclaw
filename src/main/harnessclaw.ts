@@ -319,10 +319,19 @@ export class HarnessclawClient extends EventEmitter {
         const sessionId = typeof envelope.session_id === 'string' && envelope.session_id
           ? envelope.session_id
           : (typeof msg.session_id === 'string' ? msg.session_id : this.defaultSessionId)
-        logEngineFrame('recv', msg, {
-          sessionId,
-          type: typeof msg.type === 'string' ? msg.type : '',
-        })
+        const msgType = typeof msg.type === 'string' ? msg.type : ''
+        const innerPayload = isPlainObject(msg.payload) ? msg.payload : null
+        const innerKind =
+          innerPayload && typeof innerPayload.kind === 'string' ? innerPayload.kind : ''
+        const isPong =
+          msgType === 'pong' ||
+          (msgType === 'session.event' && innerKind === 'pong')
+        if (!isPong) {
+          logEngineFrame('recv', msg, {
+            sessionId,
+            type: msgType,
+          })
+        }
         this.handleMessage(msg)
       } catch (e) {
         writeAppLog('error', 'harnessclaw-engine.ws', 'Failed to parse websocket frame', {
@@ -2100,7 +2109,6 @@ export class HarnessclawClient extends EventEmitter {
 
         this.pendingPongWaiters.push(waiter)
         const payload = { type: 'ping', event_id: makeEventId() }
-        logEngineFrame('send', payload, { type: 'ping' })
         this.ws?.send(JSON.stringify(payload), (error) => {
           if (!error) return
           const index = this.pendingPongWaiters.indexOf(waiter)
