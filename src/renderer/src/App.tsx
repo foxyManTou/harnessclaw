@@ -10,6 +10,7 @@ import { ProjectWorkspacePage } from './components/pages/ProjectWorkspacePage'
 import { SkillsPage } from './components/pages/SkillsPage'
 import { SettingsPage } from './components/pages/SettingsPage'
 import { TeamPage } from './components/pages/TeamPage'
+import { XLabPage } from './components/pages/XLabPage'
 
 function RouteLogger() {
   const location = useLocation()
@@ -56,6 +57,7 @@ function RoutedContent() {
           <Route path="/chat" element={null} />
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/projects/:projectId" element={<ProjectWorkspacePage />} />
+          <Route path="/x-lab" element={<XLabPage />} />
           <Route path="/skills" element={<SkillsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/team" element={<TeamPage />} />
