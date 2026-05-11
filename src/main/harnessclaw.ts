@@ -1367,6 +1367,45 @@ export class HarnessclawClient extends EventEmitter {
     }
   }
 
+  // Container-type cards may receive a synthetic card.close{status:"failed",
+  // error.type:"orphan_timeout"} from the server's watchdog while their
+  // sub-tree (sub-agent, step, tool) is still actively running — this has
+  // been observed for Specialists/Task tool cards and the plan/step/agent
+  // cards beneath them. The server is fixing the root cause (P0+P1), but
+  // we keep a defense-in-depth filter here so any future regression where a
+  // container card receives a fake orphan_timeout close while it still has
+  // live children won't surface to the user as a misleading "failed" state.
+  private isFalseOrphanClose(
+    forest: SessionForest,
+    cardId: string,
+    cardKind: string,
+    status: string,
+    errorInfo: Record<string, unknown> | undefined,
+  ): boolean {
+    if (status !== 'failed' && status !== 'error') return false
+    const errorType = errorInfo && typeof errorInfo.type === 'string' ? errorInfo.type : ''
+    if (errorType !== 'orphan_timeout') return false
+    // Only protect container-type cards that legitimately wrap a sub-tree.
+    if (cardKind !== 'tool' && cardKind !== 'agent' && cardKind !== 'plan' && cardKind !== 'step') {
+      return false
+    }
+    // Walk the card forest looking for any descendant that has not yet been
+    // closed (status unset). Direct + transitive check via BFS.
+    const queue: string[] = [cardId]
+    const seen = new Set<string>(queue)
+    while (queue.length > 0) {
+      const current = queue.shift() as string
+      for (const candidate of forest.cards.values()) {
+        if (candidate.parentCardId !== current) continue
+        if (seen.has(candidate.cardId)) continue
+        seen.add(candidate.cardId)
+        if (!candidate.status) return true
+        queue.push(candidate.cardId)
+      }
+    }
+    return false
+  }
+
   // ─── card.close ──────────────────────────────────────────────────────
   private handleCardClose(
     sessionId: string,
@@ -1385,6 +1424,20 @@ export class HarnessclawClient extends EventEmitter {
     const status = typeof args.payload.status === 'string' ? args.payload.status : 'ok'
     const inner = isPlainObject(args.payload.inner) ? args.payload.inner : {}
     const errorInfo = isPlainObject(args.payload.error) ? args.payload.error : undefined
+
+    // Defense-in-depth: suppress synthetic orphan_timeout failures emitted
+    // while the card still has live children. Don't update card.status, don't
+    // emit any compat event — a real terminal close (if any) will arrive
+    // later and be processed normally.
+    if (this.isFalseOrphanClose(forest, args.cardId, args.cardKind, status, errorInfo)) {
+      writeAppLog('warn', 'harnessclaw-engine.session', 'Suppressed false orphan_timeout card.close (children still open)', {
+        sessionId,
+        cardId: args.cardId,
+        cardKind: args.cardKind,
+        traceId: args.traceId,
+      })
+      return
+    }
 
     if (card) {
       card.status = status
