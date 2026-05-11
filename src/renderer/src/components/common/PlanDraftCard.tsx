@@ -4,7 +4,6 @@ import {
   Trash2,
   Plus,
   ArrowRight,
-  CheckCircle2,
   GripVertical,
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
@@ -107,26 +106,58 @@ export function PlanDraftCard({
     e.dataTransfer.effectAllowed = 'move'
   }
 
+  // `dragOverIdx` is a *gap* position in the range 0..steps.length, NOT an
+  // item index. `0` = before the first item, `steps.length` = after the last
+  // item. Using gap positions lets the user drag any row to truly become the
+  // last row by hovering over the lower half of the last item (which would
+  // otherwise be impossible if we only tracked "insert before item i").
   const handleDragOver = (e: React.DragEvent, idx: number) => {
     if (readonly) return
     e.preventDefault()
-    if (dragOverIdx !== idx) setDragOverIdx(idx)
+    e.dataTransfer.dropEffect = 'move'
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    const isAfter = e.clientY - rect.top > rect.height / 2
+    const target = isAfter ? idx + 1 : idx
+    if (dragOverIdx !== target) setDragOverIdx(target)
   }
 
-  const handleDrop = (e: React.DragEvent, idx: number) => {
+  // Only clear dragOverIdx when the cursor truly leaves the entire list,
+  // not when it crosses between sibling items / inner children. Without this
+  // guard, native HTML5 DnD fires `dragleave` on the parent every time the
+  // cursor enters a child node, causing the indicator to flicker on/off.
+  const handleListDragLeave = (e: React.DragEvent) => {
+    if (readonly) return
+    const related = e.relatedTarget as Node | null
+    if (!related || !(e.currentTarget as Node).contains(related)) {
+      setDragOverIdx(null)
+    }
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
-    setDragOverIdx(null)
-    if (readonly || draggedIdx === null || draggedIdx === idx) {
+    const target = dragOverIdx
+    if (readonly || draggedIdx === null || target === null) {
       setDraggedIdx(null)
+      setDragOverIdx(null)
+      return
+    }
+    // Dropping at own position or immediately after own position is a no-op
+    // (both refer to "stay where you are").
+    if (target === draggedIdx || target === draggedIdx + 1) {
+      setDraggedIdx(null)
+      setDragOverIdx(null)
       return
     }
     setSteps((curr) => {
       const next = [...curr]
       const [removed] = next.splice(draggedIdx, 1)
-      next.splice(idx, 0, removed)
+      // Removing an earlier element shifts every later gap down by one.
+      const insertAt = draggedIdx < target ? target - 1 : target
+      next.splice(insertAt, 0, removed)
       return next
     })
     setDraggedIdx(null)
+    setDragOverIdx(null)
   }
 
   const handleDragEnd = () => {
@@ -144,21 +175,9 @@ export function PlanDraftCard({
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border bg-muted/40 px-5 py-4">
         <div className="flex flex-col gap-0.5">
-          <span className="text-[10px] font-black uppercase tracking-[0.1em] text-muted-foreground">
+          <span className="whitespace-nowrap text-[10px] font-black uppercase tracking-[0.1em] text-muted-foreground">
             Task Draft
           </span>
-          <h4 className="flex items-center gap-2 text-[15px] font-bold text-foreground">
-            {isConfirmed ? (
-              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 text-white">
-                <CheckCircle2 size={12} strokeWidth={3} />
-              </span>
-            ) : (
-              <span className="flex h-5 w-5 items-center justify-center rounded bg-primary text-[10px] font-bold text-primary-foreground">
-                P1
-              </span>
-            )}
-            执行计划
-          </h4>
         </div>
         {plan.rationale && (
           <span className="ml-3 truncate text-[11px] text-muted-foreground" title={plan.rationale}>
@@ -178,7 +197,7 @@ export function PlanDraftCard({
       )}
 
       {/* Steps */}
-      <div className="space-y-1 p-3">
+      <div className="space-y-1 p-3" onDragLeave={handleListDragLeave}>
         {steps.length === 0 && (
           <div className="px-2.5 py-4 text-center text-[12px] text-muted-foreground">
             没有步骤,可以点击下方「+ 添加步骤」补充。
@@ -187,26 +206,50 @@ export function PlanDraftCard({
         {steps.map((step, idx) => (
           <div
             key={step.id}
-            className={cn(
-              'flex flex-col transition-all duration-200',
-              dragOverIdx === idx && draggedIdx !== idx && 'pt-2',
-            )}
+            className="relative flex flex-col"
             onDragOver={(e) => handleDragOver(e, idx)}
-            onDrop={(e) => handleDrop(e, idx)}
-            onDragLeave={() => setDragOverIdx(null)}
+            onDrop={handleDrop}
           >
-            {dragOverIdx === idx && draggedIdx !== idx && (
-              <div className="mx-8 mb-1.5 h-0.5 animate-pulse rounded-full bg-primary" />
+            {/* Top insertion indicator (gap === idx). Absolutely positioned
+                in the gap above the item so toggling visibility never shifts
+                layout — which would otherwise feed back into the cursor
+                crossing item boundaries and produce flicker. */}
+            <div
+              aria-hidden
+              className={cn(
+                'pointer-events-none absolute inset-x-8 -top-1 h-0.5 rounded-full bg-primary transition-opacity duration-150',
+                dragOverIdx === idx
+                  && draggedIdx !== null
+                  && draggedIdx !== idx
+                  && draggedIdx + 1 !== idx
+                  ? 'opacity-100'
+                  : 'opacity-0',
+              )}
+            />
+            {/* Bottom indicator on the last row (gap === steps.length) so
+                "drop after the last row" is reachable / visible. */}
+            {idx === steps.length - 1 && (
+              <div
+                aria-hidden
+                className={cn(
+                  'pointer-events-none absolute inset-x-8 -bottom-1 h-0.5 rounded-full bg-primary transition-opacity duration-150',
+                  dragOverIdx === steps.length
+                    && draggedIdx !== null
+                    && draggedIdx !== idx
+                    ? 'opacity-100'
+                    : 'opacity-0',
+                )}
+              />
             )}
             <div
               draggable={!readonly}
               onDragStart={(e) => handleDragStart(e, idx)}
               onDragEnd={handleDragEnd}
               className={cn(
-                'group relative flex items-start gap-3 rounded-xl border border-transparent p-2.5 transition-all duration-300',
+                'group relative flex items-start gap-3 rounded-xl border border-transparent p-2.5 transition-colors duration-150',
                 !readonly && 'hover:bg-muted/50',
-                draggedIdx === idx && 'scale-[0.98] border-dashed border-primary/40 opacity-20',
-                dragOverIdx === idx && draggedIdx !== idx && 'scale-[1.01] border-primary/30 bg-primary/5',
+                draggedIdx === idx && 'border-dashed border-primary/40 opacity-30',
+                dragOverIdx === idx && draggedIdx !== idx && 'border-primary/30 bg-primary/5',
               )}
             >
               {!readonly && (
