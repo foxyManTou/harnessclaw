@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { CheckSquare, Copy, FolderMinus, FolderPlus, MessageSquare, MoreHorizontal, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { ConfirmDeleteSessionDialog } from '../common/ConfirmDeleteSessionDialog'
 
 interface SessionRow extends DbSessionRow {
   messageCount: number
@@ -17,6 +18,16 @@ interface FloatingMenuState {
 interface AssignProjectDialogState {
   sessionId: string
 }
+
+/**
+ * Pending destructive confirmation surfaced via ConfirmDeleteSessionDialog.
+ * `single` deletes one session and reuses the dialog's default
+ * "「{title}」的所有消息..." copy; `batch` deletes the current multi-select
+ * and overrides the description to "所选的 X 条对话…".
+ */
+type PendingDeleteConfirm =
+  | { kind: 'single'; sessionId: string; title: string }
+  | { kind: 'batch'; count: number }
 
 const FLOATING_MENU_WIDTH = 132
 const FLOATING_MENU_HEIGHT = 120
@@ -41,6 +52,7 @@ export function SessionsPage() {
   const [renameValue, setRenameValue] = useState('')
   const [projects, setProjects] = useState<DbProjectRow[]>([])
   const [assignDialog, setAssignDialog] = useState<AssignProjectDialogState | null>(null)
+  const [deleteConfirm, setDeleteConfirm] = useState<PendingDeleteConfirm | null>(null)
   const skipNextReloadCountRef = useRef(0)
   const floatingMenuRef = useRef<HTMLDivElement | null>(null)
   const dragSelectRef = useRef<{ active: boolean; adding: boolean; visited: Set<string> }>({ active: false, adding: true, visited: new Set() })
@@ -590,7 +602,10 @@ export function SessionsPage() {
                     复制
                   </button>
                   <button
-                    onClick={() => void handleDeleteSelectedSessions()}
+                    onClick={() => {
+                      if (selectedCount === 0) return
+                      setDeleteConfirm({ kind: 'batch', count: selectedCount })
+                    }}
                     disabled={selectedCount === 0}
                     className={cn(
                       'inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors',
@@ -661,7 +676,14 @@ export function SessionsPage() {
             </button>
           )}
           <button
-            onClick={() => void handleDeleteSession(activeMenuSession.session_id)}
+            onClick={() => {
+              setDeleteConfirm({
+                kind: 'single',
+                sessionId: activeMenuSession.session_id,
+                title: getSessionLabel(activeMenuSession.title, activeMenuSession.session_id),
+              })
+              setMenuState(null)
+            }}
             className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-600 transition-colors hover:bg-red-50 dark:hover:bg-red-950/20"
           >
             <Trash2 size={14} />
@@ -720,6 +742,28 @@ export function SessionsPage() {
         </div>,
         document.body
       )}
+
+      <ConfirmDeleteSessionDialog
+        open={deleteConfirm !== null}
+        title={deleteConfirm?.kind === 'single' ? deleteConfirm.title : undefined}
+        description={
+          deleteConfirm?.kind === 'batch'
+            ? `所选的 ${deleteConfirm.count} 条对话的所有消息与历史将被永久删除，且无法恢复。`
+            : undefined
+        }
+        onCancel={() => setDeleteConfirm(null)}
+        onConfirm={() => {
+          if (!deleteConfirm) return
+          if (deleteConfirm.kind === 'single') {
+            const sessionId = deleteConfirm.sessionId
+            setDeleteConfirm(null)
+            void handleDeleteSession(sessionId)
+          } else {
+            setDeleteConfirm(null)
+            void handleDeleteSelectedSessions()
+          }
+        }}
+      />
     </>
   )
 }

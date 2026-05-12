@@ -15,15 +15,25 @@ import { Trash2 } from 'lucide-react'
 export function ConfirmDeleteSessionDialog({
   open,
   title,
+  description,
   onCancel,
   onConfirm,
 }: {
   open: boolean
-  title: string
+  /** Session title used to build the default single-session description. */
+  title?: string
+  /**
+   * Explicit description text. When provided it overrides the auto-built
+   * "「{title}」的所有消息..." line — used by callers that need different
+   * wording such as batch-delete ("所选的 N 条对话…").
+   */
+  description?: string
   onCancel: () => void
   onConfirm: () => void
 }) {
   if (!open) return null
+
+  const descriptionText = description ?? `「${title ?? ''}」的所有消息与历史将被永久删除，且无法恢复。`
 
   return createPortal(
     <div
@@ -40,7 +50,7 @@ export function ConfirmDeleteSessionDialog({
           <div className="min-w-0 flex-1">
             <h3 className="text-base font-semibold text-foreground">确认删除对话？</h3>
             <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">
-              「{title}」的所有消息与历史将被永久删除，且无法恢复。
+              {descriptionText}
             </p>
           </div>
         </div>
