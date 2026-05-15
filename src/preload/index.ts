@@ -45,6 +45,7 @@ const appRuntimeAPI = {
     limit?: number
   }) => ipcRenderer.invoke('app-runtime:getLogs', options),
   openLogsDirectory: () => ipcRenderer.invoke('app-runtime:openLogsDirectory'),
+  openDatabaseLocation: (path?: string) => ipcRenderer.invoke('app-runtime:openDatabaseLocation', path),
   logRenderer: (level: 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal', message: string, details?: Record<string, unknown>) =>
     ipcRenderer.invoke('app-runtime:logRenderer', level, message, details),
   trackUsage: (entry: {
@@ -164,6 +165,99 @@ const agentAPI = {
   probe: (port?: number) => ipcRenderer.invoke('console:probe', port),
   setPort: (port: number) => ipcRenderer.invoke('console:setPort', port),
   getPort: () => ipcRenderer.invoke('console:getPort'),
+  /**
+   * Session Metrics API — GET /api/v1/sessions/{id}/metrics on the same
+   * Console host:port. Proxied through main IPC so the renderer doesn't
+   * have to broaden its CSP. Resolves with the engine's `SessionStats`
+   * on success or `{ ok: false, error: ... }` on 4xx / 5xx / network
+   * failure.
+   */
+  getSessionMetrics: (sessionId: string) =>
+    ipcRenderer.invoke('console:getSessionMetrics', sessionId),
+  /**
+   * Model Registry API — GET /api/v1/models on the Console port.
+   * Proxied through main IPC to avoid CORS/CSP issues. Resolves with
+   * `{ ok: true, data }` on success or `{ ok: false, error, ... }`
+   * on failure. See harnessclaw-engine/docs/api/models-registry-api.md.
+   */
+  listRegistryModels: () => ipcRenderer.invoke('console:listRegistryModels'),
+  /**
+   * Providers Management API — hot-edit providers + the top-level
+   * `agent` block (primary + fallback_chain + tuning defaults) at
+   * runtime. See harnessclaw-engine/docs/api/providers-management-api.md.
+   * Engine 2026-05-14+: management routes are always mounted; a 404
+   * means the path is wrong, not "API gated on chain length".
+   */
+  listProviders: () => ipcRenderer.invoke('console:listProviders'),
+  // POST /providers — engine creates a brand-new provider entry. Used
+  // when the user picks a vendor that isn't yet in the engine's
+  // `llm.providers.*` map (DeepSeek, Google, Kimi, GLM, MiniMax …).
+  // Constraints: `name` must NOT contain `:` or `.`;
+  // `type` ∈ {openai, anthropic, gemini}.
+  createProvider: (payload: {
+    name: string
+    type: 'openai' | 'anthropic' | 'gemini'
+    base_url?: string
+    api_key?: string
+    disabled?: boolean
+  }) => ipcRenderer.invoke('console:createProvider', payload),
+  getFallbackChain: () => ipcRenderer.invoke('console:getFallbackChain'),
+  updateFallbackChain: (chain: string[]) =>
+    ipcRenderer.invoke('console:updateFallbackChain', chain),
+  // GET /api/v1/agent — full agent block (primary + fallback_chain
+  // + max_tokens / temperature / context_window + entries[] health).
+  // Engine 2026-05-14+. Replaces the old /fallback-chain endpoint.
+  getAgentConfig: () => ipcRenderer.invoke('console:getAgentConfig'),
+  // PATCH /api/v1/agent — partial update. Any subset of
+  // {primary, fallback_chain, max_tokens, temperature, context_window}.
+  // Omitted fields are left unchanged. `fallback_chain: []` explicitly
+  // clears the fallback (distinct from "not passed"). temperature is
+  // canonical [0, 1] — engine rescales to provider-native range.
+  patchAgentConfig: (patch: {
+    primary?: string
+    fallback_chain?: string[]
+    max_tokens?: number
+    temperature?: number
+    context_window?: number
+  }) => ipcRenderer.invoke('console:patchAgentConfig', patch),
+  // PATCH /providers/{p} — credentials (type / api_key / base_url) or
+  // `disabled` flag (engine 2026-05-14+: toggles all endpoints under
+  // this provider in one shot).
+  patchProvider: (
+    name: string,
+    patch: {
+      type?: 'openai' | 'anthropic' | 'gemini'
+      api_key?: string
+      base_url?: string
+      disabled?: boolean
+    },
+  ) => ipcRenderer.invoke('console:patchProvider', name, patch),
+  listEndpoints: (providerName: string) =>
+    ipcRenderer.invoke('console:listEndpoints', providerName),
+  createEndpoint: (
+    providerName: string,
+    payload: {
+      name: string
+      model: string
+      max_tokens?: number
+      temperature?: number
+      enable_thinking?: boolean | null
+      disabled?: boolean
+    },
+  ) => ipcRenderer.invoke('console:createEndpoint', providerName, payload),
+  patchEndpoint: (
+    providerName: string,
+    endpointName: string,
+    patch: {
+      model?: string
+      max_tokens?: number
+      temperature?: number
+      enable_thinking?: boolean | null
+      disabled?: boolean
+    },
+  ) => ipcRenderer.invoke('console:patchEndpoint', providerName, endpointName, patch),
+  deleteEndpoint: (providerName: string, endpointName: string) =>
+    ipcRenderer.invoke('console:deleteEndpoint', providerName, endpointName),
 }
 
 if (process.contextIsolated) {

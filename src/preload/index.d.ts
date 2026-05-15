@@ -77,6 +77,7 @@ interface AppRuntimeAPI {
   getLogLevel: () => Promise<LogViewerThreshold>
   getLogs: (options?: GetLogsOptions) => Promise<GetLogsResult>
   openLogsDirectory: () => Promise<{ ok: boolean; path: string; error?: string }>
+  openDatabaseLocation: (path?: string) => Promise<{ ok: boolean; path: string; error?: string }>
   logRenderer: (level: RuntimeLogLevel, message: string, details?: Record<string, unknown>) => Promise<{ ok: boolean }>
   trackUsage: (entry: {
     category: string
@@ -309,6 +310,228 @@ interface ConsoleResponse<T = unknown> {
   message?: string
 }
 
+// Session Metrics API — see harnessclaw-engine/docs/api/session-metrics-api.md.
+interface SessionMetricsContextWindow {
+  used: number
+  limit: number
+  history: number
+  tool_results: number
+  system_prompt: number
+}
+
+interface SessionMetricsPerModel {
+  model: string
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  thinking_tokens: number
+  llm_calls: number
+}
+
+interface SessionMetricsSubAgent {
+  agent_run_id: string
+  agent_id: string
+  agent_type: string
+  model: string
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  thinking_tokens: number
+  total_tokens: number
+  llm_calls: number
+  duration_ms: number
+  status: string
+}
+
+interface SessionMetricsStats {
+  session_id: string
+  updated_at: string
+  input_tokens: number
+  output_tokens: number
+  latency_ms_total: number
+  latency_ms_avg: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  cache_hit_rate: number
+  thinking_tokens: number
+  thinking_share: number
+  context_window: SessionMetricsContextWindow
+  per_model: SessionMetricsPerModel[]
+  subagents: SessionMetricsSubAgent[]
+  llm_calls: number
+  tool_calls: number
+}
+
+type SessionMetricsResult =
+  | { ok: true; data: SessionMetricsStats }
+  | { ok: false; status: number; error: string; message?: string }
+
+// Model Registry API — see harnessclaw-engine/docs/api/models-registry-api.md.
+interface RegistryModelSupports {
+  vision?: boolean
+  pdf_input?: boolean
+  audio_input?: boolean
+  audio_output?: boolean
+  video_input?: boolean
+  streaming?: boolean
+  function_calling?: boolean
+  parallel_function_calling?: boolean
+  tool_choice?: boolean
+  computer_use?: boolean
+  reasoning?: boolean
+  reasoning_can_disable?: boolean
+  reasoning_effort_levels?: string[]
+  web_search?: boolean
+  prompt_caching?: boolean
+  explicit_cache_control?: boolean
+  [key: string]: unknown
+}
+
+interface RegistryModelLimits {
+  context_window?: number
+  max_input_tokens?: number
+  max_output_tokens?: number
+  max_reasoning_tokens?: number | null
+}
+
+interface RegistryModelDefaults {
+  temperature?: number
+  top_p?: number
+  max_output_tokens_default?: number
+  [key: string]: unknown
+}
+
+interface RegistryModel {
+  id: string
+  provider: string
+  model_id: string
+  display_name?: string
+  family?: string
+  generation?: string
+  knowledge_cutoff?: string
+  modalities?: { input?: string[]; output?: string[] }
+  supports?: RegistryModelSupports
+  limits?: RegistryModelLimits
+  defaults?: RegistryModelDefaults
+}
+
+type RegistryModelsResult =
+  | { ok: true; data: RegistryModel[] }
+  | { ok: false; status: number; error: string; message?: string }
+
+type ProviderType = 'openai' | 'anthropic' | 'gemini'
+
+interface ProviderEndpointInfo {
+  name: string
+  model: string
+  max_tokens?: number
+  temperature?: number
+  enable_thinking?: boolean | null
+  // Engine 2026-05-14+: when true the endpoint stays in chain but the
+  // dispatcher skips it (no auto-recovery). Used as the canonical
+  // enable/disable flag instead of DELETE-then-recreate.
+  disabled?: boolean
+  in_chain: boolean
+}
+
+interface ProviderInfo {
+  name: string
+  type: ProviderType
+  base_url: string
+  api_key: string
+  // Engine 2026-05-14+: true = whole provider paused, dispatcher
+  // skips every endpoint under it regardless of per-endpoint state.
+  disabled?: boolean
+  endpoints: ProviderEndpointInfo[]
+}
+
+interface ProviderChainEntry {
+  index: number
+  name: string
+  provider: string
+  endpoint: string
+  state: 'healthy' | 'tripped' | 'ready_to_probe'
+  // Engine 2026-05-14+: GET /agent entries include this flag.
+  // Effective disabled = provider.disabled OR endpoint.disabled.
+  // Orthogonal to `state` — dispatcher skips any disabled entry.
+  disabled?: boolean
+  tripped_until?: string
+  cooldown_seconds: number
+  consecutive_failures: number
+}
+
+// Flat-chain shape the renderer's drag list still uses. The main
+// process adapts it on the fly from /api/v1/agent's
+// `{primary, fallback_chain}` split.
+interface ProviderChain {
+  chain: string[]
+  entries: ProviderChainEntry[]
+}
+
+interface ProviderCreatePayload {
+  name: string
+  type: ProviderType
+  base_url?: string
+  api_key?: string
+  disabled?: boolean
+}
+
+interface ProviderPatchPayload {
+  type?: ProviderType
+  api_key?: string
+  base_url?: string
+  disabled?: boolean
+}
+
+interface EndpointCreatePayload {
+  name: string
+  model: string
+  max_tokens?: number
+  temperature?: number
+  enable_thinking?: boolean | null
+  disabled?: boolean
+}
+
+interface EndpointPatchPayload {
+  model?: string
+  max_tokens?: number
+  temperature?: number
+  enable_thinking?: boolean | null
+  disabled?: boolean
+}
+
+// Engine 2026-05-14+ top-level `agent` block. The full payload of
+// GET /api/v1/agent. `entries[]` covers `[primary, ...fallback_chain]`
+// in order. Tuning fields apply at agent-scope and are baked into
+// adapter defaults on PATCH (see API doc "调用参数生效规则").
+interface AgentConfigInfo {
+  primary: string
+  fallback_chain: string[]
+  max_tokens?: number
+  // Canonical range [0, 1]; engine rescales per provider type
+  // (anthropic ×1, openai/gemini ×2). 0 means "fall back to endpoint
+  // self-Temperature in native range".
+  temperature?: number
+  context_window?: number
+  entries: ProviderChainEntry[]
+}
+
+// PATCH body. Any subset; omitted = unchanged. `fallback_chain: []`
+// explicitly clears the chain (≠ omitted).
+interface AgentPatchPayload {
+  primary?: string
+  fallback_chain?: string[]
+  max_tokens?: number
+  temperature?: number
+  context_window?: number
+}
+
+type ProvidersResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; status: number; error: string; message?: string }
+
 interface AgentApiInterface {
   listAgents: (params?: { agent_type?: string; source?: string; limit?: number; offset?: number }) => Promise<ConsoleResponse<ConsoleAgentDefinition[]>>
   getAgent: (name: string) => Promise<ConsoleResponse<ConsoleAgentDefinition>>
@@ -318,6 +541,38 @@ interface AgentApiInterface {
   probe: (port?: number) => Promise<{ ok: boolean; error?: string }>
   setPort: (port: number) => Promise<{ ok: boolean; port: number }>
   getPort: () => Promise<{ port: number }>
+  getSessionMetrics: (sessionId: string) => Promise<SessionMetricsResult>
+  listRegistryModels: () => Promise<RegistryModelsResult>
+  listProviders: () => Promise<ProvidersResult<{ providers: ProviderInfo[] }>>
+  createProvider: (
+    payload: ProviderCreatePayload,
+  ) => Promise<ProvidersResult<{ providers: ProviderInfo[] }>>
+  getFallbackChain: () => Promise<ProvidersResult<ProviderChain>>
+  updateFallbackChain: (chain: string[]) => Promise<ProvidersResult<ProviderChain>>
+  getAgentConfig: () => Promise<ProvidersResult<AgentConfigInfo>>
+  patchAgentConfig: (
+    patch: AgentPatchPayload,
+  ) => Promise<ProvidersResult<AgentConfigInfo>>
+  patchProvider: (
+    name: string,
+    patch: ProviderPatchPayload,
+  ) => Promise<ProvidersResult<{ providers: ProviderInfo[] }>>
+  listEndpoints: (
+    providerName: string,
+  ) => Promise<ProvidersResult<{ endpoints: ProviderEndpointInfo[] }>>
+  createEndpoint: (
+    providerName: string,
+    payload: EndpointCreatePayload,
+  ) => Promise<ProvidersResult<ProviderEndpointInfo>>
+  patchEndpoint: (
+    providerName: string,
+    endpointName: string,
+    patch: EndpointPatchPayload,
+  ) => Promise<ProvidersResult<ProviderEndpointInfo>>
+  deleteEndpoint: (
+    providerName: string,
+    endpointName: string,
+  ) => Promise<ProvidersResult<void>>
 }
 
 declare global {
