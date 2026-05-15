@@ -274,7 +274,22 @@ export class HarnessclawClient extends EventEmitter {
 
     if (this.ws) {
       this.ws.removeAllListeners()
-      this.ws.terminate()
+      // `ws` emits a synthetic `error` ("WebSocket was closed before the
+      // connection was established") when `terminate()` runs on a socket
+      // that is still in CONNECTING state — typically because the engine
+      // dropped before the handshake completed. After removeAllListeners()
+      // there is no error handler, so EventEmitter would otherwise
+      // rethrow as an uncaughtException and crash the main process. Attach
+      // a no-op listener and guard the synchronous throw so teardown is
+      // silent.
+      this.ws.on('error', () => {})
+      try {
+        this.ws.terminate()
+      } catch (err) {
+        writeAppLog('warn', 'harnessclaw-engine.ws', 'Failed to terminate websocket cleanly', {
+          error: String(err),
+        })
+      }
       this.ws = null
     }
 
@@ -719,6 +734,19 @@ export class HarnessclawClient extends EventEmitter {
           payload: sanitizeForLogging(payload),
         })
         return
+
+      case 'pong': {
+        // v2 §2.3 — bare top-level keep-alive reply: `{"type":"pong"}`. No
+        // envelope, no seq, no business fields. Decoupled from session.event,
+        // so we MUST handle it at the top level — earlier builds only matched
+        // the legacy `session.event(kind=pong)` wrapper and would silently
+        // drop the new wire format, causing every `probe()` to time out and
+        // the connection badge to flap to "disconnected".
+        const waiter = this.pendingPongWaiters.shift()
+        if (waiter) waiter(true)
+        this.emitCompatEvent({ type: 'pong' })
+        return
+      }
     }
 
     if (!forest || !cardId || !cardKind) return
@@ -1635,11 +1663,38 @@ export class HarnessclawClient extends EventEmitter {
         const output = typeof inner.output === 'string'
           ? inner.output
           : typeof args.payload.output === 'string' ? args.payload.output : ''
-        const errMsg = errorInfo && typeof errorInfo.user_message === 'string'
+
+        // v2 §6.5 / §12 — structured ErrorInfo. `error.type` now carries real
+        // categories (invalid_input / permission_denied / tool_timeout /
+        // user_aborted / rate_limit / overloaded / model_error / contract_fail /
+        // dependency_fail / internal). `error.message` is a developer field
+        // (e.g. "unknown tool: WebFetch") and MUST NOT be shown directly to
+        // the user — `error.user_message` is the user-facing string.
+        const userMessage = errorInfo && typeof errorInfo.user_message === 'string'
           ? errorInfo.user_message
-          : (errorInfo && typeof errorInfo.message === 'string' ? errorInfo.message : '')
-        const content = output || errMsg || ''
-        const isError = status === 'failed' || status === 'cancelled' || !!errorInfo
+          : ''
+        const devMessage = errorInfo && typeof errorInfo.message === 'string'
+          ? errorInfo.message
+          : ''
+        const errorType = errorInfo && typeof errorInfo.type === 'string' ? errorInfo.type : undefined
+        const errorCode = errorInfo && typeof errorInfo.code === 'string' ? errorInfo.code : undefined
+        const retryable = errorInfo && typeof errorInfo.retryable === 'boolean' ? errorInfo.retryable : undefined
+        const retryAfterMs = errorInfo && typeof errorInfo.retry_after_ms === 'number' ? errorInfo.retry_after_ms : undefined
+        const recovery = errorInfo && isPlainObject(errorInfo.recovery) ? errorInfo.recovery : undefined
+
+        // Content priority — user-facing text first; raw `output` only used
+        // when there is no structured error (typical success case). This is
+        // a flip from the legacy `output || errMsg` ordering, where the
+        // dev-only `inner.output` ("unknown tool: WebFetch" / similar)
+        // could leak to the user for failed tool calls.
+        const content = status === 'failed'
+          ? (userMessage || output || devMessage || '执行失败')
+          : (output || userMessage || devMessage || '')
+        // `cancelled` / `skipped` are NOT errors — decouple them from the
+        // is_error flag so the renderer can route to a gray "已取消" /
+        // "已跳过" treatment instead of the red error UI.
+        const isError = status === 'failed'
+
         const renderHint = typeof inner.render_hint === 'string'
           ? inner.render_hint
           : (typeof args.payload.render_hint === 'string' ? args.payload.render_hint : (args.hint && typeof args.hint.render_hint === 'string' ? args.hint.render_hint : undefined))
@@ -1651,9 +1706,26 @@ export class HarnessclawClient extends EventEmitter {
         const baseMetadata = isPlainObject(inner.metadata)
           ? { ...inner.metadata }
           : {}
-        const metadata = aggregated.length > 0
-          ? { ...baseMetadata, artifacts: aggregated }
-          : baseMetadata
+        // Fold the structured ErrorInfo into metadata so it round-trips
+        // through the SQLite `metadata_json` column without a schema
+        // migration. Renderer reads this back in `dbRowsToMessages` and
+        // surfaces error.type / retryable / recovery from there after a
+        // restart or session resume.
+        const errorInfoForPersist = errorInfo
+          ? {
+              status,
+              type: errorType,
+              code: errorCode,
+              user_message: userMessage || undefined,
+              message: devMessage || undefined,
+              retryable,
+              retry_after_ms: retryAfterMs,
+              recovery,
+            }
+          : (status !== 'ok' ? { status } : undefined)
+        const metadata: Record<string, unknown> = { ...baseMetadata }
+        if (aggregated.length > 0) metadata.artifacts = aggregated
+        if (errorInfoForPersist) metadata.errorInfo = errorInfoForPersist
 
         if (info.isSubagent) {
           this.emitCompatEvent({
@@ -1675,6 +1747,14 @@ export class HarnessclawClient extends EventEmitter {
               file_path: filePath,
               artifacts: aggregated,
               metadata,
+              error: errorInfo,
+              error_type: errorType,
+              error_code: errorCode,
+              retryable,
+              retry_after_ms: retryAfterMs,
+              recovery,
+              dev_message: devMessage || undefined,
+              user_message: userMessage || undefined,
             },
           })
           return
@@ -1698,6 +1778,19 @@ export class HarnessclawClient extends EventEmitter {
           file_path: filePath,
           metadata,
           error: errorInfo,
+          // Additive v2 fields — top-level for easy consumption by the
+          // renderer's tool_result handler. Existing call sites that read
+          // `is_error` / `content` / `metadata` / `error` keep working
+          // unchanged; new code reads these to drive the categorized
+          // failure presentation (icon, label, color) and the
+          // retryable / retry_after_ms / recovery hints.
+          error_type: errorType,
+          error_code: errorCode,
+          retryable,
+          retry_after_ms: retryAfterMs,
+          recovery,
+          dev_message: devMessage || undefined,
+          user_message: userMessage || undefined,
         })
         return
       }
@@ -2108,7 +2201,10 @@ export class HarnessclawClient extends EventEmitter {
         }, timeoutMs)
 
         this.pendingPongWaiters.push(waiter)
-        const payload = { type: 'ping', event_id: makeEventId() }
+        // v2 §2.3 — keep-alive ping is a bare top-level frame. No envelope,
+        // no event_id, no seq. The server replies with a matching bare
+        // `{"type":"pong"}` (handled at the top level of handleMessage).
+        const payload = { type: 'ping' }
         this.ws?.send(JSON.stringify(payload), (error) => {
           if (!error) return
           const index = this.pendingPongWaiters.indexOf(waiter)
