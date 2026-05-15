@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { useLocation } from 'react-router-dom'
 import {
   Wifi, Shield, Palette, HardDrive,
@@ -8,7 +9,11 @@ import {
   Bot, Radio, Wrench, FileText,
   Pause, Play, RotateCcw, AlertTriangle,
   ChevronDown, ChevronRight, ExternalLink,
-  SlidersHorizontal
+  SlidersHorizontal, RefreshCw, Settings2,
+  Globe, Sun, GripVertical, Plus,
+  // Icons for the "回答风格" preset cards. Target = precise,
+  // Scale = balanced, Lightbulb = flexible, Sparkles = creative.
+  Target, Scale, Lightbulb, Sparkles,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { NoticeToast } from '../common/NoticeToast'
@@ -104,30 +109,6 @@ function GroupCard({ title, children }: { title: string; children: React.ReactNo
   )
 }
 
-function StackedField({
-  label,
-  description,
-  children,
-  className,
-}: {
-  label: string
-  description?: string
-  children: React.ReactNode
-  className?: string
-}) {
-  return (
-    <div className={cn('py-4 border-b border-border last:border-0', className)}>
-      <div className="mb-2.5">
-        <p className="text-sm font-medium text-foreground">{label}</p>
-        {description && (
-          <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
-        )}
-      </div>
-      {children}
-    </div>
-  )
-}
-
 function SectionHeader({
   icon: Icon,
   title,
@@ -190,16 +171,21 @@ function SelectInput({
   value,
   onChange,
   options,
+  className,
 }: {
   value: string
   onChange: (v: string) => void
   options: { label: string; value: string }[]
+  className?: string
 }) {
   return (
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="h-7 px-2 text-sm bg-background border border-border rounded-md outline-none focus:ring-1 focus:ring-ring transition-shadow cursor-pointer text-foreground"
+      className={cn(
+        'h-7 px-2 text-sm bg-background border border-border rounded-md outline-none focus:ring-1 focus:ring-ring transition-shadow cursor-pointer text-foreground',
+        className,
+      )}
     >
       {options.map((o) => (
         <option key={o.value} value={o.value}>
@@ -484,18 +470,936 @@ function AuthSection() {
   )
 }
 
+// ─── Provider 策略 + Fallback Chain Manager ─────────────────────────────────
+//
+// Loads providers/endpoints + the current fallback chain from the engine
+// (Providers Management API). The dropdown lists `auto` + every available
+// `provider:endpoint` ref. When `auto` is selected, the chain manager is
+// rendered below: drag to reorder, "添加节点" menu (top-right) to append from
+// the remaining available endpoints, "x" to remove. Mutations call
+// PUT /api/v1/fallback-chain via the IPC bridge; UI updates optimistically
+// and rolls back on failure. If the engine returns 404 (chain has <2
+// entries → engine doesn't mount the management API) we show a disabled
+// hint instead of an empty list.
+
+interface ProviderEndpointRef {
+  ref: string
+  provider: string
+  endpoint: string
+  model?: string
+  type: ProviderType
+  // Engine 2026-05-14+ provider.disabled. Endpoints under a disabled
+  // provider are completely skipped by the dispatcher (effective
+  // disabled = provider.disabled || endpoint.disabled), so the
+  // fallback-chain "add node" menu hides them — picking one would
+  // produce a chain entry that can never route.
+  providerDisabled?: boolean
+}
+
+const PROTOCOL_GROUPS: { type: ProviderType; label: string }[] = [
+  { type: 'anthropic', label: 'Anthropic 协议' },
+  { type: 'openai', label: 'OpenAI 协议' },
+  { type: 'gemini', label: 'Gemini 协议' },
+]
+
+// Engine 2026-05-14+: routing is `agent.primary` (single endpoint) +
+// optional `agent.fallback_chain` (ordered backup list). This row
+// surfaces both:
+//   • A SelectInput for `agent.primary` (no "auto" option — primary
+//     is always a concrete endpoint per the new agent block).
+//   • A Toggle that gates the fallback drag-list. OFF clears
+//     fallback_chain; ON keeps the chain UI visible so the user can
+//     add backup endpoints. Local toggle state is needed because the
+//     engine's chain.length==1 state alone can't distinguish "user
+//     wants no fallback" from "user wants fallback but hasn't picked
+//     nodes yet".
+function ProviderStrategyRow({
+  onNavigateToModels,
+  blinkPrimarySignal,
+}: {
+  // Settings-page navigation callback. Wired up by the parent so the
+  // "跳转设置" affordance can switch to the 模型配置 section without
+  // ProviderStrategyRow needing to know about react-router.
+  onNavigateToModels?: () => void
+  // Monotonically-increasing counter. Each increment briefly flashes
+  // the 主 Provider dropdown to draw the user's eye when they jump in
+  // from the 模型配置 page's "去配置 Agent LLM 节点" affordance.
+  blinkPrimarySignal?: number
+}) {
+  const [blinkingPrimary, setBlinkingPrimary] = useState(false)
+  useEffect(() => {
+    if (blinkPrimarySignal === undefined || blinkPrimarySignal === 0) return
+    setBlinkingPrimary(true)
+    const timer = setTimeout(() => setBlinkingPrimary(false), 1300)
+    return () => clearTimeout(timer)
+  }, [blinkPrimarySignal])
+  const [providers, setProviders] = useState<ProviderInfo[]>([])
+  const [chain, setChain] = useState<string[]>([])
+  const [chainEntries, setChainEntries] = useState<ProviderChainEntry[]>([])
+  const [loading, setLoading] = useState(true)
+  const [unavailable, setUnavailable] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [addOpen, setAddOpen] = useState(false)
+  const [fallbackEnabled, setFallbackEnabled] = useState(false)
+  const [draggedIdx, setDraggedIdx] = useState<number | null>(null)
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
+  const addMenuRef = useRef<HTMLDivElement | null>(null)
+
+  const loadAll = useCallback(async () => {
+    setLoading(true)
+    setUnavailable(null)
+    const [pRes, cRes] = await Promise.all([
+      window.agentApi.listProviders(),
+      window.agentApi.getFallbackChain(),
+    ])
+    if (!pRes.ok) {
+      setProviders([])
+      setChain([])
+      setChainEntries([])
+      // Engine 2026-05-14+: providers + /agent are always mounted, even
+      // in degraded mode (empty chain). A 404 here means the engine is
+      // older than the rewrite or the path is genuinely wrong.
+      setUnavailable(
+        pRes.status === 404
+          ? '管理 API 未找到（请确认引擎版本 ≥ 2026-05-14）'
+          : pRes.message || pRes.error || '加载失败',
+      )
+      setLoading(false)
+      return
+    }
+    setProviders(Array.isArray(pRes.data.providers) ? pRes.data.providers : [])
+    if (cRes.ok) {
+      setChain(Array.isArray(cRes.data?.chain) ? cRes.data.chain : [])
+      setChainEntries(Array.isArray(cRes.data?.entries) ? cRes.data.entries : [])
+    } else {
+      setChain([])
+      setChainEntries([])
+    }
+    setLoading(false)
+  }, [])
+
+  useEffect(() => {
+    void loadAll()
+  }, [loadAll])
+
+  useEffect(() => {
+    if (!addOpen) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setAddOpen(false)
+    }
+    const onPointer = (event: MouseEvent) => {
+      if (addMenuRef.current && !addMenuRef.current.contains(event.target as Node)) {
+        setAddOpen(false)
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    document.addEventListener('mousedown', onPointer)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('mousedown', onPointer)
+    }
+  }, [addOpen])
+
+  const allEndpoints = useMemo<ProviderEndpointRef[]>(() => {
+    const out: ProviderEndpointRef[] = []
+    for (const p of providers) {
+      for (const e of p.endpoints) {
+        out.push({
+          ref: `${p.name}:${e.name}`,
+          provider: p.name,
+          endpoint: e.name,
+          model: e.model,
+          type: p.type,
+          providerDisabled: p.disabled === true,
+        })
+      }
+    }
+    return out
+  }, [providers])
+
+  // Split the flat chain into primary (head) + fallback (tail). The
+  // engine enforces `fallback_chain` entries must be distinct from
+  // primary, so addable/list filters use both.
+  const primary = chain[0] ?? ''
+  const fallback = useMemo(() => chain.slice(1), [chain])
+
+  // One-way sync: when the engine reports a non-empty fallback, enable
+  // the toggle. We don't auto-disable when fallback becomes empty —
+  // the user might have just toggled ON to start adding nodes.
+  useEffect(() => {
+    if (fallback.length > 0) setFallbackEnabled(true)
+  }, [fallback.length])
+
+  const addableByType = useMemo(() => {
+    const groups = new Map<ProviderType, ProviderEndpointRef[]>()
+    for (const e of allEndpoints) {
+      // Skip primary (engine rejects fallback == primary), endpoints
+      // already in fallback, and endpoints whose owning provider is
+      // disabled (they can't route, so listing them would be a trap).
+      if (e.ref === primary || fallback.includes(e.ref) || e.providerDisabled) continue
+      const arr = groups.get(e.type) ?? []
+      arr.push(e)
+      groups.set(e.type, arr)
+    }
+    return groups
+  }, [allEndpoints, primary, fallback])
+
+  const addable = useMemo(
+    () =>
+      allEndpoints.filter(
+        (e) => e.ref !== primary && !fallback.includes(e.ref) && !e.providerDisabled,
+      ),
+    [allEndpoints, primary, fallback],
+  )
+
+  // Primary picker options — endpoints that can actually be routed
+  // to (i.e. their owning provider is not disabled). The currently
+  // selected primary is always retained, even if its provider was
+  // just disabled, so the user can see the current state. Label is
+  // the canonical `provider:endpoint` ref; we intentionally drop the
+  // parenthesized model id to keep the dropdown row short (the model
+  // is implied by the endpoint name in practice).
+  const primaryOptions = useMemo<{ label: string; value: string }[]>(() => {
+    const opts: { label: string; value: string }[] = []
+    if (!primary) opts.push({ label: '请选择...', value: '' })
+    for (const e of allEndpoints) {
+      if (e.providerDisabled && e.ref !== primary) continue
+      opts.push({ label: e.ref, value: e.ref })
+    }
+    if (primary && !allEndpoints.some((e) => e.ref === primary)) {
+      opts.push({ label: `${primary} (未识别)`, value: primary })
+    }
+    return opts
+  }, [allEndpoints, primary])
+
+  // persistChain takes the full flat chain; the main-process adapter
+  // splits it back into `{primary, fallback_chain}` for PATCH /agent.
+  // Empty chain (length 0) intentionally allowed — the engine treats
+  // that as degraded mode (primary="", fallback=[]).
+  const persistChain = async (next: string[]) => {
+    setBusy(true)
+    const prev = chain
+    setChain(next)
+    const res = await window.agentApi.updateFallbackChain(next)
+    if (!res.ok) {
+      setChain(prev)
+      setBusy(false)
+      return
+    }
+    setChain(Array.isArray(res.data?.chain) ? res.data.chain : [])
+    setChainEntries(Array.isArray(res.data?.entries) ? res.data.entries : [])
+    setBusy(false)
+  }
+
+  // Picking a new primary: if it currently lives in fallback we strip
+  // it (engine constraint: fallback_chain items must differ from
+  // primary) before reassembling the chain.
+  const handlePrimaryChange = (newRef: string) => {
+    if (!newRef || newRef === primary) return
+    const cleanedFallback = fallback.filter((r) => r !== newRef)
+    void persistChain([newRef, ...cleanedFallback])
+  }
+
+  // Toggle OFF: clear fallback (keep primary so we don't drop into
+  // degraded mode). Toggle ON: just open the chain UI; user adds
+  // nodes manually.
+  const handleToggleFallback = (next: boolean) => {
+    setFallbackEnabled(next)
+    if (!next && fallback.length > 0 && primary) {
+      void persistChain([primary])
+    }
+  }
+
+  const handleDragStart = (event: React.DragEvent, idx: number) => {
+    setDraggedIdx(idx)
+    event.dataTransfer.effectAllowed = 'move'
+  }
+
+  const handleDragOver = (event: React.DragEvent, idx: number) => {
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+    const isAfter = event.clientY - rect.top > rect.height / 2
+    const target = isAfter ? idx + 1 : idx
+    if (dragOverIdx !== target) setDragOverIdx(target)
+  }
+
+  const handleListDragLeave = (event: React.DragEvent) => {
+    const related = event.relatedTarget as Node | null
+    if (!related || !(event.currentTarget as Node).contains(related)) {
+      setDragOverIdx(null)
+    }
+  }
+
+  // Drag indices are fallback-local (the drag list excludes primary).
+  // Persist reassembles `[primary, ...newFallback]` so primary stays
+  // pinned at chain[0].
+  const handleDrop = (event: React.DragEvent) => {
+    event.preventDefault()
+    const target = dragOverIdx
+    if (
+      draggedIdx === null
+      || target === null
+      || target === draggedIdx
+      || target === draggedIdx + 1
+    ) {
+      setDraggedIdx(null)
+      setDragOverIdx(null)
+      return
+    }
+    const nextFallback = [...fallback]
+    const [moved] = nextFallback.splice(draggedIdx, 1)
+    const insertAt = draggedIdx < target ? target - 1 : target
+    nextFallback.splice(insertAt, 0, moved)
+    setDraggedIdx(null)
+    setDragOverIdx(null)
+    if (!primary) return
+    void persistChain([primary, ...nextFallback])
+  }
+
+  const handleDragEnd = () => {
+    setDraggedIdx(null)
+    setDragOverIdx(null)
+  }
+
+  const handleAdd = (ref: string) => {
+    setAddOpen(false)
+    if (!primary) return
+    void persistChain([primary, ...fallback, ref])
+  }
+
+  const handleRemove = (ref: string) => {
+    if (!primary) return
+    void persistChain([primary, ...fallback.filter((r) => r !== ref)])
+  }
+
+  const stateBadge = (s?: string): { cls: string; label: string } => {
+    if (s === 'healthy') return { cls: 'bg-emerald-500', label: '正常' }
+    if (s === 'tripped') return { cls: 'bg-rose-500', label: '熔断' }
+    if (s === 'ready_to_probe') return { cls: 'bg-amber-500', label: '试探' }
+    return { cls: 'bg-muted-foreground/40', label: '未知' }
+  }
+
+  return (
+    <>
+      <SettingRow label="主 Provider">
+        <div className="flex items-center gap-2">
+          {/*
+            Quick-jump to the 模型配置 settings section. Sits to the
+            left of the dropdown so users see "what / where to edit"
+            before the value itself. Rendered only when the parent
+            supplied the callback so the row degrades gracefully if
+            reused elsewhere.
+          */}
+          {onNavigateToModels && (
+            <button
+              type="button"
+              onClick={onNavigateToModels}
+              title="跳转设置"
+              aria-label="跳转设置"
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-card text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <ExternalLink size={13} />
+            </button>
+          )}
+          <SelectInput
+            value={primary}
+            onChange={handlePrimaryChange}
+            options={primaryOptions}
+            className={blinkingPrimary ? 'agent-primary-blink' : undefined}
+          />
+        </div>
+      </SettingRow>
+
+      <SettingRow
+        label="Provider 负载兜底"
+        description="当主模型不可用时按 fallback_chain 顺序降级"
+      >
+        <Toggle
+          checked={fallbackEnabled}
+          onChange={handleToggleFallback}
+        />
+      </SettingRow>
+
+      {fallbackEnabled && (
+        <div className="pb-4">
+          <div className="rounded-xl border border-border bg-background/40">
+            <div className="flex items-center justify-between border-b border-border px-3 py-2">
+              <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                <span>Fallback Chain</span>
+                {busy && <Loader2 size={12} className="animate-spin" />}
+              </div>
+              <div className="relative" ref={addMenuRef}>
+                <button
+                  type="button"
+                  onClick={() => setAddOpen((v) => !v)}
+                  disabled={addable.length === 0 || busy || !!unavailable}
+                  className={cn(
+                    'inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-accent',
+                    (addable.length === 0 || busy || !!unavailable) && 'cursor-not-allowed opacity-50 hover:bg-card',
+                  )}
+                >
+                  <Plus size={12} />
+                  添加节点
+                </button>
+
+                {addOpen && (
+                  <div className="absolute right-0 top-full z-30 mt-1 max-h-[60vh] w-72 overflow-y-auto rounded-lg border border-border bg-card p-2 shadow-lg">
+                    {PROTOCOL_GROUPS.every((g) => (addableByType.get(g.type)?.length ?? 0) === 0) ? (
+                      <div className="px-2 py-3 text-center text-xs text-muted-foreground">
+                        没有可添加的节点
+                      </div>
+                    ) : (
+                      PROTOCOL_GROUPS.map((group) => {
+                        const items = addableByType.get(group.type) ?? []
+                        if (items.length === 0) return null
+                        return (
+                          <div key={group.type} className="mb-2 last:mb-0">
+                            <div className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                              {group.label}
+                            </div>
+                            <div className="space-y-0.5">
+                              {items.map((e) => (
+                                <button
+                                  key={e.ref}
+                                  type="button"
+                                  onClick={() => handleAdd(e.ref)}
+                                  className="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-accent"
+                                >
+                                  <span className="min-w-0 truncate">
+                                    <span className="font-medium">{e.provider}</span>
+                                    <span className="text-muted-foreground">:{e.endpoint}</span>
+                                  </span>
+                                  {e.model && (
+                                    <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                                      {e.model}
+                                    </span>
+                                  )}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )
+                      })
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="px-2 py-2" onDragLeave={handleListDragLeave}>
+              {loading ? (
+                <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
+                  <Loader2 size={14} className="animate-spin" /> 加载中
+                </div>
+              ) : unavailable ? (
+                <div className="px-2 py-4 text-xs text-muted-foreground">{unavailable}</div>
+              ) : fallback.length === 0 ? (
+                <div className="px-2 py-4 text-xs text-muted-foreground">
+                  暂无兜底节点。点击右上角「添加节点」开始配置。
+                </div>
+              ) : (
+                // Drag list renders fallback only — primary is shown
+                // separately above. Indices here are fallback-local
+                // (0..fallback.length); handlers reassemble the full
+                // chain with primary pinned at head.
+                fallback.map((ref, idx) => {
+                  const entry = chainEntries.find((e) => e.name === ref)
+                  const badge = stateBadge(entry?.state)
+                  const colon = ref.indexOf(':')
+                  const refProvider = entry?.provider ?? (colon >= 0 ? ref.slice(0, colon) : ref)
+                  const refEndpoint = entry?.endpoint ?? (colon >= 0 ? ref.slice(colon + 1) : '')
+                  return (
+                    <div
+                      key={ref}
+                      className="relative"
+                      onDragOver={(event) => handleDragOver(event, idx)}
+                      onDrop={handleDrop}
+                    >
+                      <div
+                        aria-hidden
+                        className={cn(
+                          'pointer-events-none absolute inset-x-6 -top-px h-0.5 rounded-full bg-primary transition-opacity duration-150',
+                          dragOverIdx === idx
+                            && draggedIdx !== null
+                            && draggedIdx !== idx
+                            && draggedIdx + 1 !== idx
+                            ? 'opacity-100'
+                            : 'opacity-0',
+                        )}
+                      />
+                      {idx === fallback.length - 1 && (
+                        <div
+                          aria-hidden
+                          className={cn(
+                            'pointer-events-none absolute inset-x-6 -bottom-px h-0.5 rounded-full bg-primary transition-opacity duration-150',
+                            dragOverIdx === fallback.length
+                              && draggedIdx !== null
+                              && draggedIdx !== idx
+                              ? 'opacity-100'
+                              : 'opacity-0',
+                          )}
+                        />
+                      )}
+                      <div
+                        draggable
+                        onDragStart={(event) => handleDragStart(event, idx)}
+                        onDragEnd={handleDragEnd}
+                        className={cn(
+                          'group flex items-center gap-2 rounded-md border border-transparent px-2 py-1.5 transition-colors hover:bg-accent/40',
+                          draggedIdx === idx && 'opacity-50',
+                        )}
+                      >
+                        <GripVertical size={14} className="shrink-0 cursor-grab text-muted-foreground" />
+                        <span className="w-5 shrink-0 text-center font-mono text-[11px] text-muted-foreground">
+                          {idx + 1}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-xs text-foreground">
+                          <span className="font-medium">{refProvider}</span>
+                          <span className="text-muted-foreground">{refEndpoint ? `:${refEndpoint}` : ''}</span>
+                        </span>
+                        <span
+                          className="inline-flex items-center gap-1 text-[10px] text-muted-foreground"
+                          title={badge.label}
+                        >
+                          <span className={cn('h-1.5 w-1.5 rounded-full', badge.cls)} />
+                          {badge.label}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleRemove(ref)}
+                          disabled={busy}
+                          className={cn(
+                            'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground',
+                            busy && 'cursor-not-allowed opacity-30',
+                          )}
+                          aria-label="移除节点"
+                          title="移除"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+    </>
+  )
+}
+
 // ─── Agent Section ──────────────────────────────────────────────────────────
 
-function AgentSection() {
+// Four canonical temperature presets ("回答风格"). The engine treats
+// `agent.temperature` as canonical [0, 1] and rescales per-provider
+// (anthropic ×1, openai/gemini ×2). Each preset claims a quarter of
+// that range so the slider position naturally maps back to a preset.
+// `defaultValue` is the value applied when the preset button is
+// clicked — picked roughly in the middle of each range so subsequent
+// fine-tuning via the slider stays inside the same preset.
+type TemperaturePreset = {
+  key: 'precise' | 'balanced' | 'flexible' | 'creative'
+  name: string
+  fullName: string
+  icon: React.ElementType
+  defaultValue: number
+  description: string
+  scenarios: string[]
+  recommended?: boolean
+}
+
+const TEMPERATURE_PRESETS: TemperaturePreset[] = [
+  {
+    key: 'precise',
+    name: '精准',
+    fullName: '精准模式',
+    icon: Target,
+    defaultValue: 0.12,
+    description: '回答稳定、可重复，几乎每次都会给出相同的结果。',
+    scenarios: ['代码生成', '数据提取', '文本分类', '事实问答', '翻译'],
+  },
+  {
+    key: 'balanced',
+    name: '平衡',
+    fullName: '平衡模式',
+    icon: Scale,
+    defaultValue: 0.35,
+    recommended: true,
+    description: '准确为主，表达自然，适合日常使用。',
+    scenarios: ['日常对话', '邮件草稿', '文档总结', '客服回复', '概念解释', '学习辅导'],
+  },
+  {
+    key: 'flexible',
+    name: '灵活',
+    fullName: '灵活模式',
+    icon: Lightbulb,
+    defaultValue: 0.62,
+    description: '思路开阔，愿意提供多种角度的回答。',
+    scenarios: ['头脑风暴', '营销文案', '产品命名', '方案建议', '内容润色', '改写优化'],
+  },
+  {
+    key: 'creative',
+    name: '创意',
+    fullName: '创意模式',
+    icon: Sparkles,
+    defaultValue: 0.85,
+    description: '大胆发散，每次都有新惊喜。',
+    scenarios: ['故事创作', '诗歌写作', '广告标语', '角色对话', '艺术构思', '命名脑洞'],
+  },
+]
+
+// Map a temperature value to its preset bucket. Boundaries are
+// half-open on the low side so 0.25 → balanced, 0.5 → flexible,
+// 0.75 → creative; the slider's 0.05 step never lands on a boundary
+// exactly anyway.
+function presetForTemperature(value: number): TemperaturePreset {
+  if (value < 0.25) return TEMPERATURE_PRESETS[0]
+  if (value < 0.5) return TEMPERATURE_PRESETS[1]
+  if (value < 0.75) return TEMPERATURE_PRESETS[2]
+  return TEMPERATURE_PRESETS[3]
+}
+
+// Full-width temperature control. Replaces the plain Temperature
+// SettingRow because the design needs:
+//   • a wide slider with semantic left/right anchors;
+//   • a contextual card describing the currently selected preset;
+//   • four quick-pick buttons that snap to canonical preset values.
+// The slider step (0.05) lets the user fine-tune within a preset
+// without jumping to the next bucket unintentionally. onChange is
+// already debounced by AgentTuningGroup before hitting the engine.
+function TemperaturePresets({
+  value,
+  onChange,
+}: {
+  value: number
+  onChange: (v: number) => void
+}) {
+  const active = useMemo(() => presetForTemperature(value), [value])
+  const ActiveIcon = active.icon
+
+  // The preset card is meant to be a transient explanation: appears
+  // when the user touches the control, lingers 3s after they stop
+  // adjusting, then folds away. We track `showCard` separately from
+  // the value so the initial mount stays quiet (no card on first
+  // render even though `active` is always defined). The hideTimer
+  // is reset on every change to give "3s after stabilization".
+  const [showCard, setShowCard] = useState(false)
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const revealAndScheduleHide = useCallback(() => {
+    setShowCard(true)
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current)
+    hideTimerRef.current = setTimeout(() => {
+      setShowCard(false)
+      hideTimerRef.current = null
+    }, 3000)
+  }, [])
+
+  // Cleanup any pending hide-timer on unmount so a card can't keep a
+  // setState alive after this component is gone.
+  useEffect(() => {
+    return () => {
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current)
+    }
+  }, [])
+
+  const handleChange = (v: number) => {
+    onChange(v)
+    revealAndScheduleHide()
+  }
+
+  return (
+    <div className="py-4 border-b border-border last:border-0">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-sm font-medium text-foreground">回答风格</p>
+        <span className="text-xs font-mono text-muted-foreground transition-opacity duration-500">
+          {active.name} · {value.toFixed(2)}
+        </span>
+      </div>
+
+      <input
+        type="range"
+        value={value}
+        min={0}
+        max={1}
+        step={0.05}
+        onChange={(e) => handleChange(Number(e.target.value))}
+        className="w-full h-1.5 accent-foreground cursor-pointer"
+      />
+
+      <div className="flex items-center justify-between mt-2 mb-3">
+        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+          <Target size={12} />
+          <span>更精准</span>
+        </div>
+        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+          <span>更有创意</span>
+          <Sparkles size={12} />
+        </div>
+      </div>
+
+      {/*
+        Collapsible card. Uses the grid-template-rows 0fr→1fr trick so
+        the wrapper's height animates smoothly between collapsed and
+        expanded without needing a fixed max-height. Combined with
+        opacity + translate-y the reveal feels like a gentle settle
+        (700ms ease-out chosen for a calm, non-jumpy entrance).
+        `mb-3` lives on the inner card so the spacing collapses with
+        the card itself instead of leaving a gap when hidden.
+      */}
+      <div
+        aria-hidden={!showCard}
+        className={cn(
+          'grid transition-[grid-template-rows,opacity,transform] duration-700 ease-out motion-reduce:transition-none',
+          showCard
+            ? 'grid-rows-[1fr] opacity-100 translate-y-0'
+            : 'grid-rows-[0fr] opacity-0 -translate-y-1 pointer-events-none',
+        )}
+      >
+        <div className="overflow-hidden">
+          <div className="rounded-xl bg-accent/40 border border-border/60 p-4 mb-3">
+            <div className="flex items-center gap-2 mb-1.5">
+              <ActiveIcon
+                size={16}
+                className="text-foreground shrink-0 transition-transform duration-500 ease-out"
+                // Subtle key-driven re-mount animation: when active
+                // preset changes, the icon scales in with a soft bounce
+                // via a CSS transition seeded by the active key.
+                key={active.key}
+              />
+              <h4
+                key={active.key + ':name'}
+                className="text-sm font-semibold text-foreground transition-opacity duration-500"
+              >
+                {active.fullName}
+              </h4>
+              {active.recommended && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-foreground text-card font-medium">
+                  推荐
+                </span>
+              )}
+            </div>
+            <p
+              key={active.key + ':desc'}
+              className="text-xs text-muted-foreground mb-3 leading-relaxed transition-opacity duration-500"
+            >
+              {active.description}
+            </p>
+            <div className="text-[10px] text-muted-foreground mb-1.5">适合这些场景:</div>
+            <div className="flex flex-wrap gap-1.5">
+              {active.scenarios.map((s) => (
+                <span
+                  key={s}
+                  className="inline-flex items-center px-2.5 py-1 rounded-full bg-card border border-border/60 text-[11px] text-foreground"
+                >
+                  {s}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-4 gap-2">
+        {TEMPERATURE_PRESETS.map((p) => {
+          const isActive = p.key === active.key
+          return (
+            <button
+              key={p.key}
+              type="button"
+              onClick={() => handleChange(p.defaultValue)}
+              className={cn(
+                'px-3 py-2 rounded-lg border text-xs font-medium transition-colors duration-300 ease-out',
+                isActive
+                  ? 'border-foreground bg-card text-foreground'
+                  : 'border-border bg-card/40 text-muted-foreground hover:bg-card hover:text-foreground',
+              )}
+              title={p.description}
+            >
+              {p.name}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// Engine 2026-05-14+ `agent.max_tokens` / `agent.temperature` /
+// `agent.context_window` — hot-applied via PATCH /api/v1/agent. Lives
+// outside the local-yaml AgentSection because:
+//  1) it talks to a different config surface (engine /api/v1/agent
+//     vs the renderer's `useEngineConfig` yaml hook);
+//  2) PATCH /agent rebuilds adapters when max_tokens/temperature
+//     change, so we want to debounce slider drags before firing;
+//  3) temperature here is canonical [0, 1] (engine rescales per
+//     provider type), unlike the old [0, 2] yaml-stored value.
+function AgentTuningGroup() {
+  const [loading, setLoading] = useState(true)
+  const [unavailable, setUnavailable] = useState<string | null>(null)
+  const [maxTokens, setMaxTokens] = useState<number>(0)
+  const [contextWindow, setContextWindow] = useState<number>(0)
+  const [temperature, setTemperature] = useState<number>(0)
+  const [busy, setBusy] = useState(false)
+  // Track in-flight PATCH so a fast slider drag coalesces into a single
+  // request after the user pauses. timeoutRef holds the pending debounce.
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Last value we tried to PATCH for each field; lets us detect a stale
+  // PATCH whose response shouldn't clobber a newer local edit.
+  const pendingRef = useRef<{
+    max_tokens?: number
+    context_window?: number
+    temperature?: number
+  }>({})
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setUnavailable(null)
+    const res = await window.agentApi.getAgentConfig()
+    if (!res.ok) {
+      setUnavailable(
+        res.status === 404
+          ? '管理 API 未找到（请确认引擎版本 ≥ 2026-05-14）'
+          : res.message || res.error || '加载失败',
+      )
+      setLoading(false)
+      return
+    }
+    setMaxTokens(typeof res.data.max_tokens === 'number' ? res.data.max_tokens : 0)
+    setContextWindow(
+      typeof res.data.context_window === 'number' ? res.data.context_window : 0,
+    )
+    setTemperature(typeof res.data.temperature === 'number' ? res.data.temperature : 0)
+    setLoading(false)
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  // Coalesce successive edits into one PATCH. 300ms is enough for a
+  // slider drag to settle but short enough that the user perceives the
+  // change as immediate. Rebuilding adapters is cheap (atomic swap)
+  // but we still avoid spamming yaml writes.
+  const schedulePatch = useCallback(
+    (patch: { max_tokens?: number; context_window?: number; temperature?: number }) => {
+      pendingRef.current = { ...pendingRef.current, ...patch }
+      if (timeoutRef.current) clearTimeout(timeoutRef.current)
+      timeoutRef.current = setTimeout(async () => {
+        timeoutRef.current = null
+        const body = pendingRef.current
+        pendingRef.current = {}
+        if (Object.keys(body).length === 0) return
+        setBusy(true)
+        const res = await window.agentApi.patchAgentConfig(body)
+        setBusy(false)
+        if (!res.ok) {
+          // Reload authoritative state on failure so the UI matches
+          // the engine again (e.g. user typed an out-of-range value
+          // and engine rejected it).
+          void load()
+        }
+      }, 300)
+    },
+    [load],
+  )
+
+  // Flush any pending PATCH on unmount so the user doesn't lose a
+  // last-tick edit when navigating away.
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current)
+    }
+  }, [])
+
+  if (loading) {
+    return (
+      <GroupCard title="Agent 调用参数">
+        <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
+          <Loader2 size={14} className="animate-spin" /> 加载中
+        </div>
+      </GroupCard>
+    )
+  }
+
+  if (unavailable) {
+    return (
+      <GroupCard title="Agent 调用参数">
+        <div className="py-4 text-xs text-muted-foreground">{unavailable}</div>
+      </GroupCard>
+    )
+  }
+
+  return (
+    <GroupCard title="Agent 调用参数">
+      <SettingRow
+        label="Max Tokens"
+        description="单次回复的最大 Token 数（0 = 使用 endpoint 默认）"
+      >
+        <div className="flex items-center gap-2">
+          {busy && <Loader2 size={12} className="animate-spin text-muted-foreground" />}
+          <NumberInput
+            value={maxTokens}
+            onChange={(v) => {
+              setMaxTokens(v)
+              schedulePatch({ max_tokens: v })
+            }}
+            min={0}
+            max={200000}
+            className="w-24"
+          />
+        </div>
+      </SettingRow>
+      <SettingRow
+        label="Context Window"
+        description="上下文窗口预算 (Tokens, 0 = 不限制)"
+      >
+        <NumberInput
+          value={contextWindow}
+          onChange={(v) => {
+            setContextWindow(v)
+            schedulePatch({ context_window: v })
+          }}
+          min={0}
+          max={2000000}
+          className="w-24"
+        />
+      </SettingRow>
+      <TemperaturePresets
+        value={temperature}
+        onChange={(v) => {
+          setTemperature(v)
+          schedulePatch({ temperature: v })
+        }}
+      />
+    </GroupCard>
+  )
+}
+
+function AgentSection({
+  onNavigateToModels,
+  blinkPrimarySignal,
+}: {
+  // Forwarded to ProviderStrategyRow so the row's "跳转设置" button
+  // can flip the settings page to the 模型配置 section.
+  onNavigateToModels?: () => void
+  // Forwarded to ProviderStrategyRow — pulse the 主 Provider dropdown
+  // when this counter increments.
+  blinkPrimarySignal?: number
+}) {
   const { config, loading, updateConfig } = useEngineConfig()
 
   const agents = (config?.agents || {}) as { defaults?: Record<string, unknown> }
   const defaults = agents.defaults || {}
   const workspace = (defaults.workspace as string) ?? '~/.harnessclaw/workspace'
-  const provider = (defaults.provider as string) ?? 'auto'
-  const maxTokens = (defaults.maxTokens as number) ?? 8192
-  const contextWindowTokens = (defaults.contextWindowTokens as number) ?? 65536
-  const temperature = (defaults.temperature as number) ?? 0.1
+  // Engine 2026-05-14+: routing is sourced from agent.primary +
+  // agent.fallback_chain via /api/v1/agent. The old local
+  // `agents.defaults.provider` field is no longer the source of
+  // truth — ProviderStrategyRow reads/writes the engine directly.
   const maxToolIterations = (defaults.maxToolIterations as number) ?? 40
   const reasoningEffort = (defaults.reasoningEffort as string | null) ?? null
 
@@ -512,33 +1416,17 @@ function AgentSection() {
       <SectionHeader icon={Bot} title="Agent 默认设置" subtitle="新建 Agent 的默认参数" />
 
       <GroupCard title="模型">
-        <SettingRow label="Provider 策略" description="选择模型提供方的路由策略">
-          <SelectInput
-            value={provider}
-            onChange={(v) => updateDefaults({ provider: v })}
-            options={[
-              { label: '自动 (auto)', value: 'auto' },
-              { label: 'Anthropic', value: 'anthropic' },
-              { label: 'OpenAI', value: 'openai' },
-              { label: 'DeepSeek', value: 'deepseek' },
-              { label: 'Groq', value: 'groq' },
-              { label: 'Ollama', value: 'ollama' },
-              { label: 'OpenRouter', value: 'openrouter' },
-            ]}
-          />
-        </SettingRow>
+        <ProviderStrategyRow onNavigateToModels={onNavigateToModels} blinkPrimarySignal={blinkPrimarySignal} />
       </GroupCard>
 
+      {/* Engine 2026-05-14+ top-level `agent` block — these three
+          fields are hot-applied through PATCH /api/v1/agent, not
+          stored in the local engine yaml under `agents.defaults`.
+          They override per-endpoint defaults on every adapter call
+          (see providers-management-api.md "调用参数生效规则"). */}
+      <AgentTuningGroup />
+
       <GroupCard title="生成参数">
-        <SettingRow label="Max Tokens" description="单次回复的最大 Token 数">
-          <NumberInput value={maxTokens} onChange={(v) => updateDefaults({ maxTokens: v })} min={256} max={200000} className="w-24" />
-        </SettingRow>
-        <SettingRow label="Context Window" description="上下文窗口大小 (Tokens)">
-          <NumberInput value={contextWindowTokens} onChange={(v) => updateDefaults({ contextWindowTokens: v })} min={1024} max={2000000} className="w-24" />
-        </SettingRow>
-        <SettingRow label="Temperature" description="生成温度，值越高越随机">
-          <SliderInput value={temperature} onChange={(v) => updateDefaults({ temperature: v })} min={0} max={2} step={0.1} />
-        </SettingRow>
         <SettingRow label="Reasoning Effort" description="推理强度 (留空使用模型默认)">
           <SelectInput
             value={reasoningEffort || ''}
@@ -567,54 +1455,717 @@ function AgentSection() {
 
 // ─── Model Config Helpers ───────────────────────────────────────────────────
 
+interface ProviderModelEntry {
+  id: string
+  name?: string
+  group?: string
+  tags?: string[]
+  // Whether this model is enabled for the provider. Multi-select: any
+  // number of models can be enabled at once. The engine still receives
+  // a single "active" model (`ProviderConfig.model`) — typically the
+  // first enabled entry — but the renderer keeps the full enabled set
+  // so users can pick from a subset.
+  enabled?: boolean
+}
+
 interface ProviderConfig {
   apiKey: string
   apiBase: string | null
   model: string | null
+  models: ProviderModelEntry[]
   protocol: 'openai' | 'anthropic'
+  // Engine-side `type` for `POST/PATCH /providers`. Independent from
+  // `protocol` (which is renderer-only and only meaningful for
+  // `custom`). Defaults to PROVIDER_ENGINE_TYPES[key]; the user can
+  // override per-provider via the API-地址 row dropdown. See engine
+  // docs (`type` enum: openai | anthropic | gemini).
+  engineType?: 'openai' | 'anthropic' | 'gemini'
   extraHeaders: Record<string, string> | null
   raw: Record<string, unknown>
+  // Whether this provider is enabled (multi-select — any number of
+  // providers can be ON at once). The renderer also tracks a single
+  // `defaultProvider` separately for `agents.defaults`; the default
+  // is always one of the enabled providers (auto-promoted when the
+  // current default is disabled).
+  enabled?: boolean
 }
 
-type ManagedProviderKey = 'anthropic' | 'openai' | 'custom'
+// Managed provider keys MUST match the `provider` field returned by the
+// Model Registry API (see harnessclaw-engine/docs/api/models-registry-api.md
+// and internal/provider/registry/default-manifest.yaml). `handleFetchModels`
+// filters registry results via `m.provider === selectedProvider`, so the
+// canonical engine names (e.g. `moonshot` for Kimi, `zhipu` for GLM) are used
+// as keys; the display name is what surfaces to the user.
+type ManagedProviderKey =
+  | 'xunfei'
+  | 'anthropic'
+  | 'openai'
+  | 'google'
+  | 'deepseek'
+  | 'zhipu'
+  | 'moonshot'
+  | 'minimax'
+  | 'custom'
 type ProtocolProviderKey = 'anthropic' | 'openai'
 
-const MANAGED_PROVIDER_KEYS: ManagedProviderKey[] = ['anthropic', 'openai', 'custom']
-const PROTOCOL_PROVIDER_KEYS: ProtocolProviderKey[] = ['anthropic', 'openai']
-
+const MANAGED_PROVIDER_KEYS: ManagedProviderKey[] = [
+  'xunfei',
+  'anthropic',
+  'openai',
+  'google',
+  'deepseek',
+  'zhipu',
+  'moonshot',
+  'minimax',
+  'custom',
+]
 const PROVIDER_DISPLAY_NAMES: Record<ManagedProviderKey, string> = {
+  xunfei: '科大讯飞 Spark',
   anthropic: 'Anthropic',
   openai: 'OpenAI',
+  google: 'Google',
+  deepseek: 'DeepSeek',
+  zhipu: '智谱 GLM',
+  moonshot: 'Kimi',
+  minimax: 'MiniMax',
   custom: 'Custom',
 }
 
 const PROVIDER_DEFAULT_BASES: Record<ManagedProviderKey, string> = {
+  xunfei: 'https://spark-api-open.xf-yun.com/agent/v1',
   anthropic: 'https://api.anthropic.com',
   openai: 'https://api.openai.com',
+  google: 'https://generativelanguage.googleapis.com',
+  deepseek: 'https://api.deepseek.com',
+  zhipu: 'https://open.bigmodel.cn/api/paas/v4',
+  moonshot: 'https://api.moonshot.cn',
+  minimax: 'https://api.minimax.chat',
   custom: '',
 }
 
-const AVATAR_COLORS = [
-  '#F87171', '#FB923C', '#FBBF24', '#A3E635', '#34D399',
-  '#22D3EE', '#60A5FA', '#818CF8', '#A78BFA', '#C084FC',
-  '#F472B6', '#FB7185', '#4ADE80', '#2DD4BF', '#38BDF8',
-]
-
-function getProviderColor(name: string): string {
-  let hash = 0
-  for (let i = 0; i < name.length; i++) {
-    hash = (hash * 31 + name.charCodeAt(i)) | 0
-  }
-  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length]
+// Engine `type` to send to `POST/PATCH /providers`. See
+// harnessclaw-engine/docs/api/providers-management-api.md (`type` enum:
+// openai / anthropic / gemini).
+//
+// OpenAI-compatible vendors (DeepSeek, Kimi=moonshot, GLM=zhipu, MiniMax,
+// 讯飞=xunfei) all use `openai` and only differ by `base_url`. Google goes
+// to `gemini` — NOT `google`. `custom` is resolved at call time from the
+// user-selected protocol (openai | anthropic).
+const PROVIDER_ENGINE_TYPES: Record<Exclude<ManagedProviderKey, 'custom'>, 'openai' | 'anthropic' | 'gemini'> = {
+  xunfei: 'openai',
+  anthropic: 'anthropic',
+  openai: 'openai',
+  google: 'gemini',
+  deepseek: 'openai',
+  zhipu: 'openai',
+  moonshot: 'openai',
+  minimax: 'openai',
 }
 
-function getProviderInitial(key: string): string {
-  const name = isManagedProviderKey(key) ? PROVIDER_DISPLAY_NAMES[key] : key
-  return name.charAt(0).toUpperCase()
+// Engine types the user can cycle through (matches engine `type` enum).
+const ENGINE_TYPE_OPTIONS: ReadonlyArray<'openai' | 'anthropic' | 'gemini'> = [
+  'openai',
+  'anthropic',
+  'gemini',
+]
+
+// Resolve the effective engine type for a provider:
+//   1. explicit cfg.engineType override (user toggled the badge)
+//   2. cfg.protocol when key === 'custom' (the legacy "OpenAI 协议 /
+//      Anthropic 协议" selector)
+//   3. the PROVIDER_ENGINE_TYPES default for that vendor
+//   4. fallback 'openai'
+function getEffectiveEngineType(
+  key: ManagedProviderKey,
+  cfg: ProviderConfig,
+): 'openai' | 'anthropic' | 'gemini' {
+  if (cfg.engineType) return cfg.engineType
+  if (key === 'custom') return cfg.protocol
+  return PROVIDER_ENGINE_TYPES[key] ?? 'openai'
+}
+
+const PROVIDER_LOGO_BG: Record<ManagedProviderKey, string> = {
+  xunfei: '#1A6BFF',
+  anthropic: '#F4F1EE',
+  openai: '#000000',
+  google: '#FFFFFF',
+  deepseek: '#4D6BFE',
+  zhipu: '#3859FF',
+  moonshot: '#6D28D9',
+  minimax: '#00B97F',
+  custom: '#F1F5F9',
+}
+
+// Brand mark identifiers. These are shared by `ProviderLogo` (sidebar) and
+// `ModelIcon` (per-row), so the user sees the same SVG whether they're
+// scanning vendors or scrolling models within a vendor.
+type BrandKey =
+  | 'spark'
+  | 'anthropic'
+  | 'openai'
+  | 'gemini'
+  | 'meta'
+  | 'mistral'
+  | 'qwen'
+  | 'deepseek'
+  | 'glm'
+  | 'kimi'
+  | 'minimax'
+  | 'custom'
+  | 'generic'
+
+// Foreground color used to fill the brand SVG paths in BrandMark.
+// Chosen for contrast against PROVIDER_LOGO_BG[provider] (sidebar) or
+// MODEL_BADGE_BG[brand] (per-row).
+const BRAND_FG: Record<BrandKey, string> = {
+  spark: '#FFFFFF',
+  anthropic: '#CC785C',
+  openai: '#FFFFFF',
+  gemini: '#1A73E8',
+  meta: '#FFFFFF',
+  mistral: '#FFFFFF',
+  qwen: '#FFFFFF',
+  deepseek: '#FFFFFF',
+  glm: '#FFFFFF',
+  kimi: '#FFFFFF',
+  minimax: '#FFFFFF',
+  custom: '#475569',
+  generic: '#FFFFFF',
+}
+
+// Inline brand marks. SVG path data is taken verbatim from the official
+// brand assets:
+//   - simple-icons (https://github.com/simple-icons/simple-icons) for the
+//     globally recognized vendors (OpenAI, Anthropic, Google Gemini, Meta,
+//     Mistral AI, Qwen, DeepSeek, Moonshot AI, MiniMax).
+//   - lobehub/lobe-icons (https://github.com/lobehub/lobe-icons) for AI
+//     vendors that aren't on simple-icons (iFlytek Spark, 智谱 Zhipu).
+// All paths share a 24x24 viewBox and are filled with `color`, so the
+// glyph can sit on any tinted background.
+const BRAND_PATHS: Partial<Record<BrandKey, string>> = {
+  // simple-icons/openai.svg
+  openai:
+    'M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667zm2.01-3.023l-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08L8.704 5.46a.795.795 0 0 0-.393.681zm1.097-2.365l2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5z',
+  // simple-icons/anthropic.svg — the slanted A wordmark
+  anthropic:
+    'M17.304 3.541h-3.672l6.696 16.918H24Zm-10.608 0L0 20.459h3.744l1.37-3.553h7.005l1.369 3.553h3.744L10.536 3.541Zm-.371 10.223L8.616 7.82l2.291 5.945Z',
+  // simple-icons/googlegemini.svg — official four-point spark
+  gemini:
+    'M11.04 19.32Q12 21.51 12 24q0-2.49.93-4.68.96-2.19 2.58-3.81t3.81-2.55Q21.51 12 24 12q-2.49 0-4.68-.93a12.3 12.3 0 0 1-3.81-2.58 12.3 12.3 0 0 1-2.58-3.81Q12 2.49 12 0q0 2.49-.96 4.68-.93 2.19-2.55 3.81a12.3 12.3 0 0 1-3.81 2.58Q2.49 12 0 12q2.49 0 4.68.96 2.19.93 3.81 2.55t2.55 3.81',
+  // simple-icons/meta.svg — Meta infinity mark
+  meta:
+    'M6.915 4.03c-1.968 0-3.683 1.28-4.871 3.113C.704 9.208 0 11.883 0 14.449c0 .706.07 1.369.21 1.973a6.624 6.624 0 0 0 .265.86 5.297 5.297 0 0 0 .371.761c.696 1.159 1.818 1.927 3.593 1.927 1.497 0 2.633-.671 3.965-2.444.76-1.012 1.144-1.626 2.663-4.32l.756-1.339.186-.325c.061.1.121.196.183.3l2.152 3.595c.724 1.21 1.665 2.556 2.47 3.314 1.046.987 1.992 1.22 3.06 1.22 1.075 0 1.876-.355 2.455-.843a3.743 3.743 0 0 0 .81-.973c.542-.939.861-2.127.861-3.745 0-2.72-.681-5.357-2.084-7.45-1.282-1.912-2.957-2.93-4.716-2.93-1.047 0-2.088.467-3.053 1.308-.652.57-1.257 1.29-1.82 2.05-.69-.875-1.335-1.547-1.958-2.056-1.182-.966-2.315-1.303-3.454-1.303zm10.16 2.053c1.147 0 2.188.758 2.992 1.999 1.132 1.748 1.647 4.195 1.647 6.4 0 1.548-.368 2.9-1.839 2.9-.58 0-1.027-.23-1.664-1.004-.496-.601-1.343-1.878-2.832-4.358l-.617-1.028a44.908 44.908 0 0 0-1.255-1.98c.07-.109.141-.224.211-.327 1.12-1.667 2.118-2.602 3.358-2.602zm-10.201.553c1.265 0 2.058.791 2.675 1.446.307.327.737.871 1.234 1.579l-1.02 1.566c-.757 1.163-1.882 3.017-2.837 4.338-1.191 1.649-1.81 1.817-2.486 1.817-.524 0-1.038-.237-1.383-.794-.263-.426-.464-1.13-.464-2.046 0-2.221.63-4.535 1.66-6.088.454-.687.964-1.226 1.533-1.533a2.264 2.264 0 0 1 1.088-.285z',
+  // simple-icons/mistralai.svg — pixel-grid wordmark
+  mistral:
+    'M17.143 3.429v3.428h-3.429v3.429h-3.428V6.857H6.857V3.43H3.43v13.714H0v3.428h10.286v-3.428H6.857v-3.429h3.429v3.429h3.429v-3.429h3.428v3.429h-3.428v3.428H24v-3.428h-3.43V3.429z',
+  // simple-icons/qwen.svg — hexagonal Q with embedded W
+  qwen:
+    'M23.919 14.545 20.817 9.17l1.47-2.544a.56.56 0 0 0 0-.566l-1.633-2.83a.57.57 0 0 0-.49-.283h-6.207L12.487.402a.57.57 0 0 0-.49-.284H8.732a.56.56 0 0 0-.49.284L5.139 5.775h-2.94a.56.56 0 0 0-.49.284L.077 8.887a.56.56 0 0 0 0 .567L3.18 14.83l-1.47 2.545a.56.56 0 0 0 0 .566l1.634 2.83a.57.57 0 0 0 .49.283h6.205l1.47 2.545a.57.57 0 0 0 .49.284h3.266a.57.57 0 0 0 .49-.284l3.104-5.375h2.94a.57.57 0 0 0 .49-.283l1.634-2.828a.55.55 0 0 0-.004-.568M8.733.686l1.634 2.828-1.634 2.828H21.8L20.164 9.17H7.425L5.63 6.06Zm1.306 19.801-6.205-.002 1.634-2.83h3.265L2.201 6.344h3.267q3.182 5.517 6.367 11.032zm10.124-5.66L18.53 12l-6.532 11.315-1.634-2.83c2.129-3.673 4.25-7.351 6.373-11.028h3.592l3.102 5.374z',
+  // simple-icons/deepseek.svg — whale silhouette
+  deepseek:
+    'M23.748 4.651c-.254-.124-.364.113-.512.233-.051.04-.094.09-.137.137-.372.397-.806.657-1.373.626-.829-.046-1.537.214-2.163.848-.133-.782-.575-1.248-1.247-1.548-.352-.155-.708-.311-.955-.65-.172-.24-.219-.509-.305-.774-.055-.16-.11-.323-.293-.35-.2-.031-.278.136-.356.276-.313.572-.434 1.202-.422 1.84.027 1.436.633 2.58 1.838 3.393.137.094.172.187.129.323-.082.28-.18.553-.266.833-.055.179-.137.218-.328.14a5.5 5.5 0 0 1-1.737-1.179c-.857-.828-1.631-1.743-2.597-2.46a12 12 0 0 0-.689-.47c-.985-.957.13-1.743.387-1.836.27-.098.094-.433-.778-.428-.872.003-1.67.295-2.687.685a3 3 0 0 1-.465.136 9.6 9.6 0 0 0-2.883-.101c-1.885.21-3.39 1.1-4.497 2.622C.082 8.776-.231 10.854.152 13.02c.403 2.284 1.568 4.175 3.36 5.653 1.857 1.533 3.997 2.284 6.438 2.14 1.482-.085 3.132-.284 4.994-1.86.47.234.962.328 1.78.398.629.058 1.235-.031 1.705-.129.735-.155.684-.836.418-.961-2.155-1.004-1.682-.595-2.112-.926 1.095-1.295 2.768-3.598 3.284-6.733.05-.346.115-.834.108-1.114-.004-.171.035-.238.23-.257a4.2 4.2 0 0 0 1.545-.475c1.397-.763 1.96-2.016 2.093-3.517.02-.23-.004-.467-.247-.588M11.58 18.168c-2.088-1.642-3.101-2.183-3.52-2.16-.39.024-.32.472-.234.763.09.288.207.487.371.74.114.167.192.416-.113.603-.673.416-1.842-.14-1.897-.168-1.361-.801-2.5-1.86-3.301-3.306-.775-1.393-1.225-2.888-1.299-4.482-.02-.385.094-.522.477-.592a4.7 4.7 0 0 1 1.53-.038c2.131.311 3.946 1.264 5.467 2.774.868.86 1.525 1.887 2.202 2.89.72 1.066 1.494 2.082 2.48 2.915.348.291.626.513.892.677-.802.09-2.14.109-3.055-.615zm1.001-6.44a.306.306 0 0 1 .415-.287.3.3 0 0 1 .113.074.3.3 0 0 1 .086.214c0 .17-.136.307-.308.307a.303.303 0 0 1-.306-.307m3.11 1.596c-.2.081-.4.151-.591.16a1.25 1.25 0 0 1-.798-.254c-.274-.23-.47-.358-.551-.758a1.7 1.7 0 0 1 .015-.588c.07-.327-.007-.537-.238-.727-.188-.156-.426-.199-.689-.199a.6.6 0 0 1-.254-.078.253.253 0 0 1-.114-.358 1 1 0 0 1 .192-.21c.356-.202.767-.136 1.146.016.352.144.618.408 1.001.782.392.451.462.576.685.915.176.264.336.536.446.848.066.194-.02.353-.25.45',
+  // simple-icons/moonshotai.svg — concentric arcs of the Kimi mark
+  kimi:
+    'm1.053 16.91 9.538 2.55a21 20.981 0 0 0 .06 2.031l5.956 1.592a12 11.99 0 0 1-15.554-6.172m-1.02-5.79 11.352 3.035a21 20.981 0 0 0-.469 2.01l10.817 2.89a12 11.99 0 0 1-1.845 2.004L.658 15.918a12 11.99 0 0 1-.625-4.796m1.593-5.146L13.573 9.17a21 20.981 0 0 0-1.01 1.874l11.297 3.02a21 20.981 0 0 1-.67 2.362l-11.55-3.087L.125 10.26a12 11.99 0 0 1 1.499-4.285ZM6.067 1.58l11.285 3.016a21 20.981 0 0 0-1.688 1.719l7.824 2.091a21 20.981 0 0 1 .513 2.664L2.107 5.218a12 11.99 0 0 1 3.96-3.638M21.68 4.866 7.222 1.003A12 11.99 0 0 1 21.68 4.866',
+  // simple-icons/minimax.svg — stepped staff-line wordmark
+  minimax:
+    'M11.43 3.92a.86.86 0 1 0-1.718 0v14.236a1.999 1.999 0 0 1-3.997 0V9.022a.86.86 0 1 0-1.718 0v3.87a1.999 1.999 0 0 1-3.997 0V11.49a.57.57 0 0 1 1.139 0v1.404a.86.86 0 0 0 1.719 0V9.022a1.999 1.999 0 0 1 3.997 0v9.134a.86.86 0 0 0 1.719 0V3.92a1.998 1.998 0 1 1 3.996 0v11.788a.57.57 0 1 1-1.139 0zm10.572 3.105a2 2 0 0 0-1.999 1.997v7.63a.86.86 0 0 1-1.718 0V3.923a1.999 1.999 0 0 0-3.997 0v16.16a.86.86 0 0 1-1.719 0V18.08a.57.57 0 1 0-1.138 0v2a1.998 1.998 0 0 0 3.996 0V3.92a.86.86 0 0 1 1.719 0v12.73a1.999 1.999 0 0 0 3.996 0V9.023a.86.86 0 1 1 1.72 0v6.686a.57.57 0 0 0 1.138 0V9.022a2 2 0 0 0-1.998-1.997',
+  // lobehub/lobe-icons/zhipu.svg — official 智谱 BigModel mark.
+  glm:
+    'M11.991 23.503a.24.24 0 00-.244.248.24.24 0 00.244.249.24.24 0 00.245-.249.24.24 0 00-.22-.247l-.025-.001zM9.671 5.365a1.697 1.697 0 011.099 2.132l-.071.172-.016.04-.018.054c-.07.16-.104.32-.104.498-.035.71.47 1.279 1.186 1.314h.366c1.309.053 2.338 1.173 2.286 2.523-.052 1.332-1.152 2.38-2.478 2.327h-.174c-.715.018-1.274.64-1.239 1.368 0 .124.018.23.053.337.209.373.54.658.96.8.75.23 1.517-.125 1.9-.782l.018-.035c.402-.64 1.17-.96 1.92-.711.854.284 1.378 1.226 1.099 2.167a1.661 1.661 0 01-2.077 1.102 1.711 1.711 0 01-.907-.711l-.017-.035c-.2-.323-.463-.58-.851-.711l-.056-.018a1.646 1.646 0 00-1.954.746 1.66 1.66 0 01-1.065.764 1.677 1.677 0 01-1.989-1.279c-.209-.906.332-1.83 1.257-2.043a1.51 1.51 0 01.296-.035h.018c.68-.071 1.151-.622 1.116-1.333a1.307 1.307 0 00-.227-.693 2.515 2.515 0 01-.366-1.403 2.39 2.39 0 01.366-1.208c.14-.195.21-.444.227-.693.018-.71-.506-1.261-1.186-1.332l-.07-.018a1.43 1.43 0 01-.299-.07l-.05-.019a1.7 1.7 0 01-1.047-2.114 1.68 1.68 0 012.094-1.101zm-5.575 10.11c.26-.264.639-.367.994-.27.355.096.633.379.728.74.095.362-.007.748-.267 1.013-.402.41-1.053.41-1.455 0a1.062 1.062 0 010-1.482zm14.845-.294c.359-.09.738.024.992.297.254.274.344.665.237 1.025-.107.36-.396.634-.756.718-.551.128-1.1-.22-1.23-.781a1.05 1.05 0 01.757-1.26zm-.064-4.39c.314.32.49.753.49 1.206 0 .452-.176.886-.49 1.206-.315.32-.74.5-1.185.5-.444 0-.87-.18-1.184-.5a1.727 1.727 0 010-2.412 1.654 1.654 0 012.369 0zm-11.243.163c.364.484.447 1.128.218 1.691a1.665 1.665 0 01-2.188.923c-.855-.36-1.26-1.358-.907-2.228a1.68 1.68 0 011.33-1.038c.593-.08 1.183.169 1.547.652zm11.545-4.221c.368 0 .708.2.892.524.184.324.184.724 0 1.048a1.026 1.026 0 01-.892.524c-.568 0-1.03-.47-1.03-1.048 0-.579.462-1.048 1.03-1.048zm-14.358 0c.368 0 .707.2.891.524.184.324.184.724 0 1.048a1.026 1.026 0 01-.891.524c-.569 0-1.03-.47-1.03-1.048 0-.579.461-1.048 1.03-1.048zm10.031-1.475c.925 0 1.675.764 1.675 1.706s-.75 1.705-1.675 1.705-1.674-.763-1.674-1.705c0-.942.75-1.706 1.674-1.706zm-2.626-.684c.362-.082.653-.356.761-.718a1.062 1.062 0 00-.238-1.028 1.017 1.017 0 00-.996-.294c-.547.14-.881.7-.752 1.257.13.558.675.907 1.225.783zm0 16.876c.359-.087.644-.36.75-.72a1.062 1.062 0 00-.237-1.019 1.018 1.018 0 00-.985-.301 1.037 1.037 0 00-.762.717c-.108.361-.017.754.239 1.028.245.263.606.377.953.305l.043-.01zM17.19 3.5a.631.631 0 00.628-.64c0-.355-.279-.64-.628-.64a.631.631 0 00-.628.64c0 .355.28.64.628.64zm-10.38 0a.631.631 0 00.628-.64c0-.355-.28-.64-.628-.64a.631.631 0 00-.628.64c0 .355.279.64.628.64zm-5.182 7.852a.631.631 0 00-.628.64c0 .354.28.639.628.639a.63.63 0 00.627-.606l.001-.034a.62.62 0 00-.628-.64zm5.182 9.13a.631.631 0 00-.628.64c0 .355.279.64.628.64a.631.631 0 00.628-.64c0-.355-.28-.64-.628-.64zm10.38.018a.631.631 0 00-.628.64c0 .355.28.64.628.64a.631.631 0 00.628-.64c0-.355-.279-.64-.628-.64zm5.182-9.148a.631.631 0 00-.628.64c0 .354.279.639.628.639a.631.631 0 00.628-.64c0-.355-.28-.64-.628-.64zm-.384-4.992a.24.24 0 00.244-.249.24.24 0 00-.244-.249.24.24 0 00-.244.249c0 .142.122.249.244.249zM11.991.497a.24.24 0 00.245-.248A.24.24 0 0011.99 0a.24.24 0 00-.244.249c0 .133.108.236.223.247l.021.001zM2.011 6.36a.24.24 0 00.245-.249.24.24 0 00-.244-.249.24.24 0 00-.244.249.24.24 0 00.244.249zm0 11.263a.24.24 0 00-.243.248.24.24 0 00.244.249.24.24 0 00.244-.249.252.252 0 00-.244-.248zm19.995-.018a.24.24 0 00-.245.248.24.24 0 00.245.25.24.24 0 00.244-.25.252.252 0 00-.244-.248z',
+}
+
+function BrandMark({ brand, size, color }: { brand: BrandKey; size: number; color: string }) {
+  if (brand === 'custom') {
+    return <Settings2 size={size} color={color} />
+  }
+  if (brand === 'spark') {
+    // Official iFlytek Spark mark, taken verbatim from lobehub/lobe-icons
+    // (packages/static-svg/icons/spark.svg). Two-path glyph: the upper
+    // tail + the swirl. Both share `color` so it can sit on any tinted
+    // background.
+    return (
+      <svg
+        width={size}
+        height={size}
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill={color}
+        fillRule="evenodd"
+      >
+        <path d="M11.615 0l6.237 6.107c2.382 2.338 2.823 3.743 3.161 6.15-1.197-1.732-1.776-2.02-4.504-2.772C12.48 8.374 11.095 5.933 11.615 0z" />
+        <path d="M9.32 2.122C4.771 6.367 2 9.182 2 13.08c0 5.76 4.288 9.788 9.745 9.918 5.457.13 9.441-5.284 9.095-8.403-.347-3.118-4.418-3.81-4.418-3.81 1.69 3.16-.13 8.098-4.894 8.098-5.154 0-6.8-6.02-4.2-9.008.82 1.617 1.879 2.563 2.674 3.273.717.64 1.219 1.09 1.136 1.664-.173 1.213-1.385.866-1.385.866.346.607 3.6 1.473 4.59-1.342.613-1.741-.423-2.789-1.714-4.096-1.632-1.651-3.672-3.717-3.31-8.118z" />
+      </svg>
+    )
+  }
+  const d = BRAND_PATHS[brand]
+  if (!d) {
+    // Generic AI sparkle for any unknown provider.
+    return (
+      <svg width={size} height={size} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill={color}>
+        <path d="M12 2 L14 10 L22 12 L14 14 L12 22 L10 14 L2 12 L10 10 Z" />
+      </svg>
+    )
+  }
+  return (
+    <svg width={size} height={size} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill={color}>
+      <path d={d} />
+    </svg>
+  )
+}
+
+const PROVIDER_TO_BRAND: Record<ManagedProviderKey, BrandKey> = {
+  xunfei: 'spark',
+  anthropic: 'anthropic',
+  openai: 'openai',
+  google: 'gemini',
+  deepseek: 'deepseek',
+  zhipu: 'glm',
+  moonshot: 'kimi',
+  minimax: 'minimax',
+  custom: 'custom',
+}
+
+function ProviderLogo({ provider, size = 28 }: { provider: ManagedProviderKey; size?: number }) {
+  const innerSize = Math.round(size * 0.62)
+  const bg = PROVIDER_LOGO_BG[provider]
+  const brand = PROVIDER_TO_BRAND[provider]
+  return (
+    <div
+      className="rounded-full flex items-center justify-center flex-shrink-0"
+      style={{ width: size, height: size, backgroundColor: bg }}
+    >
+      <BrandMark brand={brand} size={innerSize} color={BRAND_FG[brand]} />
+    </div>
+  )
 }
 
 function getDisplayName(key: ManagedProviderKey): string {
   return PROVIDER_DISPLAY_NAMES[key]
+}
+
+const PROVIDER_APIKEY_PAGES: Record<ManagedProviderKey, string> = {
+  xunfei: 'https://console.xfyun.cn/services/bm4',
+  anthropic: 'https://console.anthropic.com/settings/keys',
+  openai: 'https://platform.openai.com/api-keys',
+  google: 'https://aistudio.google.com/app/apikey',
+  deepseek: 'https://platform.deepseek.com/api_keys',
+  zhipu: 'https://open.bigmodel.cn/usercenter/apikeys',
+  moonshot: 'https://platform.moonshot.cn/console/api-keys',
+  minimax: 'https://platform.minimaxi.com/user-center/basic-information/interface-key',
+  custom: '',
+}
+
+const PROVIDER_DOCS_PAGES: Record<ManagedProviderKey, string> = {
+  xunfei: 'https://www.xfyun.cn/doc/spark/X2-Flash.html',
+  anthropic: 'https://docs.anthropic.com/',
+  openai: 'https://platform.openai.com/docs',
+  google: 'https://ai.google.dev/gemini-api/docs',
+  deepseek: 'https://api-docs.deepseek.com/',
+  zhipu: 'https://open.bigmodel.cn/dev/api',
+  moonshot: 'https://platform.moonshot.cn/docs',
+  minimax: 'https://platform.minimaxi.com/document/',
+  custom: '',
+}
+
+const PROVIDER_MODELS_PAGES: Record<ManagedProviderKey, string> = {
+  xunfei: 'https://www.xfyun.cn/doc/spark/X2-Flash.html',
+  anthropic: 'https://docs.anthropic.com/en/docs/about-claude/models',
+  openai: 'https://platform.openai.com/docs/models',
+  google: 'https://ai.google.dev/gemini-api/docs/models/gemini',
+  deepseek: 'https://api-docs.deepseek.com/quick_start/pricing',
+  zhipu: 'https://open.bigmodel.cn/dev/howuse/model',
+  moonshot: 'https://platform.moonshot.cn/docs/pricing/chat',
+  minimax: 'https://platform.minimaxi.com/document/Models',
+  custom: '',
+}
+
+function getApiPathSuffix(protocol: 'openai' | 'anthropic' | 'gemini'): string {
+  if (protocol === 'anthropic') return '/v1/messages'
+  if (protocol === 'gemini') return '/v1beta/models'
+  return '/v1/chat/completions'
+}
+
+const MODEL_FAMILY_RULES: Array<{ test: RegExp; group: string }> = [
+  { test: /^spark-x2|^xf-spark-x2/i, group: 'Spark X2' },
+  { test: /^spark|xunfei|iflytek/i, group: 'Spark' },
+  { test: /claude/i, group: 'Claude' },
+  { test: /gpt-?4/i, group: 'GPT-4' },
+  { test: /gpt-?3/i, group: 'GPT-3' },
+  { test: /^o1/i, group: 'o1' },
+  { test: /^o3/i, group: 'o3' },
+  { test: /gemma/i, group: 'Gemma' },
+  { test: /gemini/i, group: 'Gemini' },
+  { test: /llama-?3/i, group: 'Llama3' },
+  { test: /llama-?2/i, group: 'Llama2' },
+  { test: /llama/i, group: 'Llama' },
+  { test: /mixtral/i, group: 'Mixtral' },
+  { test: /mistral/i, group: 'Mistral' },
+  { test: /qwen/i, group: 'Qwen' },
+  { test: /deepseek/i, group: 'DeepSeek' },
+  { test: /yi-/i, group: 'Yi' },
+  { test: /^glm|chatglm/i, group: 'GLM' },
+  { test: /kimi|moonshot/i, group: 'Kimi' },
+  { test: /abab|minimax|^m1\b/i, group: 'MiniMax' },
+  { test: /whisper/i, group: 'Whisper' },
+  { test: /embedding/i, group: 'Embedding' },
+]
+
+function getModelGroup(id: string): string {
+  for (const rule of MODEL_FAMILY_RULES) {
+    if (rule.test.test(id)) return rule.group
+  }
+  const firstSegment = id.split(/[-_:/]/)[0] || id
+  return firstSegment.charAt(0).toUpperCase() + firstSegment.slice(1)
+}
+
+// Split a group name into an alpha prefix + the largest version number
+// embedded in it. Examples:
+//   "GPT-4"     -> { prefix: "gpt",     version: 4 }
+//   "Llama3"    -> { prefix: "llama",   version: 3 }
+//   "Claude-3-7"-> { prefix: "claude",  version: 3.7 }
+//   "deepseek-v4-flash" -> { prefix: "deepseek", version: 4 }
+//   "Claude"    -> { prefix: "claude",  version: -Infinity }
+function parseGroupVersion(name: string): { prefix: string; version: number } {
+  const lower = name.toLowerCase()
+  const prefixMatch = lower.match(/^[a-z]+/)
+  const prefix = prefixMatch ? prefixMatch[0] : lower
+  // Find first version-like token after the prefix (e.g. "3-7", "4", "v4").
+  const rest = lower.slice(prefix.length)
+  const versionMatch = rest.match(/(\d+(?:[._-]\d+)?)/)
+  if (!versionMatch) return { prefix, version: Number.NEGATIVE_INFINITY }
+  const normalized = versionMatch[1].replace(/[_-]/, '.').replace(/[_-]/g, '')
+  const value = Number(normalized)
+  return { prefix, version: Number.isFinite(value) ? value : Number.NEGATIVE_INFINITY }
+}
+
+// Sort order:
+//   1. Same family stays together (alpha prefix ascending, locale-aware).
+//   2. Within a family, higher version numbers come first (descending).
+//   3. Stable fallback by full name when versions tie.
+function compareGroupNames(a: string, b: string): number {
+  const pa = parseGroupVersion(a)
+  const pb = parseGroupVersion(b)
+  if (pa.prefix !== pb.prefix) {
+    return pa.prefix.localeCompare(pb.prefix)
+  }
+  if (pa.version !== pb.version) {
+    return pb.version - pa.version
+  }
+  return a.localeCompare(b)
+}
+
+// Tokenize a model id/name into an alternating sequence of string and
+// number tokens for natural version-aware comparison.
+//   "gpt-5.5"            -> ["gpt", 5.5]
+//   "claude-opus-4-1"    -> ["claude", "opus", 4, 1]
+//   "deepseek-v4-flash"  -> ["deepseek", "v", 4, "flash"]
+function tokenizeModelId(id: string): Array<string | number> {
+  const lower = id.toLowerCase()
+  const tokens: Array<string | number> = []
+  const re = /(\d+(?:\.\d+)?)|([a-z]+)/g
+  let match: RegExpExecArray | null
+  while ((match = re.exec(lower)) !== null) {
+    if (match[1] !== undefined) {
+      tokens.push(Number(match[1]))
+    } else if (match[2] !== undefined) {
+      tokens.push(match[2])
+    }
+  }
+  return tokens
+}
+
+// Sort models within a group: higher version numbers come first, with
+// alpha tokens ordered alphabetically as a stable tiebreaker. Numbers
+// always sort before missing-number tokens (so "gpt-5" precedes "gpt").
+function compareModelEntries(a: ProviderModelEntry, b: ProviderModelEntry): number {
+  const ta = tokenizeModelId(a.id)
+  const tb = tokenizeModelId(b.id)
+  const len = Math.max(ta.length, tb.length)
+  for (let i = 0; i < len; i++) {
+    const xa = ta[i]
+    const xb = tb[i]
+    if (xa === undefined) return 1
+    if (xb === undefined) return -1
+    const aIsNum = typeof xa === 'number'
+    const bIsNum = typeof xb === 'number'
+    if (aIsNum && bIsNum) {
+      if (xa !== xb) return (xb as number) - (xa as number) // descending
+      continue
+    }
+    if (aIsNum !== bIsNum) {
+      // Prefer the side whose current token is a number — newer-versioned
+      // ids (e.g. "gpt-5") should outrank generic ones (e.g. "gpt").
+      return aIsNum ? -1 : 1
+    }
+    const cmp = (xa as string).localeCompare(xb as string)
+    if (cmp !== 0) return cmp
+  }
+  return a.id.localeCompare(b.id)
+}
+
+function groupModels(models: ProviderModelEntry[]): Array<{ name: string; items: ProviderModelEntry[] }> {
+  const groups = new Map<string, ProviderModelEntry[]>()
+  for (const m of models) {
+    const g = m.group?.trim() || getModelGroup(m.id)
+    if (!groups.has(g)) groups.set(g, [])
+    groups.get(g)!.push(m)
+  }
+  return Array.from(groups.entries())
+    .map(([name, items]) => ({ name, items: [...items].sort(compareModelEntries) }))
+    .sort((a, b) => compareGroupNames(a.name, b.name))
+}
+
+// Brand colors used as the badge background in ModelIcon. Foreground
+// (the SVG path color) is pulled from BRAND_FG.
+//   Anthropic   #F4F1EE  (cream, matches Claude product surface)
+//   OpenAI      #000000  (wordmark black)
+//   Google      #FFFFFF  (Gemini logo is shown on white officially)
+//   Meta        #0866FF  (Llama brand blue)
+//   Mistral     #FA520F  (Mistral orange)
+//   Alibaba     #615CED  (Qwen purple)
+//   DeepSeek    #4D6BFE  (DeepSeek blue)
+//   Zhipu GLM   #3859FF  (BigModel blue)
+//   Moonshot    #6D28D9  (Kimi purple)
+//   MiniMax     #00B97F  (MiniMax accent green)
+const MODEL_BADGE_BG: Record<BrandKey, string> = {
+  spark: '#1A6BFF',
+  anthropic: '#F4F1EE',
+  openai: '#000000',
+  gemini: '#FFFFFF',
+  meta: '#0866FF',
+  mistral: '#FA520F',
+  qwen: '#615CED',
+  deepseek: '#4D6BFE',
+  glm: '#3859FF',
+  kimi: '#6D28D9',
+  minimax: '#00B97F',
+  custom: '#F1F5F9',
+  generic: '#94A3B8',
+}
+
+const MODEL_BRAND_RULES: Array<{ test: RegExp; brand: BrandKey }> = [
+  { test: /^spark|xunfei|xf-|iflytek/i, brand: 'spark' },
+  { test: /claude/i, brand: 'anthropic' },
+  { test: /gpt|^o1|^o3/i, brand: 'openai' },
+  { test: /gemma|gemini/i, brand: 'gemini' },
+  { test: /llama/i, brand: 'meta' },
+  { test: /mistral|mixtral/i, brand: 'mistral' },
+  { test: /qwen/i, brand: 'qwen' },
+  { test: /deepseek/i, brand: 'deepseek' },
+  { test: /^glm|chatglm/i, brand: 'glm' },
+  { test: /kimi|moonshot/i, brand: 'kimi' },
+  { test: /abab|minimax|^m1\b/i, brand: 'minimax' },
+]
+
+function getBrandForModelId(id: string): BrandKey {
+  for (const rule of MODEL_BRAND_RULES) {
+    if (rule.test.test(id)) return rule.brand
+  }
+  return 'generic'
+}
+
+function ModelIcon({ id, size = 22 }: { id: string; size?: number }) {
+  const brand = getBrandForModelId(id)
+  const bg = MODEL_BADGE_BG[brand]
+  const innerSize = Math.round(size * 0.62)
+  return (
+    <div
+      className="rounded-full flex items-center justify-center flex-shrink-0"
+      style={{ width: size, height: size, backgroundColor: bg }}
+    >
+      <BrandMark brand={brand} size={innerSize} color={BRAND_FG[brand]} />
+    </div>
+  )
+}
+
+function HelpIcon({ title }: { title: string }) {
+  return (
+    <span
+      title={title}
+      className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border border-border text-[9px] text-muted-foreground"
+    >
+      ?
+    </span>
+  )
+}
+
+interface ModelTagDef {
+  key: string
+  label: string
+  icon: React.ElementType
+  fg: string
+  bg: string
+  border: string
+}
+
+const MODEL_TAGS: ModelTagDef[] = [
+  { key: 'vision',    label: '视觉', icon: Eye,    fg: '#16A34A', bg: '#DCFCE7', border: '#BBF7D0' },
+  { key: 'web',       label: '联网', icon: Globe,  fg: '#2563EB', bg: '#DBEAFE', border: '#BFDBFE' },
+  { key: 'reasoning', label: '推理', icon: Sun,    fg: '#7C3AED', bg: '#EDE9FE', border: '#DDD6FE' },
+  { key: 'tools',     label: '工具', icon: Wrench, fg: '#EA580C', bg: '#FFEDD5', border: '#FED7AA' },
+]
+
+const MODEL_TAG_MAP: Record<string, ModelTagDef> =
+  Object.fromEntries(MODEL_TAGS.map((t) => [t.key, t]))
+
+function ModelTagBadge({ tag }: { tag: ModelTagDef }) {
+  const [tooltipPos, setTooltipPos] = useState<{ left: number; top: number } | null>(null)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const badgeRef = useRef<HTMLSpanElement | null>(null)
+  const Icon = tag.icon
+
+  // Tooltip is rendered via a portal with `position: fixed`, so it escapes
+  // the model list's overflow-y-auto container and isn't clipped at the
+  // bottom edge. Coordinates are recomputed from the badge's bounding rect
+  // each time the user hovers.
+  const showTooltip = () => {
+    const node = badgeRef.current
+    if (!node) return
+    const rect = node.getBoundingClientRect()
+    setTooltipPos({
+      left: rect.left + rect.width / 2,
+      top: rect.bottom + 6,
+    })
+  }
+
+  const onEnter = () => {
+    if (timerRef.current) clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(showTooltip, 100)
+  }
+  const onLeave = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
+    setTooltipPos(null)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current)
+    }
+  }, [])
+
+  return (
+    <span
+      ref={badgeRef}
+      onMouseEnter={onEnter}
+      onMouseLeave={onLeave}
+      className="relative inline-flex h-5 w-5 items-center justify-center rounded-full border"
+      style={{ backgroundColor: tag.bg, borderColor: tag.border, color: tag.fg }}
+    >
+      <Icon size={11} />
+      {tooltipPos && createPortal(
+        <span
+          role="tooltip"
+          style={{
+            position: 'fixed',
+            left: tooltipPos.left,
+            top: tooltipPos.top,
+            transform: 'translateX(-50%)',
+            zIndex: 1000,
+          }}
+          className="pointer-events-none whitespace-nowrap rounded-md bg-foreground px-1.5 py-0.5 text-[10px] font-medium text-card shadow-md"
+        >
+          {tag.label}
+        </span>,
+        document.body,
+      )}
+    </span>
+  )
+}
+
+// Portal-based hover tooltip — mirrors `ModelTagBadge`'s pattern so action
+// buttons get a visible label on hover that isn't clipped by the model
+// list's `overflow-y-auto` container. Replaces ambient `title=""` tooltips
+// for the row-action icons (edit / toggle / remove).
+function HoverHint({
+  label,
+  children,
+  className,
+}: {
+  label: string
+  children: React.ReactNode
+  className?: string
+}) {
+  const [tooltipPos, setTooltipPos] = useState<{ left: number; top: number } | null>(null)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const anchorRef = useRef<HTMLSpanElement | null>(null)
+
+  const showTooltip = () => {
+    const node = anchorRef.current
+    if (!node) return
+    const rect = node.getBoundingClientRect()
+    setTooltipPos({ left: rect.left + rect.width / 2, top: rect.bottom + 6 })
+  }
+
+  const onEnter = () => {
+    if (timerRef.current) clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(showTooltip, 100)
+  }
+  const onLeave = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
+    setTooltipPos(null)
+  }
+
+  useEffect(() => () => {
+    if (timerRef.current) clearTimeout(timerRef.current)
+  }, [])
+
+  return (
+    <span
+      ref={anchorRef}
+      onMouseEnter={onEnter}
+      onMouseLeave={onLeave}
+      className={cn('inline-flex', className)}
+    >
+      {children}
+      {tooltipPos && createPortal(
+        <span
+          role="tooltip"
+          style={{
+            position: 'fixed',
+            left: tooltipPos.left,
+            top: tooltipPos.top,
+            transform: 'translateX(-50%)',
+            zIndex: 1000,
+          }}
+          className="pointer-events-none whitespace-nowrap rounded-md bg-foreground px-1.5 py-0.5 text-[10px] font-medium text-card shadow-md"
+        >
+          {label}
+        </span>,
+        document.body,
+      )}
+    </span>
+  )
+}
+
+// Soft pastel palette used to tint model-group headers so they're easy to scan.
+const GROUP_PALETTE: Array<{ bg: string; border: string; text: string }> = [
+  { bg: '#FEF3C7', border: '#FDE68A', text: '#92400E' }, // amber
+  { bg: '#DBEAFE', border: '#BFDBFE', text: '#1E40AF' }, // blue
+  { bg: '#DCFCE7', border: '#BBF7D0', text: '#166534' }, // green
+  { bg: '#FCE7F3', border: '#FBCFE8', text: '#9D174D' }, // pink
+  { bg: '#EDE9FE', border: '#DDD6FE', text: '#5B21B6' }, // violet
+  { bg: '#FFE4E6', border: '#FECDD3', text: '#9F1239' }, // rose
+  { bg: '#CFFAFE', border: '#A5F3FC', text: '#155E75' }, // cyan
+  { bg: '#FEF9C3', border: '#FEF08A', text: '#854D0E' }, // yellow
+  { bg: '#F3E8FF', border: '#E9D5FF', text: '#6B21A8' }, // purple
+  { bg: '#FFEDD5', border: '#FED7AA', text: '#9A3412' }, // orange
+  { bg: '#D1FAE5', border: '#A7F3D0', text: '#065F46' }, // emerald
+  { bg: '#E0E7FF', border: '#C7D2FE', text: '#3730A3' }, // indigo
+]
+
+function getGroupPalette(name: string): { bg: string; border: string; text: string } {
+  let hash = 0
+  for (let i = 0; i < name.length; i++) {
+    hash = (hash * 31 + name.charCodeAt(i)) | 0
+  }
+  return GROUP_PALETTE[Math.abs(hash) % GROUP_PALETTE.length]
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -633,6 +2184,38 @@ function normalizeProviderConfig(rawValue: unknown): ProviderConfig {
         ? raw.compatibility
         : 'openai'
 
+  const modelsRaw = Array.isArray(raw.models) ? raw.models : []
+  const models: ProviderModelEntry[] = []
+  for (const item of modelsRaw) {
+    if (typeof item === 'string') {
+      if (item.trim()) models.push({ id: item })
+    } else if (item && typeof item === 'object') {
+      const obj = item as Record<string, unknown>
+      const id = typeof obj.id === 'string' ? obj.id : ''
+      if (!id.trim()) continue
+      const entry: ProviderModelEntry = { id }
+      if (typeof obj.name === 'string' && obj.name.trim()) entry.name = obj.name
+      if (typeof obj.group === 'string' && obj.group.trim()) entry.group = obj.group
+      if (Array.isArray(obj.tags)) {
+        const tags = obj.tags
+          .filter((t): t is string => typeof t === 'string' && Boolean(MODEL_TAG_MAP[t]))
+        if (tags.length > 0) entry.tags = tags
+      }
+      if (obj.enabled === true) entry.enabled = true
+      models.push(entry)
+    }
+  }
+
+  const engineTypeRaw = typeof raw.engineType === 'string'
+    ? raw.engineType
+    : typeof raw.type === 'string'
+      ? raw.type
+      : ''
+  const engineType: ProviderConfig['engineType'] | undefined =
+    engineTypeRaw === 'openai' || engineTypeRaw === 'anthropic' || engineTypeRaw === 'gemini'
+      ? engineTypeRaw
+      : undefined
+
   return {
     apiKey: typeof raw.apiKey === 'string'
       ? raw.apiKey
@@ -647,9 +2230,12 @@ function normalizeProviderConfig(rawValue: unknown): ProviderConfig {
           ? raw.baseUrl
           : null,
     model: typeof raw.model === 'string' ? raw.model : null,
+    models,
     protocol: protocol === 'anthropic' ? 'anthropic' : 'openai',
+    ...(engineType ? { engineType } : {}),
     extraHeaders: (raw.extraHeaders as Record<string, string> | null) ?? null,
     raw,
+    enabled: raw.enabled === true,
   }
 }
 
@@ -662,6 +2248,7 @@ function createEmptyProviderConfig(key: ManagedProviderKey): ProviderConfig {
     apiKey: '',
     apiBase: PROVIDER_DEFAULT_BASES[key] || null,
     model: null,
+    models: [],
     protocol: key === 'anthropic' ? 'anthropic' : 'openai',
     extraHeaders: null,
     raw: {},
@@ -690,37 +2277,41 @@ function getManagedProviders(
   const llmProviders = asRecord(asRecord(engineConfig.llm).providers)
   const appProviders = getAppModelProvidersConfig(appConfig)
 
-  const protocolProviders = PROTOCOL_PROVIDER_KEYS.reduce((acc, key) => {
+  const result = {} as Record<ManagedProviderKey, ProviderConfig>
+
+  for (const key of MANAGED_PROVIDER_KEYS) {
+    if (key === 'custom') {
+      const raw = asRecord(appProviders.custom)
+      const fallback = mergeProviderSource(rootProviders.custom, llmProviders.custom)
+      const source = Object.keys(raw).length > 0 ? raw : fallback
+      const normalized = normalizeProviderConfig(source)
+      result.custom = {
+        ...createEmptyProviderConfig('custom'),
+        ...normalized,
+        apiBase: normalized.apiBase ?? null,
+        raw: source,
+      }
+      continue
+    }
+
     const appProvider = asRecord(appProviders[key])
-    const merged = mergeProviderSource(rootProviders[key], llmProviders[key])
-    const normalized = normalizeProviderConfig(Object.keys(appProvider).length > 0 ? appProvider : merged)
-    acc[key] = {
+    // Engine config only carries the protocol-keyed providers (anthropic /
+    // openai). For other vendors (deepseek, kimi, etc.) we only read from
+    // app-config and there is no engine mirror to merge.
+    const engineMerged = key === 'anthropic' || key === 'openai'
+      ? mergeProviderSource(rootProviders[key], llmProviders[key])
+      : {}
+    const source = Object.keys(appProvider).length > 0 ? appProvider : engineMerged
+    const normalized = normalizeProviderConfig(source)
+    result[key] = {
       ...createEmptyProviderConfig(key),
       ...normalized,
       apiBase: normalized.apiBase ?? (PROVIDER_DEFAULT_BASES[key] || null),
       raw: appProvider,
     }
-    return acc
-  }, {} as Record<ProtocolProviderKey, ProviderConfig>)
-
-  const customProvider = (() => {
-    const raw = asRecord(appProviders.custom)
-    const fallback = mergeProviderSource(rootProviders.custom, llmProviders.custom)
-    const source = Object.keys(raw).length > 0 ? raw : fallback
-    const normalized = normalizeProviderConfig(source)
-    return {
-      ...createEmptyProviderConfig('custom'),
-      ...normalized,
-      apiBase: normalized.apiBase ?? null,
-      raw: source,
-    }
-  })()
-
-  return {
-    anthropic: protocolProviders.anthropic,
-    openai: protocolProviders.openai,
-    custom: customProvider,
   }
+
+  return result
 }
 
 function getManagedDefaultProvider(
@@ -758,70 +2349,26 @@ function buildAppProviderRaw(next: ProviderConfig): Record<string, unknown> {
     apiKey,
     apiBase,
     model,
+    models: next.models,
     protocol: next.protocol,
+    ...(next.engineType ? { engineType: next.engineType } : {}),
     extraHeaders: next.extraHeaders ?? null,
+    enabled: next.enabled === true,
   }
 }
 
-function buildEngineProtocolProviderRaw(
-  existingRaw: Record<string, unknown>,
-  next: ProviderConfig,
-): Record<string, unknown> | null {
-  const apiKey = next.apiKey.trim()
-  const apiBase = next.apiBase?.trim() || ''
-  const model = next.model?.trim() || ''
-  const hasValues = Boolean(apiKey || apiBase || model)
-  const maxTokens = typeof existingRaw.max_tokens === 'number' ? existingRaw.max_tokens : undefined
-
-  if (!hasValues && maxTokens === undefined) {
-    return null
-  }
-
-  return {
-    ...(maxTokens !== undefined ? { max_tokens: maxTokens } : {}),
-    base_url: apiBase,
-    api_key: apiKey,
-    model,
-  }
-}
-
-function buildEngineModelConfig(
-  previous: Record<string, unknown>,
+// Determine the engine-level protocol slot a managed provider maps onto.
+// - `anthropic` uses the Anthropic Messages protocol.
+// - `custom` uses whatever protocol the user toggled.
+// - Everyone else (openai, deepseek, zhipu, moonshot, minimax, google) is
+//   OpenAI-compatible from the engine's perspective.
+function resolveProviderProtocol(
+  key: ManagedProviderKey,
   providers: Record<ManagedProviderKey, ProviderConfig>,
-  defaultProvider: ManagedProviderKey,
-): Record<string, unknown> {
-  const { providers: _legacyProviders, ...rest } = previous
-  const llm = asRecord(previous.llm)
-  const llmProviders = asRecord(llm.providers)
-  const resolvedDefaultProvider: ProtocolProviderKey = defaultProvider === 'custom'
-    ? providers.custom.protocol
-    : defaultProvider
-
-  const resolvedProviders: Record<ProtocolProviderKey, ProviderConfig> = {
-    anthropic: defaultProvider === 'custom' && providers.custom.protocol === 'anthropic'
-      ? providers.custom
-      : providers.anthropic,
-    openai: defaultProvider === 'custom' && providers.custom.protocol === 'openai'
-      ? providers.custom
-      : providers.openai,
-  }
-
-  const nextLlmProviders = PROTOCOL_PROVIDER_KEYS.reduce((acc, key) => {
-    const raw = buildEngineProtocolProviderRaw(asRecord(llmProviders[key]), resolvedProviders[key])
-    if (raw) {
-      acc[key] = raw
-    }
-    return acc
-  }, {} as Record<ProtocolProviderKey, Record<string, unknown>>)
-
-  return {
-    ...rest,
-    llm: {
-      ...llm,
-      default_provider: resolvedDefaultProvider,
-      providers: nextLlmProviders,
-    },
-  }
+): ProtocolProviderKey {
+  if (key === 'anthropic') return 'anthropic'
+  if (key === 'custom') return providers.custom.protocol
+  return 'openai'
 }
 
 function buildAppModelConfig(
@@ -832,22 +2379,21 @@ function buildAppModelConfig(
   const agents = asRecord(previous.agents)
   const defaults = asRecord(agents.defaults)
   const modelProviders = getAppModelProvidersConfig(previous)
-  const resolvedDefaultProvider: ProtocolProviderKey = defaultProvider === 'custom'
-    ? providers.custom.protocol
-    : defaultProvider
-  const activeProvider = defaultProvider === 'custom'
-    ? providers.custom
-    : providers[defaultProvider]
+  const resolvedDefaultProvider = resolveProviderProtocol(defaultProvider, providers)
+  const activeProvider = providers[defaultProvider]
   const modelId = activeProvider.model?.trim() || ''
+
+  const persistedProviders = MANAGED_PROVIDER_KEYS.reduce<Record<string, unknown>>((acc, key) => {
+    acc[key] = buildAppProviderRaw(providers[key])
+    return acc
+  }, {})
 
   return {
     ...previous,
     modelProviders: {
       ...modelProviders,
+      ...persistedProviders,
       defaultSelection: defaultProvider,
-      anthropic: buildAppProviderRaw(providers.anthropic),
-      openai: buildAppProviderRaw(providers.openai),
-      custom: buildAppProviderRaw(providers.custom),
     },
     agents: {
       ...agents,
@@ -865,39 +2411,23 @@ function hasPersistedModelProviders(appConfig: Record<string, unknown>): boolean
   return Object.keys(modelProviders).length > 0
 }
 
-function hasLegacyEngineConfig(engineConfig: Record<string, unknown>): boolean {
-  const legacyProviders = asRecord(engineConfig.providers)
-  if (Object.keys(legacyProviders).length > 0) {
-    return true
-  }
-
-  const llmProviders = asRecord(asRecord(engineConfig.llm).providers)
-  if (Object.keys(asRecord(llmProviders.custom)).length > 0) {
-    return true
-  }
-
-  return Object.values(llmProviders).some((value) => {
-    const provider = asRecord(value)
-    return 'apiKey' in provider
-      || 'apiBase' in provider
-      || 'baseUrl' in provider
-      || 'enabled' in provider
-      || 'protocol' in provider
-      || 'apiProtocol' in provider
-      || 'compatibility' in provider
-  })
-}
-
 // ─── Model Section ──────────────────────────────────────────────────────────
 
-function ModelSection() {
-  const [engineConfig, setEngineConfig] = useState<Record<string, unknown> | null>(null)
+function ModelSection({
+  onNavigateToAgents,
+}: {
+  // Settings-page navigation callback. Switches to the Agent settings
+  // section and pulses the 主 Provider dropdown so the user lands on
+  // the next decision: which enabled provider drives the agent.
+  onNavigateToAgents?: () => void
+}) {
   const [appConfig, setAppConfig] = useState<Record<string, unknown> | null>(null)
-  const [providers, setProviders] = useState<Record<ManagedProviderKey, ProviderConfig>>({
-    anthropic: createEmptyProviderConfig('anthropic'),
-    openai: createEmptyProviderConfig('openai'),
-    custom: createEmptyProviderConfig('custom'),
-  })
+  const [providers, setProviders] = useState<Record<ManagedProviderKey, ProviderConfig>>(() =>
+    MANAGED_PROVIDER_KEYS.reduce((acc, key) => {
+      acc[key] = createEmptyProviderConfig(key)
+      return acc
+    }, {} as Record<ManagedProviderKey, ProviderConfig>)
+  )
   const [defaultProvider, setDefaultProvider] = useState<ManagedProviderKey>('anthropic')
   const [selectedProvider, setSelectedProvider] = useState<ManagedProviderKey>('anthropic')
   const [searchQuery, setSearchQuery] = useState('')
@@ -907,41 +2437,97 @@ function ModelSection() {
   const [persistMessage, setPersistMessage] = useState('')
   const [testState, setTestState] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle')
   const [toastNotice, setToastNotice] = useState<{ tone: 'error' | 'success'; message: string } | null>(null)
+  const [modelFetchState, setModelFetchState] = useState<'idle' | 'loading'>('idle')
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
+  const [modelSearchVisible, setModelSearchVisible] = useState(false)
+  const [modelSearchQuery, setModelSearchQuery] = useState('')
+  const [addModelOpen, setAddModelOpen] = useState(false)
+  // When the user tries to enable a provider but a required field is
+  // missing, we briefly highlight that input/button to draw their
+  // attention. Priority order matches the validation function:
+  //   API 密钥 > API 地址 > 模型勾选
+  // Only one field at a time can flash. Cleared by `useEffect` after
+  // a short timeout.
+  type FlashField = 'apiKey' | 'apiBase' | 'models' | null
+  const [flashField, setFlashField] = useState<FlashField>(null)
+  // Derived flags so each input/button can opt into the highlight
+  // without re-checking `flashField` inline.
+  const flashApiKey = flashField === 'apiKey'
+  const flashApiBase = flashField === 'apiBase'
+  const flashModelChecks = flashField === 'models'
+  const [editingModelId, setEditingModelId] = useState<string | null>(null)
+  const [addModelId, setAddModelId] = useState('')
+  const [addModelName, setAddModelName] = useState('')
+  const [addModelGroup, setAddModelGroup] = useState('')
+  const [addModelTags, setAddModelTags] = useState<string[]>([])
+  const [groupSuggestOpen, setGroupSuggestOpen] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [engineTypePopupOpen, setEngineTypePopupOpen] = useState(false)
+  const engineTypePopupRef = useRef<HTMLDivElement | null>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (!engineTypePopupOpen) return
+    const onPointer = (event: MouseEvent) => {
+      if (engineTypePopupRef.current && !engineTypePopupRef.current.contains(event.target as Node)) {
+        setEngineTypePopupOpen(false)
+      }
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setEngineTypePopupOpen(false)
+    }
+    document.addEventListener('mousedown', onPointer)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onPointer)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [engineTypePopupOpen])
 
   useEffect(() => {
     ;(async () => {
       try {
+        // Read both yamls only to derive initial UI state. Engine yaml is
+        // never written from the renderer anymore — the Providers
+        // Management API owns it. We still consult engine yaml to migrate
+        // legacy configs (api_key/base_url that the user set up before
+        // the API existed) into the renderer state.
         const [engineData, appData] = await Promise.all([
           window.engineConfig.read(),
           window.appConfig.read(),
         ])
         const nextProviders = getManagedProviders(engineData, appData)
         const nextDefaultProvider = getManagedDefaultProvider(engineData, appData)
-        const shouldNormalize = hasLegacyEngineConfig(engineData) || !hasPersistedModelProviders(appData)
 
-        let normalizedEngineConfig = engineData
+        // Multi-enable bootstrap: if no provider is marked enabled (e.g.,
+        // a config saved before multi-select existed), seed the
+        // currently-default provider as enabled so the sidebar shows at
+        // least one ON badge.
+        const anyEnabled = Object.values(nextProviders).some((p) => p.enabled)
+        if (!anyEnabled) {
+          nextProviders[nextDefaultProvider] = {
+            ...nextProviders[nextDefaultProvider],
+            enabled: true,
+          }
+        }
+
         let normalizedAppConfig = appData
-
-        if (shouldNormalize) {
-          const nextEngineConfig = buildEngineModelConfig(engineData, nextProviders, nextDefaultProvider)
+        if (!hasPersistedModelProviders(appData)) {
           const nextAppConfig = buildAppModelConfig(appData, nextProviders, nextDefaultProvider)
-          const [engineResult, appResult] = await Promise.all([
-            window.engineConfig.save(nextEngineConfig),
-            window.appConfig.save(nextAppConfig),
-          ])
-
-          if (engineResult.ok && appResult.ok) {
-            normalizedEngineConfig = nextEngineConfig
+          const appResult = await window.appConfig.save(nextAppConfig)
+          if (appResult.ok) {
             normalizedAppConfig = nextAppConfig
           }
         }
 
-        setEngineConfig(normalizedEngineConfig)
         setAppConfig(normalizedAppConfig)
         setProviders(nextProviders)
         setDefaultProvider(nextDefaultProvider)
-        setSelectedProvider(nextDefaultProvider)
+        // `custom` is hidden from the sidebar, so if it would otherwise be
+        // the initially-selected provider, fall back to the first visible
+        // managed provider (currently iFlytek Spark) so the user lands on
+        // a real row.
+        setSelectedProvider(nextDefaultProvider === 'custom' ? 'xunfei' : nextDefaultProvider)
       } catch {
         setPersistState('error')
         setPersistMessage('模型配置读取失败')
@@ -951,6 +2537,11 @@ function ModelSection() {
     })()
   }, [])
 
+  // Persist only the renderer-side UI state (appConfig). The engine YAML
+  // is owned by the Providers Management API — every mutation goes
+  // through the HTTP endpoints (PATCH /providers, POST/PATCH/DELETE
+  // /endpoints, PUT /fallback-chain), and the engine writes its own
+  // yaml on success. We no longer call `engineConfig.save` here.
   const queuePersist = useCallback(
     (
       nextProviders: Record<ManagedProviderKey, ProviderConfig>,
@@ -958,29 +2549,309 @@ function ModelSection() {
     ) => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
       setPersistState('saving')
-      setPersistMessage('正在同步到 SQLite 和 engine YAML...')
+      setPersistMessage('正在保存 UI 偏好...')
       saveTimerRef.current = setTimeout(async () => {
-        if (!engineConfig || !appConfig) return
+        if (!appConfig) return
 
-        const nextEngineConfig = buildEngineModelConfig(engineConfig, nextProviders, nextDefaultProvider)
         const nextAppConfig = buildAppModelConfig(appConfig, nextProviders, nextDefaultProvider)
-        const [engineResult, appResult] = await Promise.all([
-          window.engineConfig.save(nextEngineConfig),
-          window.appConfig.save(nextAppConfig),
-        ])
+        const appResult = await window.appConfig.save(nextAppConfig)
 
-        if (!engineResult.ok || !appResult.ok) {
+        if (!appResult.ok) {
           setPersistState('error')
-          setPersistMessage(engineResult.error || appResult.error || '模型配置保存失败')
+          setPersistMessage(appResult.error || '模型配置保存失败')
           return
         }
 
-        setEngineConfig(nextEngineConfig)
         setAppConfig(nextAppConfig)
         setPersistState('saved')
       }, 500)
     },
-    [appConfig, engineConfig]
+    [appConfig]
+  )
+
+  // ─── Providers Management API helpers ───────────────────────────────
+  // All provider / endpoint / chain mutations go through HTTP — the
+  // engine persists to yaml on its side. See
+  // harnessclaw-engine/docs/api/providers-management-api.md.
+  //
+  // Best-effort error handling:
+  //   - HTTP 404         → API not mounted (chain<2 entries) → silent skip
+  //   - other failures   → toast warning
+  //
+  // The provider name used in URLs is the renderer-side ManagedProviderKey
+  // directly (e.g. `anthropic`, `deepseek`); the engine yaml is expected
+  // to declare the same map keys.
+  const debouncedProviderPatchRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const reportHotReloadError = useCallback(
+    (label: string, error: string, message?: string) => {
+      const detail = message ? `${error}: ${message}` : error
+      setToastNotice({
+        tone: 'error',
+        message: `${label}失败 (${detail})`,
+      })
+    },
+    [],
+  )
+
+  // PATCH /api/v1/providers/{p} — debounced 500ms so typing in the api_key
+  // / api_base input doesn't fire a request per keystroke.
+  //
+  // If the engine doesn't yet have a `llm.providers.<key>` entry (the
+  // common case for vendors the user is configuring for the first
+  // time, e.g. DeepSeek / Google), PATCH returns 404 / update_failed.
+  // We then fall back to `POST /providers` to create it on the fly so
+  // typing into the key/base fields seamlessly bootstraps the entry.
+  const schedulePatchProviderCredentials = useCallback(
+    (key: ManagedProviderKey) => {
+      if (debouncedProviderPatchRef.current) {
+        clearTimeout(debouncedProviderPatchRef.current)
+      }
+      debouncedProviderPatchRef.current = setTimeout(async () => {
+        const cfg = providers[key]
+        const baseUrl = cfg.apiBase?.trim() || PROVIDER_DEFAULT_BASES[key] || ''
+        const apiKey = cfg.apiKey.trim()
+        if (!apiKey && !baseUrl) return
+        const res = await window.agentApi.patchProvider(key, {
+          api_key: apiKey,
+          base_url: baseUrl,
+        })
+        if (res.ok) return
+        if (res.status === 404 || res.status === 0) {
+          // 404 (API not mounted) or network error — silent skip.
+          return
+        }
+        // PATCH failed — likely the provider entry doesn't exist yet.
+        // Try POST /providers to create it. Engine `type` resolved via
+        // the per-provider override (cfg.engineType) falling back to
+        // PROVIDER_ENGINE_TYPES (or protocol for custom).
+        const engineType = getEffectiveEngineType(key, cfg)
+        const createRes = await window.agentApi.createProvider({
+          name: key,
+          type: engineType,
+          ...(baseUrl ? { base_url: baseUrl } : {}),
+          ...(apiKey ? { api_key: apiKey } : {}),
+        })
+        if (createRes.ok) return
+        if (createRes.status === 404 || createRes.status === 0) return
+        // "already exists" race — try one more PATCH.
+        if (createRes.status === 400 && /exist/i.test(createRes.message || '')) {
+          const retry = await window.agentApi.patchProvider(key, {
+            api_key: apiKey,
+            base_url: baseUrl,
+          })
+          if (retry.ok) return
+          reportHotReloadError('凭证更新', retry.error || `http_${retry.status}`, retry.message)
+          return
+        }
+        reportHotReloadError('厂商创建', createRes.error || `http_${createRes.status}`, createRes.message)
+      }, 500)
+    },
+    [providers, reportHotReloadError],
+  )
+
+  useEffect(() => {
+    return () => {
+      if (debouncedProviderPatchRef.current) {
+        clearTimeout(debouncedProviderPatchRef.current)
+      }
+    }
+  }, [])
+
+  // Make sure the engine has a `llm.providers.<key>` entry before we
+  // POST endpoints into it. The engine added `POST /providers` on
+  // 2026-05-14 to support this (see
+  // harnessclaw-engine/docs/api/providers-management-api.md). We
+  // probe via `GET /providers` and create on miss.
+  //
+  // Returns true when the provider exists (now or after create). Surfaces
+  // a toast on hard failure and returns false. 404/0 (API not mounted
+  // because chain<2) is treated as best-effort success — the caller may
+  // still attempt POST endpoint; if that 404s too, it'll silently skip.
+  const ensureProviderExists = useCallback(
+    async (key: ManagedProviderKey): Promise<boolean> => {
+      const list = await window.agentApi.listProviders()
+      if (!list.ok) {
+        // Chain<2 → API not mounted. Let the caller proceed and silent-
+        // skip its own 404. Network/timeout: same treatment.
+        if (list.status === 404 || list.status === 0) return true
+        reportHotReloadError('厂商查询', list.error || `http_${list.status}`, list.message)
+        return false
+      }
+      if (list.data.providers.some((p) => p.name === key)) return true
+
+      // Provider missing — create it. Engine `type` resolved via the
+      // per-provider override (cfg.engineType) falling back to
+      // PROVIDER_ENGINE_TYPES (or protocol for custom).
+      const cfg = providers[key]
+      const engineType = getEffectiveEngineType(key, cfg)
+      const baseUrl = cfg.apiBase?.trim() || PROVIDER_DEFAULT_BASES[key] || undefined
+      const apiKey = cfg.apiKey.trim() || undefined
+      const res = await window.agentApi.createProvider({
+        name: key,
+        type: engineType,
+        ...(baseUrl ? { base_url: baseUrl } : {}),
+        ...(apiKey ? { api_key: apiKey } : {}),
+      })
+      if (res.ok) return true
+      if (res.status === 404 || res.status === 0) return true
+      // 400 update_failed with "already exists" is racy-safe — treat as ok.
+      if (res.status === 400 && /exist/i.test(res.message || '')) return true
+      reportHotReloadError('厂商创建', res.error || `http_${res.status}`, res.message)
+      return false
+    },
+    [providers, reportHotReloadError],
+  )
+
+  // POST /api/v1/providers/{p}/endpoints + append to fallback-chain.
+  // When POST returns 400 update_failed (most often because the
+  // endpoint already exists on the engine side), we transparently fall
+  // back to "just add to chain" instead of surfacing an error.
+  //
+  // Idempotent: when the endpoint already exists we still PATCH
+  // `disabled=false` so re-enabling a previously-paused model
+  // (the new canonical flow) routes again.
+  const hotCreateEndpoint = useCallback(
+    async (
+      key: ManagedProviderKey,
+      modelId: string,
+      maxTokens?: number,
+    ): Promise<void> => {
+      // Guard: the engine rejects POST endpoint when the provider entry
+      // doesn't exist. Create it first if needed.
+      const providerReady = await ensureProviderExists(key)
+      if (!providerReady) return
+
+      const payload: {
+        name: string
+        model: string
+        max_tokens?: number
+        disabled?: boolean
+      } = {
+        name: modelId,
+        model: modelId,
+        // Explicitly mark active so the dispatcher routes immediately
+        // (engine default is also false; we send it for clarity).
+        disabled: false,
+      }
+      if (typeof maxTokens === 'number' && maxTokens > 0) payload.max_tokens = maxTokens
+      const res = await window.agentApi.createEndpoint(key, payload)
+      let endpointReady = res.ok
+
+      if (!res.ok) {
+        if (res.status === 404 || res.status === 0) {
+          // API not mounted or network error — silent skip.
+          return
+        }
+        // Could be "already exists" or "provider unknown" or "adapter
+        // build failed". Probe via GET /endpoints to disambiguate.
+        const list = await window.agentApi.listEndpoints(key)
+        if (list.ok && list.data.endpoints.some((e) => e.name === modelId)) {
+          endpointReady = true
+          // Endpoint already on engine — make sure it's not paused.
+          // The user clicked enable, so reset `disabled=false`.
+          const patchRes = await window.agentApi.patchEndpoint(key, modelId, {
+            disabled: false,
+          })
+          if (!patchRes.ok && patchRes.status !== 404 && patchRes.status !== 0) {
+            reportHotReloadError(
+              '模型启用',
+              patchRes.error || `http_${patchRes.status}`,
+              patchRes.message,
+            )
+          }
+        } else {
+          reportHotReloadError('模型创建', res.error || `http_${res.status}`, res.message)
+          return
+        }
+      }
+      if (!endpointReady) return
+
+      // After create (or detected-exists), append to chain so the
+      // endpoint actually routes. Canonical chain ref separator is `:`
+      // (engine 2026-05-14+); this lets endpoint names contain `.`
+      // (e.g. `gpt-5.5`). Old `.` separator is still accepted on the
+      // server side for back-compat but all yaml / API responses use `:`.
+      const chain = await window.agentApi.getFallbackChain()
+      if (!chain.ok) return
+      const chainRef = `${key}:${modelId}`
+      const legacyRef = `${key}.${modelId}`
+      if (chain.data.chain.includes(chainRef) || chain.data.chain.includes(legacyRef)) return
+      const nextChain = [...chain.data.chain, chainRef]
+      const putRes = await window.agentApi.updateFallbackChain(nextChain)
+      if (!putRes.ok && putRes.status !== 404 && putRes.status !== 0) {
+        reportHotReloadError(
+          '链路更新',
+          putRes.error || `http_${putRes.status}`,
+          putRes.message,
+        )
+      }
+    },
+    [ensureProviderExists, reportHotReloadError],
+  )
+
+  // PATCH /api/v1/providers/{p}/endpoints/{e} { disabled }. The
+  // canonical enable/disable flow per engine 2026-05-14: keeps the
+  // endpoint in the chain & yaml so re-enabling is a single PATCH.
+  // No DELETE / chain mutation here.
+  const hotSetEndpointDisabled = useCallback(
+    async (
+      key: ManagedProviderKey,
+      modelId: string,
+      disabled: boolean,
+    ): Promise<void> => {
+      const res = await window.agentApi.patchEndpoint(key, modelId, { disabled })
+      if (res.ok) return
+      if (res.status === 404 || res.status === 0) return
+      // `update_failed` typically means "no change" or "not found" — both
+      // safe to ignore here. Surface other errors.
+      if (res.error === 'update_failed') return
+      reportHotReloadError(
+        disabled ? '模型停用' : '模型启用',
+        res.error || `http_${res.status}`,
+        res.message,
+      )
+    },
+    [reportHotReloadError],
+  )
+
+  // DELETE /api/v1/providers/{p}/endpoints/{e} — used by 🗑 "remove
+  // from list" only. Toggle off (✓→✗) keeps the endpoint and uses
+  // `disabled: true` instead. Engine auto-removes the entry from the
+  // fallback chain.
+  const hotDeleteEndpoint = useCallback(
+    async (key: ManagedProviderKey, modelId: string): Promise<void> => {
+      const res = await window.agentApi.deleteEndpoint(key, modelId)
+      if (!res.ok && res.status !== 404 && res.status !== 0 && res.error !== 'update_failed') {
+        reportHotReloadError('模型删除', res.error || `http_${res.status}`, res.message)
+      }
+    },
+    [reportHotReloadError],
+  )
+
+  // PATCH /api/v1/providers/{p}/endpoints/{e}. Renames are not
+  // propagated to the engine (would require DELETE + POST, which we
+  // intentionally don't do here — same-name edits still PATCH
+  // model / max_tokens etc.).
+  const hotPatchEndpoint = useCallback(
+    async (
+      key: ManagedProviderKey,
+      previousId: string,
+      nextId: string,
+      patch: { model?: string; max_tokens?: number },
+    ): Promise<void> => {
+      if (previousId !== nextId) {
+        // Renames are local-only now. The original endpoint stays on
+        // the engine under its old name; the user can `disabled: true`
+        // it manually if needed.
+        return
+      }
+      const res = await window.agentApi.patchEndpoint(key, previousId, patch)
+      if (!res.ok && res.status !== 404 && res.status !== 0 && res.error !== 'update_failed') {
+        reportHotReloadError('模型更新', res.error || `http_${res.status}`, res.message)
+      }
+    },
+    [reportHotReloadError],
   )
 
   useEffect(() => {
@@ -992,6 +2863,49 @@ function ModelSection() {
     const timer = window.setTimeout(() => setToastNotice(null), 2600)
     return () => window.clearTimeout(timer)
   }, [toastNotice])
+
+  // Clear the flash highlight after ~1.8s (≈3 animation cycles) so the
+  // user sees motion but the UI settles back to normal.
+  useEffect(() => {
+    if (!flashField) return
+    const timer = window.setTimeout(() => setFlashField(null), 1800)
+    return () => window.clearTimeout(timer)
+  }, [flashField])
+
+  // Track which providers we've already auto-refreshed during this session
+  // so navigating between them doesn't refetch repeatedly.
+  const autoRefreshedRef = useRef<Set<ManagedProviderKey>>(new Set())
+
+  // Tombstones — model ids the user explicitly removed via 🗑 in this
+  // session. Without this, a stale handleFetchModels resolving after
+  // a deletion (or a manual "refresh") would re-add the entry from
+  // the registry's default-manifest.yaml and the model would
+  // "magically come back". Cleared per provider when the user clicks
+  // refresh AFTER the deletes have settled (they explicitly want a
+  // fresh registry pull).
+  const deletedModelIdsRef = useRef<Map<ManagedProviderKey, Set<string>>>(new Map())
+  const rememberDeletion = useCallback(
+    (key: ManagedProviderKey, modelId: string) => {
+      let set = deletedModelIdsRef.current.get(key)
+      if (!set) {
+        set = new Set()
+        deletedModelIdsRef.current.set(key, set)
+      }
+      set.add(modelId)
+    },
+    [],
+  )
+
+  useEffect(() => {
+    if (loading) return
+    if (modelFetchState === 'loading') return
+    if (autoRefreshedRef.current.has(selectedProvider)) return
+    const currentModels = providers[selectedProvider]?.models
+    if (currentModels && currentModels.length > 0) return
+    autoRefreshedRef.current.add(selectedProvider)
+    void handleFetchModels()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, selectedProvider, providers])
 
   const updateProvider = (key: ManagedProviderKey, patch: Partial<ProviderConfig>) => {
     setProviders((prev) => {
@@ -1009,31 +2923,283 @@ function ModelSection() {
     })
   }
 
-  const getDefaultProviderValidationError = (key: ManagedProviderKey): string | null => {
+  // Validate a provider before enabling it. Returns the missing-field
+  // diagnostic (or null when ready). Fields are checked in priority
+  // order: API 密钥 > API 地址 > 模型. The `field` is used by the UI to
+  // flash the corresponding input/button so the user knows where to look.
+  const getDefaultProviderValidationError = (
+    key: ManagedProviderKey,
+  ): { message: string; field: 'apiKey' | 'apiBase' | 'models' } | null => {
     const provider = providers[key]
+    const display = getDisplayName(key)
     if (!provider.apiKey.trim()) {
-      return `${getDisplayName(key)} 的 API 密钥不能为空`
+      return { message: `${display} 缺少 API 密钥`, field: 'apiKey' }
     }
     if (!(provider.apiBase?.trim() || PROVIDER_DEFAULT_BASES[key])) {
-      return `${getDisplayName(key)} 的 API 地址不能为空`
+      return { message: `${display} 缺少 API 地址`, field: 'apiBase' }
     }
-    if (!provider.model?.trim()) {
-      return `${getDisplayName(key)} 的 Model ID 不能为空`
+    if (provider.models.length === 0) {
+      return { message: `${display} 至少需要添加一个模型`, field: 'models' }
+    }
+    if (!provider.models.some((m) => m.enabled)) {
+      return { message: `${display} 至少需要勾选一个模型`, field: 'models' }
     }
     return null
   }
 
-  const handleDefaultProviderChange = (nextProvider: ManagedProviderKey): boolean => {
-    const validationError = getDefaultProviderValidationError(nextProvider)
-    if (validationError) {
-      setToastNotice({ tone: 'error', message: validationError })
-      return false
+  // Toggle a provider's enabled flag independently of others (multi-select).
+  // When the *current default* is disabled, the first remaining enabled
+  // provider auto-promotes so `defaultProvider` always points to an
+  // enabled one. When the first provider is enabled and nothing was the
+  // default before, it also becomes the default.
+  //
+  // Engine sync — uses the provider-level `disabled` flag (engine
+  // 2026-05-14+, see providers-management-api.md). This atomically
+  // toggles routing for every endpoint under the provider in one
+  // PATCH — no endpoint deletion, no chain churn, no model-by-model
+  // POSTs on re-enable.
+  //
+  //   OFF: PATCH /providers/{p} { disabled: true }
+  //   ON:  POST  /providers (if missing) → PATCH credentials →
+  //        PATCH /providers/{p} { disabled: false } → ensure each
+  //        enabled model has an endpoint (idempotent create).
+  const handleToggleProviderEnabled = (key: ManagedProviderKey, nextEnabled: boolean) => {
+    // Enabling a provider requires API 密钥 / 地址 / 模型 — all three.
+    // Surface the first missing field as a toast and flash the matching
+    // input/button. Priority: apiKey → apiBase → models.
+    if (nextEnabled) {
+      const validationError = getDefaultProviderValidationError(key)
+      if (validationError) {
+        setToastNotice({ tone: 'error', message: validationError.message })
+        setFlashField(validationError.field)
+        return
+      }
     }
 
-    setDefaultProvider(nextProvider)
-    queuePersist(providers, nextProvider)
-    setToastNotice({ tone: 'success', message: `${getDisplayName(nextProvider)} 已设为当前默认模型` })
-    return true
+    const previous = providers[key]
+
+    setProviders((prev) => {
+      const updated: Record<ManagedProviderKey, ProviderConfig> = {
+        ...prev,
+        [key]: { ...prev[key], enabled: nextEnabled },
+      }
+      // Promote / demote `defaultProvider` to stay aligned with the
+      // enabled set.
+      let nextDefault = defaultProvider
+      if (nextEnabled && !Object.values(prev).some((p) => p.enabled)) {
+        nextDefault = key
+      } else if (!nextEnabled && defaultProvider === key) {
+        const nextActive = (Object.entries(updated) as Array<[ManagedProviderKey, ProviderConfig]>)
+          .find(([, p]) => p.enabled)
+        if (nextActive) nextDefault = nextActive[0]
+      }
+      if (nextDefault !== defaultProvider) setDefaultProvider(nextDefault)
+      queuePersist(updated, nextDefault)
+      return updated
+    })
+
+    // Fire-and-forget engine sync. Failures surface as toasts via
+    // `reportHotReloadError`; the renderer state already advanced.
+    if (nextEnabled) {
+      void (async () => {
+        // Single GET /providers snapshot — we use it to decide:
+        //   - POST vs PATCH the provider entry
+        //   - per enabled model: POST endpoint, PATCH disabled, or skip
+        // This avoids the previous flow that re-issued GET /providers
+        // inside every hotCreateEndpoint call.
+        const list = await window.agentApi.listProviders()
+        if (!list.ok && list.status !== 404 && list.status !== 0) {
+          reportHotReloadError('厂商查询', list.error || `http_${list.status}`, list.message)
+          return
+        }
+        const apiUnavailable = !list.ok
+        const existing = list.ok ? list.data.providers.find((p) => p.name === key) : undefined
+
+        const baseUrl = previous.apiBase?.trim() || PROVIDER_DEFAULT_BASES[key] || ''
+        const apiKey = previous.apiKey.trim()
+        const engineType = getEffectiveEngineType(key, previous)
+
+        // 1) Provider entry: POST when missing, PATCH when present.
+        if (!apiUnavailable) {
+          if (!existing) {
+            const createPayload: {
+              name: string
+              type: 'openai' | 'anthropic' | 'gemini'
+              base_url?: string
+              api_key?: string
+              disabled?: boolean
+            } = { name: key, type: engineType, disabled: false }
+            if (baseUrl) createPayload.base_url = baseUrl
+            if (apiKey) createPayload.api_key = apiKey
+            const createRes = await window.agentApi.createProvider(createPayload)
+            if (!createRes.ok && createRes.status !== 404 && createRes.status !== 0) {
+              if (!(createRes.status === 400 && /exist/i.test(createRes.message || ''))) {
+                reportHotReloadError(
+                  '厂商创建',
+                  createRes.error || `http_${createRes.status}`,
+                  createRes.message,
+                )
+                return
+              }
+            }
+          } else {
+            // PATCH only when something actually changed — saves a
+            // round-trip when re-toggling without edits.
+            const patchBody: {
+              api_key?: string
+              base_url?: string
+              disabled?: boolean
+            } = {}
+            if (existing.disabled === true) patchBody.disabled = false
+            if (apiKey && existing.api_key !== apiKey) patchBody.api_key = apiKey
+            if (baseUrl && existing.base_url !== baseUrl) patchBody.base_url = baseUrl
+            if (Object.keys(patchBody).length > 0) {
+              const patchRes = await window.agentApi.patchProvider(key, patchBody)
+              if (!patchRes.ok && patchRes.status !== 404 && patchRes.status !== 0) {
+                reportHotReloadError(
+                  '厂商启用',
+                  patchRes.error || `http_${patchRes.status}`,
+                  patchRes.message,
+                )
+              }
+            }
+          }
+        }
+
+        // 2) Per-model: POST when missing, PATCH disabled=false when
+        //    present-and-paused, skip when already routing.
+        const endpointMap = new Map<
+          string,
+          { name: string; disabled?: boolean; in_chain: boolean }
+        >()
+        for (const e of existing?.endpoints ?? []) endpointMap.set(e.name, e)
+        const chainNeedsRefs: string[] = []
+        for (const model of previous.models) {
+          if (!model.enabled) continue
+          const ep = endpointMap.get(model.id)
+          if (!ep) {
+            const postRes = await window.agentApi.createEndpoint(key, {
+              name: model.id,
+              model: model.id,
+              disabled: false,
+            })
+            if (!postRes.ok && postRes.status !== 404 && postRes.status !== 0) {
+              if (postRes.status === 400 && /exist/i.test(postRes.message || '')) {
+                // race: another caller created it — make sure it's
+                // not paused.
+                await window.agentApi.patchEndpoint(key, model.id, { disabled: false })
+              } else {
+                reportHotReloadError(
+                  '模型创建',
+                  postRes.error || `http_${postRes.status}`,
+                  postRes.message,
+                )
+                continue
+              }
+            }
+            // Engine doesn't auto-chain newly created endpoints —
+            // collect refs and PUT them in one chain update at the end.
+            chainNeedsRefs.push(`${key}:${model.id}`)
+          } else if (ep.disabled === true) {
+            const patchRes = await window.agentApi.patchEndpoint(key, model.id, {
+              disabled: false,
+            })
+            if (!patchRes.ok && patchRes.status !== 404 && patchRes.status !== 0
+                && patchRes.error !== 'update_failed') {
+              reportHotReloadError(
+                '模型启用',
+                patchRes.error || `http_${patchRes.status}`,
+                patchRes.message,
+              )
+            }
+            if (!ep.in_chain) chainNeedsRefs.push(`${key}:${model.id}`)
+          } else if (!ep.in_chain) {
+            // Already enabled engine-side but somehow not in chain
+            // (e.g. yaml-edited). Just queue the chain append.
+            chainNeedsRefs.push(`${key}:${model.id}`)
+          }
+        }
+
+        // 3) Single chain PUT — only when we have new refs to add.
+        if (!apiUnavailable && chainNeedsRefs.length > 0) {
+          const chain = await window.agentApi.getFallbackChain()
+          if (!chain.ok) return
+          const present = new Set(chain.data.chain)
+          const additions = chainNeedsRefs.filter((ref) => {
+            // Account for legacy `provider.endpoint` chain refs too.
+            const [provider, ...rest] = ref.split(':')
+            const legacy = `${provider}.${rest.join(':')}`
+            return !present.has(ref) && !present.has(legacy)
+          })
+          if (additions.length === 0) return
+          const nextChain = [...chain.data.chain, ...additions]
+          const putRes = await window.agentApi.updateFallbackChain(nextChain)
+          if (!putRes.ok && putRes.status !== 404 && putRes.status !== 0) {
+            reportHotReloadError(
+              '链路更新',
+              putRes.error || `http_${putRes.status}`,
+              putRes.message,
+            )
+          }
+        }
+      })()
+    } else {
+      void (async () => {
+        // Single PATCH pauses the whole provider. Endpoints / chain /
+        // yaml are preserved so toggling back on is symmetric.
+        const res = await window.agentApi.patchProvider(key, { disabled: true })
+        if (!res.ok && res.status !== 404 && res.status !== 0) {
+          reportHotReloadError(
+            '厂商停用',
+            res.error || `http_${res.status}`,
+            res.message,
+          )
+        }
+      })()
+    }
+  }
+
+  // Apply the engine `type` directly. Persists locally and
+  // PATCH /providers/{p} {type} to hot-reload on the engine. The change
+  // also affects subsequent POST /providers fall-backs through
+  // `getEffectiveEngineType`.
+  const applyEngineType = async (
+    key: ManagedProviderKey,
+    next: 'openai' | 'anthropic' | 'gemini',
+  ) => {
+    const cfg = providers[key]
+    const current = getEffectiveEngineType(key, cfg)
+    if (current === next) return
+    // For `custom` we keep `protocol` in sync so the legacy renderer
+    // paths (`resolveProviderProtocol`, etc.) reflect the choice.
+    const patch: Partial<ProviderConfig> = { engineType: next }
+    if (key === 'custom' && (next === 'openai' || next === 'anthropic')) {
+      patch.protocol = next
+    }
+    updateProvider(key, patch)
+
+    // Hot-reload to engine. PATCH first; if provider isn't there yet,
+    // POST to create it with the new type.
+    const patchRes = await window.agentApi.patchProvider(key, { type: next })
+    if (patchRes.ok) return
+    if (patchRes.status === 404 || patchRes.status === 0) return
+    const baseUrl = cfg.apiBase?.trim() || PROVIDER_DEFAULT_BASES[key] || undefined
+    const apiKey = cfg.apiKey.trim() || undefined
+    const createRes = await window.agentApi.createProvider({
+      name: key,
+      type: next,
+      ...(baseUrl ? { base_url: baseUrl } : {}),
+      ...(apiKey ? { api_key: apiKey } : {}),
+    })
+    if (createRes.ok) return
+    if (createRes.status === 404 || createRes.status === 0) return
+    if (createRes.status === 400 && /exist/i.test(createRes.message || '')) {
+      const retry = await window.agentApi.patchProvider(key, { type: next })
+      if (retry.ok) return
+      reportHotReloadError('协议切换', retry.error || `http_${retry.status}`, retry.message)
+      return
+    }
+    reportHotReloadError('协议切换', createRes.error || `http_${createRes.status}`, createRes.message)
   }
 
   const handleTest = async () => {
@@ -1053,12 +3219,304 @@ function ModelSection() {
     setTimeout(() => setTestState('idle'), 2500)
   }
 
+  const handleFetchModels = async () => {
+    // Snapshot the provider we're fetching for. The actual model-list
+    // merge happens via setProviders((prev) => ...) below so we
+    // reconcile against the *latest* state — important because the
+    // user can delete / toggle models while the registry GET is in
+    // flight (race condition that previously revived deleted entries).
+    const targetProvider = selectedProvider
+
+    setModelFetchState('loading')
+    try {
+      const result = await window.agentApi.listRegistryModels()
+      if (!result.ok) {
+        const friendly = result.error === 'network_error'
+          ? '无法连接到引擎，请确认控制台端口已启动'
+          : result.error === 'timeout'
+            ? '请求超时'
+            : `请求失败：${result.error}${result.message ? ` (${result.message})` : ''}`
+        setToastNotice({ tone: 'error', message: friendly })
+        return
+      }
+
+      const parsed = result.data
+
+      // Filter by selected provider for managed providers (anthropic / openai).
+      // For "custom" provider, include everything.
+      const filtered = targetProvider === 'custom'
+        ? parsed
+        : parsed.filter((m) => m.provider === targetProvider)
+
+      if (filtered.length === 0) {
+        setToastNotice({
+          tone: 'error',
+          message: targetProvider === 'custom'
+            ? '注册表未返回任何模型'
+            : `注册表中没有 ${getDisplayName(targetProvider)} 的模型`,
+        })
+        return
+      }
+
+      // Derive tags from registry supports flags.
+      const deriveTags = (s?: Record<string, unknown>): string[] => {
+        if (!s) return []
+        const tags: string[] = []
+        if (s.vision === true) tags.push('vision')
+        if (s.web_search === true) tags.push('web')
+        if (s.reasoning === true) tags.push('reasoning')
+        if (s.function_calling === true) tags.push('tools')
+        return tags
+      }
+
+      // Track whether we *added* any registry-new entries (only after
+      // reconciling against latest state — see below). Used for the
+      // success toast.
+      let addedCount = 0
+      let finalLength = 0
+
+      setProviders((prev) => {
+        const current = prev[targetProvider]
+        if (!current) return prev
+
+        const merged: ProviderModelEntry[] = []
+        const seenIds = new Set<string>()
+
+        // First include existing entries in their current order,
+        // enriching registry-known ones.
+        for (const existing of current.models) {
+          const match = filtered.find((m) => m.model_id === existing.id)
+          if (match) {
+            const entry: ProviderModelEntry = { id: existing.id }
+            entry.name = existing.name?.trim() || match.display_name || existing.id
+            entry.group = existing.group?.trim() || match.family || undefined
+            if (entry.group === undefined) delete entry.group
+            const tags = existing.tags && existing.tags.length > 0
+              ? existing.tags
+              : deriveTags(match.supports)
+            if (tags.length > 0) entry.tags = tags
+            if (existing.enabled) entry.enabled = true
+            merged.push(entry)
+          } else {
+            merged.push(existing)
+          }
+          seenIds.add(existing.id)
+        }
+
+        // Tombstones for this provider — ids the user 🗑-removed in
+        // this session. We must NOT re-add them from the registry,
+        // regardless of how stale the fetch was.
+        const tombstones = deletedModelIdsRef.current.get(targetProvider) ?? new Set<string>()
+
+        // Append registry entries that aren't in seenIds and weren't
+        // explicitly tombstoned. This is the fix for the
+        // "deleted-then-revived" race: a fetch in flight when the
+        // user 🗑'd a model used to come back with that model in the
+        // payload and re-add it as "new from registry".
+        addedCount = 0
+        for (const m of filtered) {
+          if (seenIds.has(m.model_id)) continue
+          if (tombstones.has(m.model_id)) continue
+          const entry: ProviderModelEntry = { id: m.model_id }
+          if (m.display_name) entry.name = m.display_name
+          if (m.family) entry.group = m.family
+          const tags = deriveTags(m.supports)
+          if (tags.length > 0) entry.tags = tags
+          merged.push(entry)
+          seenIds.add(m.model_id)
+          addedCount++
+        }
+
+        finalLength = merged.length
+        const updated: Record<ManagedProviderKey, ProviderConfig> = {
+          ...prev,
+          [targetProvider]: {
+            ...current,
+            models: merged,
+            raw: buildAppProviderRaw({ ...current, models: merged }),
+          },
+        }
+        queuePersist(updated, defaultProvider)
+        return updated
+      })
+
+      setToastNotice({
+        tone: 'success',
+        message: addedCount > 0
+          ? `已同步 ${finalLength} 个模型，新增 ${addedCount} 个`
+          : `已同步 ${finalLength} 个模型`,
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      setToastNotice({ tone: 'error', message: `获取模型列表失败：${message}` })
+    } finally {
+      setModelFetchState('idle')
+    }
+  }
+
+  const handleAddModel = () => {
+    const id = addModelId.trim()
+    if (!id) {
+      setToastNotice({ tone: 'error', message: '请输入模型 ID' })
+      return
+    }
+    const current = providers[selectedProvider].models
+
+    if (editingModelId) {
+      // Edit existing entry
+      if (id !== editingModelId && current.some((m) => m.id === id)) {
+        setToastNotice({ tone: 'error', message: '该模型 ID 已存在' })
+        return
+      }
+      const previousEntry = current.find((m) => m.id === editingModelId)
+      const next: ProviderModelEntry[] = current.map((m) => {
+        if (m.id !== editingModelId) return m
+        const entry: ProviderModelEntry = { id }
+        if (addModelName.trim()) entry.name = addModelName.trim()
+        if (addModelGroup.trim()) entry.group = addModelGroup.trim()
+        if (addModelTags.length > 0) entry.tags = [...addModelTags]
+        if (m.enabled) entry.enabled = true
+        return entry
+      })
+      const patch: Partial<ProviderConfig> = { models: next }
+      // If renamed and this was the default model, keep it as default
+      if (providers[selectedProvider].model === editingModelId && id !== editingModelId) {
+        patch.model = id
+      }
+      updateProvider(selectedProvider, patch)
+      // Hot-reload endpoint on the engine. Only the enabled endpoints are
+      // live in the engine; skip the API call if the renderer-side entry
+      // was never enabled.
+      if (previousEntry?.enabled) {
+        void hotPatchEndpoint(selectedProvider, editingModelId, id, { model: id })
+      }
+      closeAddModal()
+      return
+    }
+
+    if (current.some((m) => m.id === id)) {
+      setToastNotice({ tone: 'error', message: '该模型已存在' })
+      return
+    }
+    const entry: ProviderModelEntry = { id }
+    if (addModelName.trim()) entry.name = addModelName.trim()
+    if (addModelGroup.trim()) entry.group = addModelGroup.trim()
+    if (addModelTags.length > 0) entry.tags = [...addModelTags]
+    updateProvider(selectedProvider, { models: [...current, entry] })
+    // New models default to disabled — no endpoint hot-create until the
+    // user clicks the checkmark toggle (see handleToggleModelEnabled).
+    closeAddModal()
+  }
+
+  const handleEditModel = (entry: ProviderModelEntry) => {
+    setEditingModelId(entry.id)
+    setAddModelId(entry.id)
+    setAddModelName(entry.name ?? '')
+    setAddModelGroup(entry.group ?? '')
+    setAddModelTags(entry.tags ? [...entry.tags] : [])
+    setAdvancedOpen(false)
+    setAddModelOpen(true)
+  }
+
+  const handleRemoveModel = (id: string) => {
+    const current = providers[selectedProvider].models
+    const previousEntry = current.find((m) => m.id === id)
+    const next = current.filter((m) => m.id !== id)
+    const patch: Partial<ProviderConfig> = { models: next }
+    if (providers[selectedProvider].model === id) {
+      patch.model = next[0]?.id ?? null
+    }
+    updateProvider(selectedProvider, patch)
+    // Tombstone so an in-flight handleFetchModels (auto-refresh on
+    // tab entry) doesn't revive this id from the registry.
+    rememberDeletion(selectedProvider, id)
+    // 🗑 真删：DELETE engine-side endpoint. The engine auto-removes
+    // the entry from the fallback chain. Only call when the model
+    // was previously enabled (engine actually has it).
+    if (previousEntry?.enabled) {
+      void hotDeleteEndpoint(selectedProvider, id)
+    }
+  }
+
+  const handleToggleGroup = (group: string) => {
+    setCollapsedGroups((prev) => ({ ...prev, [group]: !prev[group] }))
+  }
+
+  const handleSelectModel = (id: string) => {
+    updateProvider(selectedProvider, { model: id || null })
+  }
+
+  // Multi-select: each model entry has its own `enabled` flag. Toggling
+  // doesn't affect siblings. The engine still receives a single active
+  // `model` per provider — when the currently-active model is disabled
+  // we promote the first remaining enabled entry; when the first model
+  // is enabled and no active model is set, we set it as the active one.
+  //
+  // Enable  → POST /providers/{p}/endpoints (create if absent) +
+  //           PATCH disabled=false (if already existed) +
+  //           PUT /fallback-chain (append, idempotent)
+  // Disable → PATCH /providers/{p}/endpoints/{e} { disabled: true }
+  //           (engine 2026-05-14+: dispatcher skips, no chain churn)
+  const handleToggleModelEnabled = (id: string) => {
+    const current = providers[selectedProvider]
+    const previousEntry = current.models.find((m) => m.id === id)
+    const willEnable = !previousEntry?.enabled
+    const nextModels: ProviderModelEntry[] = current.models.map((m) => {
+      if (m.id !== id) return m
+      const next: ProviderModelEntry = { ...m }
+      if (willEnable) next.enabled = true
+      else delete next.enabled
+      return next
+    })
+
+    const patch: Partial<ProviderConfig> = { models: nextModels }
+    const activeModelId = current.model
+
+    if (willEnable && !activeModelId) {
+      patch.model = id
+    } else if (!willEnable && activeModelId === id) {
+      const nextActive = nextModels.find((m) => m.enabled)
+      patch.model = nextActive ? nextActive.id : null
+    }
+
+    updateProvider(selectedProvider, patch)
+
+    // Hot-reload to the engine. Fire-and-forget; failures surface as toasts.
+    if (willEnable) {
+      void hotCreateEndpoint(selectedProvider, id)
+    } else {
+      void hotSetEndpointDisabled(selectedProvider, id, true)
+    }
+  }
+
+  const closeAddModal = () => {
+    setAddModelOpen(false)
+    setEditingModelId(null)
+    setAddModelId('')
+    setAddModelName('')
+    setAddModelGroup('')
+    setAddModelTags([])
+    setGroupSuggestOpen(false)
+    setAdvancedOpen(false)
+  }
+
   const selected = providers[selectedProvider]
+  // Hide the generic "Custom" entry from the sidebar — vendor coverage
+  // (Anthropic / OpenAI / Google / DeepSeek / GLM / Kimi / MiniMax)
+  // already spans the registry, so the catch-all isn't useful in the UI.
+  // The underlying type / persistence still keeps `custom` so older
+  // configs aren't lost.
   const providerKeys = MANAGED_PROVIDER_KEYS.filter((key) => {
+    if (key === 'custom') return false
     if (!searchQuery) return true
     const q = searchQuery.toLowerCase()
     return key.toLowerCase().includes(q) || getDisplayName(key).toLowerCase().includes(q)
   })
+
+  // Show the "去配置 Agent LLM 节点" affordance only when the
+  // currently-viewed provider is enabled — the prompt is contextual
+  // to the row the user is editing, not the global enabled set.
+  const selectedProviderEnabled = Boolean(providers[selectedProvider]?.enabled)
 
   if (loading) {
     return <div className="flex items-center justify-center py-20"><Loader2 size={20} className="animate-spin text-muted-foreground" /></div>
@@ -1082,9 +3540,8 @@ function ModelSection() {
 
         <div className="flex-1 overflow-y-auto px-1.5 pb-2">
           {providerKeys.map((key) => {
-            const providerConfig = providers[key]
             const isActive = key === selectedProvider
-            const isEnabled = key === defaultProvider
+            const isEnabled = Boolean(providers[key]?.enabled)
 
             return (
               <button
@@ -1093,20 +3550,18 @@ function ModelSection() {
                   setSelectedProvider(key)
                   setShowApiKey(false)
                   setTestState('idle')
+                  setModelSearchVisible(false)
+                  setModelSearchQuery('')
+                  setAddModelOpen(false)
                 }}
                 className={cn(
                   'w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors mb-0.5',
                   isActive ? 'bg-accent text-foreground' : 'text-foreground hover:bg-accent/50'
                 )}
               >
-                <div
-                  className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 text-white text-xs font-bold"
-                  style={{ backgroundColor: getProviderColor(key) }}
-                >
-                  {getProviderInitial(key)}
-                </div>
+                <ProviderLogo provider={key} size={28} />
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center justify-between gap-2">
                     <span className="min-w-0 flex-1 truncate text-sm font-medium">{getDisplayName(key)}</span>
                     {isEnabled && (
                       <span className="text-[10px] font-semibold text-status-connected bg-status-connected/15 px-1.5 py-0.5 rounded-full flex-shrink-0">
@@ -1114,11 +3569,6 @@ function ModelSection() {
                       </span>
                     )}
                   </div>
-                  <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                    {key === 'custom'
-                      ? `Custom / ${providerConfig.protocol === 'anthropic' ? 'Anthropic 协议' : 'OpenAI 协议'}`
-                      : providerConfig.model?.trim() || '未设置 Model ID'}
-                  </p>
                 </div>
               </button>
             )
@@ -1135,33 +3585,7 @@ function ModelSection() {
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        <div className="px-8 py-6 max-w-[52rem]">
-          <div className="flex items-center justify-between mb-8">
-            <div className="flex items-center gap-2.5">
-              <div
-                className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold"
-                style={{ backgroundColor: getProviderColor(selectedProvider) }}
-              >
-                {getProviderInitial(selectedProvider)}
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold text-foreground">{getDisplayName(selectedProvider)}</h2>
-                <p className="text-xs text-muted-foreground">Provider 与默认模型</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground">设为默认</span>
-              <Toggle
-                checked={selectedProvider === defaultProvider}
-                onChange={(checked) => {
-                  if (checked && selectedProvider !== defaultProvider) {
-                    handleDefaultProviderChange(selectedProvider)
-                  }
-                }}
-              />
-            </div>
-          </div>
-
+        <div className="px-8 py-6 max-w-[52rem] mx-auto w-full">
           {persistState === 'error' && persistMessage && (
             <div
               className={cn(
@@ -1173,13 +3597,36 @@ function ModelSection() {
             </div>
           )}
 
-          <div className="mx-auto w-full max-w-[36rem]">
-            <GroupCard title="配置">
+          <div className="rounded-2xl border border-border bg-card shadow-sm">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-5 border-b border-border">
+              <div className="flex items-center gap-2.5">
+                <ProviderLogo provider={selectedProvider} size={28} />
+                <h2 className="text-lg font-semibold text-foreground">{getDisplayName(selectedProvider)}</h2>
+                {PROVIDER_DOCS_PAGES[selectedProvider] && (
+                  <button
+                    type="button"
+                    onClick={() => window.appRuntime?.openExternal?.(PROVIDER_DOCS_PAGES[selectedProvider])}
+                    className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+                    title="访问官网"
+                  >
+                    <ExternalLink size={14} />
+                  </button>
+                )}
+              </div>
+              <Toggle
+                checked={Boolean(selected.enabled)}
+                onChange={(checked) => handleToggleProviderEnabled(selectedProvider, checked)}
+              />
+            </div>
+
+            <div className="px-6 py-5 space-y-6">
               {selectedProvider === 'custom' && (
-                <SettingRow
-                  label="协议兼容"
-                  description="指定 Custom provider 写入 llm.providers 时使用的协议格式"
-                >
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-foreground">协议兼容</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">指定 Custom provider 写入 llm.providers 时使用的协议格式</p>
+                  </div>
                   <Segment
                     value={selected.protocol}
                     onChange={(value) => updateProvider(selectedProvider, { protocol: value as ProviderConfig['protocol'] })}
@@ -1188,20 +3635,34 @@ function ModelSection() {
                       { label: 'Anthropic 协议', value: 'anthropic' },
                     ]}
                   />
-                </SettingRow>
+                </div>
               )}
 
-              <StackedField
-                label="API 密钥"
-                description="填写当前 provider 的访问密钥，可直接在这里做连通性检测"
-              >
+              {/* API 密钥 */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-sm font-semibold text-foreground">API 密钥</p>
+                  <button
+                    type="button"
+                    className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+                    title="高级设置"
+                  >
+                    <SlidersHorizontal size={14} />
+                  </button>
+                </div>
                 <div className="relative">
                   <input
                     type={showApiKey ? 'text' : 'password'}
                     value={selected.apiKey}
-                    onChange={(e) => updateProvider(selectedProvider, { apiKey: e.target.value })}
-                    placeholder="输入 API 密钥"
-                    className="h-10 w-full rounded-md border border-border bg-background pl-3 pr-[6.9rem] text-sm text-foreground outline-none transition-shadow placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+                    onChange={(e) => {
+                      updateProvider(selectedProvider, { apiKey: e.target.value })
+                      schedulePatchProviderCredentials(selectedProvider)
+                    }}
+                    placeholder="API 密钥"
+                    className={cn(
+                      'h-10 w-full rounded-md border border-border bg-background pl-3 pr-[5.5rem] text-sm text-foreground outline-none transition-shadow placeholder:text-muted-foreground focus:ring-1 focus:ring-ring',
+                      flashApiKey && 'animate-pulse border-amber-400 ring-2 ring-amber-400 ring-offset-1'
+                    )}
                   />
                   <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
                     <button
@@ -1214,7 +3675,7 @@ function ModelSection() {
                       onClick={handleTest}
                       disabled={testState === 'testing'}
                       className={cn(
-                        'inline-flex h-7 min-w-[3.75rem] items-center justify-center gap-1 rounded-md border px-2 text-[11px] font-medium transition-colors',
+                        'inline-flex h-7 min-w-[2.75rem] items-center justify-center gap-1 rounded-md border px-2 text-[11px] font-medium transition-colors',
                         testState === 'ok' ? 'border-status-connected text-status-connected'
                           : testState === 'fail' ? 'border-status-disconnected text-status-disconnected'
                             : 'border-border bg-card hover:bg-muted text-foreground'
@@ -1227,47 +3688,572 @@ function ModelSection() {
                     </button>
                   </div>
                 </div>
-              </StackedField>
+                <div className="mt-2 flex items-center justify-between text-xs">
+                  {PROVIDER_APIKEY_PAGES[selectedProvider] ? (
+                    <button
+                      type="button"
+                      onClick={() => window.appRuntime?.openExternal?.(PROVIDER_APIKEY_PAGES[selectedProvider])}
+                      className="text-sky-500 hover:text-sky-600 hover:underline"
+                    >
+                      点击这里获取密钥
+                    </button>
+                  ) : <span />}
+                  <span className="text-muted-foreground">多个密钥使用逗号分隔</span>
+                </div>
+              </div>
 
-              <StackedField
-                label="API 地址"
-                description="留空时使用该 provider 的默认地址，自定义网关可直接填写兼容入口"
-              >
+              {/* API 地址 */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-sm font-semibold text-foreground">API 地址</p>
+                    {/*
+                      Engine `type` badge. Click opens a small popup with
+                      the three protocol options (openai / anthropic /
+                      gemini). Selecting one PATCHes /providers/{p}.
+                    */}
+                    <button
+                      type="button"
+                      onClick={() => setEngineTypePopupOpen((v) => !v)}
+                      title="点击选择协议类型"
+                      className={cn(
+                        'inline-flex h-5 items-center rounded-full border px-1.5 text-[10px] font-medium uppercase tracking-wide transition-colors',
+                        getEffectiveEngineType(selectedProvider, selected) === 'openai'
+                          && 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600',
+                        getEffectiveEngineType(selectedProvider, selected) === 'anthropic'
+                          && 'border-amber-500/40 bg-amber-500/10 text-amber-600',
+                        getEffectiveEngineType(selectedProvider, selected) === 'gemini'
+                          && 'border-sky-500/40 bg-sky-500/10 text-sky-600',
+                      )}
+                    >
+                      {getEffectiveEngineType(selectedProvider, selected)}
+                    </button>
+                  </div>
+                  <div className="relative" ref={engineTypePopupRef}>
+                    <button
+                      type="button"
+                      onClick={() => setEngineTypePopupOpen((v) => !v)}
+                      className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+                      title="选择协议类型"
+                    >
+                      <SlidersHorizontal size={14} />
+                    </button>
+                    {engineTypePopupOpen && (
+                      <div className="absolute right-0 top-full z-30 mt-1 w-44 rounded-lg border border-border bg-card p-1 shadow-lg">
+                        <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                          协议类型
+                        </div>
+                        {ENGINE_TYPE_OPTIONS.map((t) => {
+                          const active = getEffectiveEngineType(selectedProvider, selected) === t
+                          return (
+                            <button
+                              key={t}
+                              type="button"
+                              onClick={() => {
+                                setEngineTypePopupOpen(false)
+                                void applyEngineType(selectedProvider, t)
+                              }}
+                              className={cn(
+                                'flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent',
+                                active ? 'bg-accent/60 text-foreground' : 'text-foreground',
+                              )}
+                            >
+                              <span className="font-medium">{t}</span>
+                              {active && <Check size={12} className="text-foreground" />}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
                 <input
                   type="text"
                   value={selected.apiBase || ''}
-                  onChange={(e) => updateProvider(selectedProvider, { apiBase: e.target.value || null })}
+                  onChange={(e) => {
+                    updateProvider(selectedProvider, { apiBase: e.target.value || null })
+                    schedulePatchProviderCredentials(selectedProvider)
+                  }}
                   placeholder={PROVIDER_DEFAULT_BASES[selectedProvider] || 'https://api.example.com'}
-                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none transition-shadow placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+                  className={cn(
+                    'h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none transition-shadow placeholder:text-muted-foreground focus:ring-1 focus:ring-ring',
+                    flashApiBase && 'animate-pulse border-amber-400 ring-2 ring-amber-400 ring-offset-1'
+                  )}
                 />
-                {selectedProvider === 'custom' && (
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    Custom 当前按 {selected.protocol === 'anthropic' ? 'Anthropic' : 'OpenAI'} 协议映射到 `llm.providers`。
+                <p className="mt-2 text-xs text-muted-foreground">
+                  预览：
+                  {(selected.apiBase?.trim() || PROVIDER_DEFAULT_BASES[selectedProvider] || '').replace(/\/+$/, '')}
+                  {getApiPathSuffix(getEffectiveEngineType(selectedProvider, selected))}
+                </p>
+              </div>
+
+              {/* 模型 */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-semibold text-foreground">模型</p>
+                    {selected.models.length > 0 && (
+                      <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full">
+                        {selected.models.length}
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setModelSearchVisible((v) => !v)}
+                      className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+                      title="搜索模型"
+                    >
+                      <Search size={14} />
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleFetchModels}
+                    disabled={modelFetchState === 'loading'}
+                    title="刷新模型列表"
+                    className={cn(
+                      'rounded p-1 text-muted-foreground transition-colors hover:text-foreground',
+                      modelFetchState === 'loading' && 'opacity-60'
+                    )}
+                  >
+                    <RefreshCw
+                      size={14}
+                      className={cn(modelFetchState === 'loading' && 'animate-spin')}
+                    />
+                  </button>
+                </div>
+
+                {modelSearchVisible && (
+                  <input
+                    type="text"
+                    value={modelSearchQuery}
+                    onChange={(e) => setModelSearchQuery(e.target.value)}
+                    placeholder="搜索模型..."
+                    className="mb-2 h-9 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+                  />
+                )}
+
+                {/* Model groups */}
+                {selected.models.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-xs text-muted-foreground">
+                    暂无模型，点击右上角刷新或下方添加
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {groupModels(
+                      selected.models.filter((m) => {
+                        if (!modelSearchQuery) return true
+                        const q = modelSearchQuery.toLowerCase()
+                        return m.id.toLowerCase().includes(q)
+                          || (m.name?.toLowerCase().includes(q) ?? false)
+                          || (m.group?.toLowerCase().includes(q) ?? false)
+                      })
+                    ).map((group) => {
+                      const isCollapsed = collapsedGroups[group.name]
+                      const palette = getGroupPalette(group.name)
+                      return (
+                        <div key={group.name} className="rounded-lg border border-border overflow-hidden">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleGroup(group.name)}
+                            className="w-full flex items-center justify-between px-3 py-2 transition-colors hover:brightness-95"
+                            style={{
+                              backgroundColor: palette.bg,
+                              borderBottom: `1px solid ${palette.border}`,
+                            }}
+                          >
+                            <div className="flex items-center gap-2">
+                              {isCollapsed
+                                ? <ChevronRight size={14} style={{ color: palette.text }} />
+                                : <ChevronDown size={14} style={{ color: palette.text }} />}
+                              <span className="text-sm font-semibold" style={{ color: palette.text }}>
+                                {group.name}
+                              </span>
+                              <span
+                                className="text-[10px] font-medium px-1.5 py-0.5 rounded-full"
+                                style={{
+                                  backgroundColor: 'rgba(255,255,255,0.6)',
+                                  color: palette.text,
+                                }}
+                              >
+                                {group.items.length}
+                              </span>
+                            </div>
+                          </button>
+                          {!isCollapsed && (
+                            <div className="divide-y divide-border">
+                              {group.items.map((entry) => {
+                                const isEnabled = Boolean(entry.enabled)
+                                const label = entry.name?.trim() || entry.id
+                                return (
+                                  <div
+                                    key={entry.id}
+                                    className={cn(
+                                      'flex items-center gap-2 px-3 py-2 transition-colors',
+                                      isEnabled ? 'bg-status-connected/10' : 'hover:bg-accent/30'
+                                    )}
+                                  >
+                                    <ModelIcon id={entry.id} size={22} />
+                                    <div className="min-w-0 flex-1 flex items-center">
+                                      <span className="min-w-0 max-w-full truncate text-left text-sm text-foreground">
+                                        {label}
+                                      </span>
+                                      {entry.tags && entry.tags.length > 0 && (
+                                        <div className="ml-2 flex items-center gap-1">
+                                          {entry.tags
+                                            .map((k) => MODEL_TAG_MAP[k])
+                                            .filter(Boolean)
+                                            .map((tag) => (
+                                              <ModelTagBadge key={tag.key} tag={tag} />
+                                            ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                    <HoverHint label="配置">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleEditModel(entry)}
+                                        aria-label="配置"
+                                        className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+                                      >
+                                        <Settings2 size={14} />
+                                      </button>
+                                    </HoverHint>
+                                    <HoverHint label={isEnabled ? '关闭' : '启用'}>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleToggleModelEnabled(entry.id)}
+                                        aria-label={isEnabled ? '关闭' : '启用'}
+                                        aria-pressed={isEnabled}
+                                        className={cn(
+                                          'flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border transition-all',
+                                          isEnabled
+                                            ? 'border-status-connected bg-status-connected text-white shadow-sm scale-105'
+                                            : 'border-border bg-background text-transparent hover:border-status-connected/60 hover:text-status-connected/60',
+                                          flashModelChecks && !isEnabled && 'animate-pulse ring-2 ring-amber-400 ring-offset-1'
+                                        )}
+                                      >
+                                        <Check size={12} strokeWidth={3} />
+                                      </button>
+                                    </HoverHint>
+                                    <HoverHint label="删除">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRemoveModel(entry.id)}
+                                        aria-label="删除"
+                                        className="rounded p-1 text-muted-foreground transition-colors hover:text-red-500"
+                                      >
+                                        <X size={14} />
+                                      </button>
+                                    </HoverHint>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {PROVIDER_MODELS_PAGES[selectedProvider] && (
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    查看{' '}
+                    <button
+                      type="button"
+                      onClick={() => window.appRuntime?.openExternal?.(PROVIDER_DOCS_PAGES[selectedProvider])}
+                      className="text-sky-500 hover:underline"
+                    >
+                      {getDisplayName(selectedProvider)} 文档
+                    </button>{' '}
+                    和{' '}
+                    <button
+                      type="button"
+                      onClick={() => window.appRuntime?.openExternal?.(PROVIDER_MODELS_PAGES[selectedProvider])}
+                      className="text-sky-500 hover:underline"
+                    >
+                      模型
+                    </button>{' '}
+                    获取更多详情
                   </p>
                 )}
-              </StackedField>
 
-              <StackedField
-                label="Model ID"
-                description="设置默认调用的模型名称，这里会作为该 provider 的首选模型"
-              >
-                <input
-                  type="text"
-                  value={selected.model || ''}
-                  onChange={(e) => updateProvider(selectedProvider, { model: e.target.value || null })}
-                  placeholder="输入默认使用的 Model ID"
-                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none transition-shadow placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
-                />
-                <div className="mt-3 rounded-lg border border-dashed border-border px-3 py-3 text-xs text-muted-foreground">
-                  {selectedProvider === defaultProvider
-                    ? `当前默认 provider 为 ${getDisplayName(defaultProvider)}，这里的修改会同步成为应用默认模型。`
-                    : `当前默认 provider 为 ${getDisplayName(defaultProvider)}。如需切换，请开启右上角“设为默认”。`}
+                {/* 管理 / 添加 */}
+                <div className="mt-4 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleFetchModels}
+                    disabled={modelFetchState === 'loading'}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-md bg-violet-600 px-3 text-sm font-medium text-white transition-colors hover:bg-violet-700 disabled:opacity-60"
+                  >
+                    <SlidersHorizontal size={14} />
+                    管理
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAddModelOpen(true)}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+                  >
+                    <span className="text-base leading-none">+</span>
+                    添加
+                  </button>
                 </div>
-              </StackedField>
-            </GroupCard>
+
+              </div>
+            </div>
           </div>
+
+          {selectedProviderEnabled && onNavigateToAgents && (
+            <div className="sticky bottom-0 left-0 right-0 z-20 mt-6 -mx-8 px-8 pb-6 pt-3 bg-gradient-to-t from-background via-background/95 to-background/0 pointer-events-none">
+              <div className="flex justify-center pointer-events-auto">
+                <button
+                  type="button"
+                  onClick={onNavigateToAgents}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-md bg-violet-600 px-4 text-sm font-medium text-white shadow-sm transition-colors hover:bg-violet-700"
+                >
+                  去配置 Agent LLM 节点
+                  <ExternalLink size={14} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
+      {addModelOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={closeAddModal}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="add-model-title"
+            className="w-full max-w-xl rounded-2xl border border-border bg-card shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-5">
+              <h3 id="add-model-title" className="text-lg font-semibold text-foreground">
+                {editingModelId ? '编辑模型' : '添加模型'}
+              </h3>
+              <button
+                type="button"
+                onClick={closeAddModal}
+                className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+                aria-label="关闭"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="px-6 pb-5 space-y-5">
+              <div className="grid grid-cols-[auto_1fr] items-center gap-x-6 gap-y-5">
+                <label htmlFor="add-model-id" className="flex items-center gap-1 text-sm text-foreground">
+                  <span className="text-red-500">*</span>
+                  <span>模型 ID</span>
+                  <HelpIcon title="模型在服务端的唯一标识，必填" />
+                </label>
+                <input
+                  id="add-model-id"
+                  type="text"
+                  value={addModelId}
+                  onChange={(e) => setAddModelId(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleAddModel()
+                    if (e.key === 'Escape') closeAddModal()
+                  }}
+                  autoFocus
+                  placeholder="必填 例如 gpt-3.5-turbo"
+                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+                />
+
+                <label htmlFor="add-model-name" className="flex items-center gap-1 text-sm text-foreground">
+                  <span>模型名称</span>
+                  <HelpIcon title="可选，显示在列表中的友好名称" />
+                </label>
+                <input
+                  id="add-model-name"
+                  type="text"
+                  value={addModelName}
+                  onChange={(e) => setAddModelName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleAddModel()
+                    if (e.key === 'Escape') closeAddModal()
+                  }}
+                  placeholder="例如 GPT-4"
+                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+                />
+
+                <label htmlFor="add-model-group" className="flex items-center gap-1 text-sm text-foreground">
+                  <span>分组名称</span>
+                  <HelpIcon title="可选，用于将模型按系列分组" />
+                </label>
+                <div className="relative">
+                  {(() => {
+                    const existingGroups = Array.from(
+                      new Set(
+                        selected.models.map((m) => m.group?.trim() || getModelGroup(m.id))
+                      )
+                    )
+                      .filter(Boolean)
+                      .sort((a, b) => a.localeCompare(b))
+                    const q = addModelGroup.trim().toLowerCase()
+                    const suggestions = q
+                      ? existingGroups.filter((g) => g.toLowerCase().includes(q))
+                      : existingGroups
+                    return (
+                      <>
+                        <input
+                          id="add-model-group"
+                          type="text"
+                          value={addModelGroup}
+                          onChange={(e) => {
+                            setAddModelGroup(e.target.value)
+                            setGroupSuggestOpen(true)
+                          }}
+                          onFocus={() => setGroupSuggestOpen(true)}
+                          onBlur={() => {
+                            // Delay so clicks on suggestions register before closing.
+                            window.setTimeout(() => setGroupSuggestOpen(false), 120)
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              if (groupSuggestOpen && suggestions.length > 0
+                                && !existingGroups.some((g) => g.toLowerCase() === q)
+                                && q) {
+                                // Pick the first suggestion on Enter when typing
+                                setAddModelGroup(suggestions[0])
+                                setGroupSuggestOpen(false)
+                                e.preventDefault()
+                                return
+                              }
+                              handleAddModel()
+                            }
+                            if (e.key === 'Escape') {
+                              if (groupSuggestOpen) {
+                                setGroupSuggestOpen(false)
+                              } else {
+                                closeAddModal()
+                              }
+                            }
+                          }}
+                          placeholder="例如 ChatGPT"
+                          autoComplete="off"
+                          className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+                        />
+                        {groupSuggestOpen && suggestions.length > 0 && (
+                          <ul
+                            role="listbox"
+                            className="absolute left-0 right-0 top-full z-10 mt-1 max-h-48 overflow-y-auto rounded-md border border-border bg-card shadow-lg"
+                          >
+                            {suggestions.map((g) => {
+                              const palette = getGroupPalette(g)
+                              return (
+                                <li key={g}>
+                                  <button
+                                    type="button"
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={() => {
+                                      setAddModelGroup(g)
+                                      setGroupSuggestOpen(false)
+                                    }}
+                                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-foreground hover:bg-accent"
+                                  >
+                                    <span
+                                      className="inline-block h-3 w-3 rounded-sm border"
+                                      style={{
+                                        backgroundColor: palette.bg,
+                                        borderColor: palette.border,
+                                      }}
+                                    />
+                                    <span className="truncate">{g}</span>
+                                  </button>
+                                </li>
+                              )
+                            })}
+                          </ul>
+                        )}
+                      </>
+                    )
+                  })()}
+                </div>
+              </div>
+
+              {editingModelId && advancedOpen && (
+                <div className="mt-2 border-t border-border pt-5">
+                  <div className="mb-2 flex items-center gap-1">
+                    <span className="text-sm font-medium text-foreground">模型类型</span>
+                    <AlertTriangle size={14} className="text-amber-500" />
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {MODEL_TAGS.map((tag) => {
+                      const active = addModelTags.includes(tag.key)
+                      const Icon = tag.icon
+                      return (
+                        <button
+                          key={tag.key}
+                          type="button"
+                          onClick={() =>
+                            setAddModelTags((prev) =>
+                              prev.includes(tag.key)
+                                ? prev.filter((k) => k !== tag.key)
+                                : [...prev, tag.key]
+                            )
+                          }
+                          className={cn(
+                            'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors'
+                          )}
+                          style={
+                            active
+                              ? {
+                                  backgroundColor: tag.bg,
+                                  borderColor: tag.border,
+                                  color: tag.fg,
+                                }
+                              : {
+                                  backgroundColor: 'transparent',
+                                  borderColor: 'var(--border, #E5E7EB)',
+                                  color: '#94A3B8',
+                                }
+                          }
+                        >
+                          <Icon size={12} />
+                          {tag.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between pt-2">
+                {editingModelId ? (
+                  <button
+                    type="button"
+                    onClick={() => setAdvancedOpen((v) => !v)}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+                  >
+                    <SlidersHorizontal size={14} />
+                    高级设置
+                    {advancedOpen
+                      ? <ChevronDown size={14} className="text-muted-foreground" />
+                      : <ChevronRight size={14} className="text-muted-foreground" />}
+                  </button>
+                ) : (
+                  <span />
+                )}
+                <button
+                  type="button"
+                  onClick={handleAddModel}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-md bg-violet-600 px-4 text-sm font-medium text-white transition-colors hover:bg-violet-700"
+                >
+                  {editingModelId ? '保存修改' : '添加模型'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {toastNotice && (
         <NoticeToast
           tone={toastNotice.tone}
@@ -1842,6 +4828,13 @@ function StorageSection() {
     }
   }
 
+  const handleBrowseDbPath = async () => {
+    const result = await window.appRuntime.openDatabaseLocation(dbPath)
+    if (!result.ok) {
+      setExportState({ type: 'browse', text: result.error || '打开数据库目录失败', ok: false })
+    }
+  }
+
   if (loading) {
     return <div className="flex items-center justify-center py-20"><Loader2 size={20} className="animate-spin text-muted-foreground" /></div>
   }
@@ -1853,7 +4846,11 @@ function StorageSection() {
         <SettingRow label="数据库路径" description="本地 SQLite 数据库文件位置">
           <div className="flex items-center gap-1.5">
             <TextInput value={dbPath} onChange={(v) => updateConfig({ storage: { ...storage, dbPath: v } })} className="w-52" mono />
-            <button className="h-7 px-2.5 text-xs font-medium rounded-md border border-border bg-card hover:bg-muted transition-colors text-foreground flex items-center gap-1.5">
+            <button
+              onClick={() => void handleBrowseDbPath()}
+              title="在文件管理器中显示数据库文件"
+              className="h-7 px-2.5 text-xs font-medium rounded-md border border-border bg-card hover:bg-muted transition-colors text-foreground flex items-center gap-1.5"
+            >
               <FolderOpen size={12} />浏览
             </button>
           </div>
@@ -2468,9 +5465,20 @@ function SoftwareSection() {
   const { config, loading, updateConfig } = useAppConfig()
   const logging = (config?.logging || {}) as { level?: LogViewerLevel }
   const persistedLevel = logging.level || 'info'
+  // Link-open behavior for plain http(s) links inside conversation messages.
+  // Storage namespace stays under `ui.linkOpenBehavior` (where ChatPage reads
+  // it) even though the visible control now lives under 软件设置. Default
+  // 'drawer' — preview the URL in the built-in WebPreviewDrawer.
+  // 'external' — open in the system default browser via shell.openExternal.
+  const ui = (config?.ui || {}) as { linkOpenBehavior?: string }
+  const linkOpenBehavior = ui.linkOpenBehavior === 'external' ? 'external' : 'drawer'
 
   const handleLevelChange = (value: string) => {
     updateConfig({ logging: { ...logging, level: value as LogViewerLevel } })
+  }
+
+  const handleLinkOpenBehaviorChange = (value: string) => {
+    updateConfig({ ui: { ...ui, linkOpenBehavior: value } })
   }
 
   if (loading) {
@@ -2480,6 +5488,21 @@ function SoftwareSection() {
   return (
     <div>
       <SectionHeader icon={SlidersHorizontal} title="软件设置" subtitle="应用级别的运行选项" />
+      <GroupCard title="对话行为">
+        <SettingRow
+          label="链接打开方式"
+          description="点击对话消息中的链接时，使用内置抽屉预览还是用系统默认浏览器打开"
+        >
+          <Segment
+            options={[
+              { label: '内置抽屉', value: 'drawer' },
+              { label: '系统浏览器', value: 'external' },
+            ]}
+            value={linkOpenBehavior}
+            onChange={handleLinkOpenBehaviorChange}
+          />
+        </SettingRow>
+      </GroupCard>
       <GroupCard title="日志">
         <SettingRow label="日志等级" description="控制写入日志文件的最低等级。等级越低，记录的内容越详细（fatal 最少，trace 最多）。">
           <SelectInput
@@ -2536,12 +5559,21 @@ export function SettingsPage() {
   const [active, setActive] = useState<SectionKey>(
     initialSection === 'channels' || initialSection === 'auth' ? 'connection' : (initialSection || 'connection')
   )
+  // Counter incremented when the user clicks "去配置 Agent LLM 节点"
+  // on the 模型配置 page. Forwarded into AgentSection → ProviderStrategyRow
+  // so the 主 Provider dropdown briefly pulses after navigation.
+  const [agentBlinkSignal, setAgentBlinkSignal] = useState(0)
 
   useEffect(() => {
     if (initialSection) {
       setActive(initialSection === 'channels' || initialSection === 'auth' ? 'connection' : initialSection)
     }
   }, [initialSection])
+
+  const handleNavigateToAgents = () => {
+    setActive('agents')
+    setAgentBlinkSignal((n) => n + 1)
+  }
 
   return (
     <div className="flex h-full overflow-hidden">
@@ -2580,13 +5612,18 @@ export function SettingsPage() {
       <div className={cn('flex-1', FULL_WIDTH_SECTIONS.has(active) ? 'overflow-hidden' : 'overflow-y-auto')}>
         {FULL_WIDTH_SECTIONS.has(active) ? (
           <>
-            {active === 'models' && <ModelSection />}
+            {active === 'models' && <ModelSection onNavigateToAgents={handleNavigateToAgents} />}
             {active === 'logs' && <LogsSection />}
           </>
         ) : (
           <div className="max-w-2xl mx-auto px-8 py-8">
             {active === 'connection' && <ConnectionSection />}
-            {active === 'agents' && <AgentSection />}
+            {active === 'agents' && (
+              <AgentSection
+                onNavigateToModels={() => setActive('models')}
+                blinkPrimarySignal={agentBlinkSignal}
+              />
+            )}
             {active === 'tools' && <ToolsSection />}
             {active === 'updates' && <UpdateSection />}
             {active === 'software' && <SoftwareSection />}

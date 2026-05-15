@@ -1,5 +1,6 @@
 import { app, shell, BrowserWindow, ipcMain, dialog, nativeImage, screen } from 'electron'
-import { basename, extname, join } from 'path'
+import { basename, dirname, extname, isAbsolute, join } from 'path'
+import { homedir } from 'os'
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync } from 'fs'
 import { spawn, ChildProcess } from 'child_process'
 import { pathToFileURL } from 'url'
@@ -25,6 +26,7 @@ import {
   listProjects as dbListProjects, softDeleteProjectWithSessions, listProjectSessions,
 } from './db'
 import {
+  DB_PATH,
   LATEST_LOG_PATH,
   LOGS_DIR,
 } from './runtime-paths'
@@ -65,6 +67,24 @@ import {
   probeConsole,
   setConsolePort,
   getConsolePort,
+  getSessionMetrics,
+  listRegistryModels,
+  listProviders,
+  createProvider,
+  getFallbackChain,
+  updateFallbackChain,
+  getAgentConfig,
+  patchAgentConfig,
+  patchProvider,
+  listEndpoints,
+  createEndpoint,
+  patchEndpoint,
+  deleteEndpoint,
+  type ProviderPatch,
+  type ProviderCreatePayload,
+  type EndpointCreatePayload,
+  type EndpointPatch,
+  type AgentPatch,
 } from './console-api'
 
 type PersistedSubagent = { taskId: string; label: string; status: string }
@@ -423,6 +443,37 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {}
+}
+
+// Returns true when the only differences between `previous` and `next`
+// engine configs are inside `llm.providers`, `llm.default_provider`, or
+// `llm.fallback_chain` — sections that the Providers Management API
+// (harnessclaw-engine/docs/api/providers-management-api.md) hot-reloads
+// at runtime. In that case the renderer has already pushed the change
+// through the API, so killing + relaunching the engine would only
+// disconnect the WebSocket for no benefit (and emit a server-side WARN
+// about the unclean close).
+function isProvidersOnlyConfigChange(
+  previous: Record<string, unknown>,
+  next: Record<string, unknown>,
+): boolean {
+  // Top-level keys outside `llm` must be byte-identical.
+  const prevTop = { ...previous, llm: undefined }
+  const nextTop = { ...next, llm: undefined }
+  if (JSON.stringify(prevTop) !== JSON.stringify(nextTop)) return false
+
+  // Inside `llm`, only the providers / default_provider / fallback_chain
+  // keys are allowed to differ. Everything else (health, default_max_tokens,
+  // etc.) requires a restart.
+  const prevLlm = asRecord(previous.llm)
+  const nextLlm = asRecord(next.llm)
+  const hotKeys = new Set(['providers', 'default_provider', 'fallback_chain'])
+  const allKeys = new Set([...Object.keys(prevLlm), ...Object.keys(nextLlm)])
+  for (const key of allKeys) {
+    if (hotKeys.has(key)) continue
+    if (JSON.stringify(prevLlm[key]) !== JSON.stringify(nextLlm[key])) return false
+  }
+  return true
 }
 
 function inferConfiguredProvider(config: Record<string, unknown>): string {
@@ -855,10 +906,26 @@ app.whenReady().then(() => {
 
   ipcMain.handle('config:save', async (_, data: unknown) => {
     ensureDir(HARNESSCLAW_DIR)
+    // Snapshot the on-disk config before the write so we can detect
+    // whether the diff is hot-reloadable. If only the LLM provider /
+    // chain / default_provider keys changed, the renderer has already
+    // pushed the change through the Providers Management API and a
+    // restart would just churn the WebSocket. See
+    // harnessclaw-engine/docs/api/providers-management-api.md.
+    const previous = readEngineConfig({ providers: {} })
     const result = saveEngineConfig(data)
     if (result.ok && existsSync(HARNESSCLAW_LAUNCHED_FLAG)) {
-      writeAppLog('info', 'setting.engine', 'Engine config saved, restarting runtime')
-      await restartHarnessclawRuntime()
+      const next = asRecord(data)
+      if (isProvidersOnlyConfigChange(previous, next)) {
+        writeAppLog(
+          'info',
+          'setting.engine',
+          'Engine config saved (providers-only, hot-reloaded; skipping restart)',
+        )
+      } else {
+        writeAppLog('info', 'setting.engine', 'Engine config saved, restarting runtime')
+        await restartHarnessclawRuntime()
+      }
     } else if (result.ok) {
       writeAppLog('info', 'setting.engine', 'Engine config saved')
     } else {
@@ -907,6 +974,34 @@ app.whenReady().then(() => {
     return {
       ok: !error,
       path: LOGS_DIR,
+      error: error || undefined,
+    }
+  })
+
+  ipcMain.handle('app-runtime:openDatabaseLocation', async (_, rawPath?: string) => {
+    const expandHome = (input: string): string => {
+      if (input === '~') return homedir()
+      if (input.startsWith('~/')) return join(homedir(), input.slice(2))
+      return input
+    }
+
+    const candidate = typeof rawPath === 'string' && rawPath.trim().length > 0 ? rawPath.trim() : DB_PATH
+    const expanded = expandHome(candidate)
+    const absolute = isAbsolute(expanded) ? expanded : join(homedir(), expanded)
+
+    if (existsSync(absolute) && statSync(absolute).isFile()) {
+      shell.showItemInFolder(absolute)
+      return { ok: true, path: absolute }
+    }
+
+    const parent = dirname(absolute)
+    if (!existsSync(parent)) {
+      return { ok: false, path: parent, error: `目录不存在：${parent}` }
+    }
+    const error = await shell.openPath(parent)
+    return {
+      ok: !error,
+      path: parent,
       error: error || undefined,
     }
   })
@@ -1212,6 +1307,211 @@ app.whenReady().then(() => {
   ipcMain.handle('console:getPort', () => {
     return { port: getConsolePort() }
   })
+
+  // Session Metrics — GET /api/v1/sessions/{id}/metrics on the Console
+  // port. See harnessclaw-engine/docs/api/session-metrics-api.md. We
+  // proxy this through main-process IPC instead of fetching from the
+  // renderer directly so we don't have to widen the renderer's CSP to
+  // include the Console host:port.
+  ipcMain.handle('console:getSessionMetrics', async (_, sessionId: string) => {
+    try {
+      return await getSessionMetrics(sessionId)
+    } catch (error) {
+      return { ok: false, status: 0, error: 'network_error', message: String(error) }
+    }
+  })
+
+  // Model Registry — GET /api/v1/models on the Console port.
+  // See harnessclaw-engine/docs/api/models-registry-api.md. Proxied
+  // through main-process IPC so the renderer doesn't hit CORS / CSP
+  // restrictions when talking to the local engine.
+  ipcMain.handle('console:listRegistryModels', async () => {
+    try {
+      return await listRegistryModels()
+    } catch (error) {
+      return { ok: false, status: 0, error: 'network_error', message: String(error) }
+    }
+  })
+
+  // Providers Management API — see
+  // harnessclaw-engine/docs/api/providers-management-api.md. Hot-edit
+  // provider config & the agent block (primary + fallback_chain) at
+  // runtime. Engine 2026-05-14+: management API is **always** mounted
+  // regardless of chain length, including the degraded-mode case
+  // (primary="" && fallback=[]). A 404 here is a genuine "path not
+  // found", not "not yet available".
+  ipcMain.handle('console:listProviders', async () => {
+    try {
+      return await listProviders()
+    } catch (error) {
+      return { ok: false, status: 0, error: 'network_error', message: String(error) }
+    }
+  })
+
+  // POST /api/v1/providers — engine creates a new provider entry
+  // (credentials only; endpoints are POSTed separately). Used by the
+  // renderer when the user selects a vendor (e.g. deepseek/google) whose
+  // key isn't yet present in the engine's `llm.providers.*` map.
+  ipcMain.handle('console:createProvider', async (_, payload: ProviderCreatePayload) => {
+    try {
+      if (!payload || typeof payload.name !== 'string' || !payload.name.trim()) {
+        return { ok: false, status: 400, error: 'bad_request', message: 'provider name required' }
+      }
+      if (payload.name.includes(':') || payload.name.includes('.')) {
+        return {
+          ok: false,
+          status: 400,
+          error: 'bad_request',
+          message: 'provider name must not contain ":" or "."',
+        }
+      }
+      if (
+        payload.type !== 'openai' &&
+        payload.type !== 'anthropic' &&
+        payload.type !== 'gemini'
+      ) {
+        return { ok: false, status: 400, error: 'bad_request', message: 'invalid provider type' }
+      }
+      return await createProvider(payload)
+    } catch (error) {
+      return { ok: false, status: 0, error: 'network_error', message: String(error) }
+    }
+  })
+
+  ipcMain.handle('console:getFallbackChain', async () => {
+    try {
+      return await getFallbackChain()
+    } catch (error) {
+      return { ok: false, status: 0, error: 'network_error', message: String(error) }
+    }
+  })
+
+  ipcMain.handle('console:updateFallbackChain', async (_, chain: string[]) => {
+    try {
+      if (!Array.isArray(chain)) {
+        return { ok: false, status: 400, error: 'bad_request', message: 'chain must be an array' }
+      }
+      return await updateFallbackChain(chain)
+    } catch (error) {
+      return { ok: false, status: 0, error: 'network_error', message: String(error) }
+    }
+  })
+
+  // Engine 2026-05-14+ /api/v1/agent — direct access to the full agent
+  // block. Renderer uses this for the agent-level tuning fields
+  // (max_tokens / temperature / context_window) which the flat-chain
+  // wrappers above intentionally hide.
+  ipcMain.handle('console:getAgentConfig', async () => {
+    try {
+      return await getAgentConfig()
+    } catch (error) {
+      return { ok: false, status: 0, error: 'network_error', message: String(error) }
+    }
+  })
+
+  ipcMain.handle('console:patchAgentConfig', async (_, patch: AgentPatch) => {
+    try {
+      if (!patch || typeof patch !== 'object') {
+        return { ok: false, status: 400, error: 'bad_request', message: 'patch body required' }
+      }
+      // Engine rejects empty PATCH with 400; pre-check so we don't
+      // round-trip just to learn nothing changed.
+      const hasField =
+        'primary' in patch ||
+        'fallback_chain' in patch ||
+        'max_tokens' in patch ||
+        'temperature' in patch ||
+        'context_window' in patch
+      if (!hasField) {
+        return { ok: false, status: 400, error: 'bad_request', message: 'patch must include at least one field' }
+      }
+      return await patchAgentConfig(patch)
+    } catch (error) {
+      return { ok: false, status: 0, error: 'network_error', message: String(error) }
+    }
+  })
+
+  ipcMain.handle('console:patchProvider', async (_, name: string, patch: ProviderPatch) => {
+    try {
+      if (!name || typeof name !== 'string') {
+        return { ok: false, status: 400, error: 'bad_request', message: 'provider name required' }
+      }
+      return await patchProvider(name, patch || {})
+    } catch (error) {
+      return { ok: false, status: 0, error: 'network_error', message: String(error) }
+    }
+  })
+
+  ipcMain.handle('console:listEndpoints', async (_, providerName: string) => {
+    try {
+      if (!providerName || typeof providerName !== 'string') {
+        return { ok: false, status: 400, error: 'bad_request', message: 'provider name required' }
+      }
+      return await listEndpoints(providerName)
+    } catch (error) {
+      return { ok: false, status: 0, error: 'network_error', message: String(error) }
+    }
+  })
+
+  ipcMain.handle(
+    'console:createEndpoint',
+    async (_, providerName: string, payload: EndpointCreatePayload) => {
+      try {
+        if (!providerName || typeof providerName !== 'string') {
+          return { ok: false, status: 400, error: 'bad_request', message: 'provider name required' }
+        }
+        if (!payload || typeof payload.name !== 'string' || typeof payload.model !== 'string') {
+          return {
+            ok: false,
+            status: 400,
+            error: 'bad_request',
+            message: 'name and model required',
+          }
+        }
+        return await createEndpoint(providerName, payload)
+      } catch (error) {
+        return { ok: false, status: 0, error: 'network_error', message: String(error) }
+      }
+    },
+  )
+
+  ipcMain.handle(
+    'console:patchEndpoint',
+    async (_, providerName: string, endpointName: string, patch: EndpointPatch) => {
+      try {
+        if (!providerName || !endpointName) {
+          return {
+            ok: false,
+            status: 400,
+            error: 'bad_request',
+            message: 'provider and endpoint name required',
+          }
+        }
+        return await patchEndpoint(providerName, endpointName, patch || {})
+      } catch (error) {
+        return { ok: false, status: 0, error: 'network_error', message: String(error) }
+      }
+    },
+  )
+
+  ipcMain.handle(
+    'console:deleteEndpoint',
+    async (_, providerName: string, endpointName: string) => {
+      try {
+        if (!providerName || !endpointName) {
+          return {
+            ok: false,
+            status: 400,
+            error: 'bad_request',
+            message: 'provider and endpoint name required',
+          }
+        }
+        return await deleteEndpoint(providerName, endpointName)
+      } catch (error) {
+        return { ok: false, status: 0, error: 'network_error', message: String(error) }
+      }
+    },
+  )
 
   ipcMain.handle('files:pick', async () => {
     const result = await dialog.showOpenDialog({
