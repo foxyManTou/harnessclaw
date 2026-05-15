@@ -87,6 +87,9 @@ const FLOATING_MENU_WIDTH = 132
 const FLOATING_MENU_HEIGHT = 120
 const FLOATING_MENU_GAP = 6
 const VIEWPORT_PADDING = 12
+const MIN_SIDEBAR_WIDTH = 220
+const MAX_SIDEBAR_WIDTH = 440
+const DEFAULT_SIDEBAR_WIDTH = 288
 
 export function Sidebar() {
   const location = useLocation()
@@ -94,6 +97,14 @@ export function Sidebar() {
   const harnessclawStatus = useHarnessclawStatus()
   const selectedRecentSessionId = typeof location.state?.sessionId === 'string' ? location.state.sessionId : ''
   const [expanded, setExpanded] = useState(() => localStorage.getItem('sidebar-expanded') === 'true')
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = Number(localStorage.getItem('sidebar-width'))
+    if (Number.isFinite(saved) && saved >= MIN_SIDEBAR_WIDTH && saved <= MAX_SIDEBAR_WIDTH) {
+      return saved
+    }
+    return DEFAULT_SIDEBAR_WIDTH
+  })
+  const [isResizing, setIsResizing] = useState(false)
   const [recentExpanded, setRecentExpanded] = useState(() => localStorage.getItem('sidebar-recent-expanded') !== 'false')
   const [recentSessions, setRecentSessions] = useState<RecentSessionItem[]>([])
   const [menuState, setMenuState] = useState<FloatingMenuState | null>(null)
@@ -184,6 +195,34 @@ export function Sidebar() {
     setExpanded(next)
     localStorage.setItem('sidebar-expanded', String(next))
   }
+
+  useEffect(() => {
+    localStorage.setItem('sidebar-width', String(sidebarWidth))
+  }, [sidebarWidth])
+
+  useEffect(() => {
+    if (!isResizing) return
+
+    const handleMove = (event: MouseEvent) => {
+      const next = Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, event.clientX))
+      setSidebarWidth(next)
+    }
+    const handleUp = () => setIsResizing(false)
+
+    document.addEventListener('mousemove', handleMove)
+    document.addEventListener('mouseup', handleUp)
+    const previousCursor = document.body.style.cursor
+    const previousSelect = document.body.style.userSelect
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+
+    return () => {
+      document.removeEventListener('mousemove', handleMove)
+      document.removeEventListener('mouseup', handleUp)
+      document.body.style.cursor = previousCursor
+      document.body.style.userSelect = previousSelect
+    }
+  }, [isResizing])
 
   const toggleRecentExpanded = () => {
     const next = !recentExpanded
@@ -524,16 +563,18 @@ export function Sidebar() {
     <>
       <nav
         aria-label="主导航"
+        style={expanded ? { width: `${sidebarWidth}px` } : undefined}
         className={cn(
-          'flex-shrink-0 bg-card border-r border-border flex flex-col pt-[44px] pb-3 select-none transition-[width] duration-200 overflow-hidden',
-          expanded ? 'w-72 items-start px-2' : 'w-[78px] items-center'
+          'relative flex-shrink-0 bg-card border-r border-border flex flex-col pt-[44px] pb-3 select-none overflow-hidden',
+          !isResizing && 'transition-[width] duration-200',
+          expanded ? 'items-start px-2' : 'w-[78px] items-center'
         )}
       >
         <div className={cn('flex min-h-0 w-full flex-1 flex-col', !expanded && 'items-center')}>
           <div className={cn('flex w-full flex-col flex-shrink-0', expanded ? 'gap-4' : 'items-center gap-4')}>
-            <div className={cn('flex w-full flex-shrink-0', expanded ? 'px-1' : 'justify-center')}>
+            <div className={cn('flex w-full flex-shrink-0', expanded ? 'pl-1' : 'justify-center')}>
               {expanded ? (
-                <div className="flex w-full items-center gap-2 px-2 py-1">
+                <div className="flex w-full items-center gap-2 pl-2 py-1">
                   <div className="min-w-0 flex flex-1 items-center gap-2">
                     <AvatarLightbox
                       src={sidebarLogo}
@@ -577,7 +618,7 @@ export function Sidebar() {
                     onClick={toggleExpanded}
                     title="收起侧边栏"
                     aria-label="收起侧边栏"
-                    className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-foreground/78 transition-colors hover:bg-accent hover:text-foreground"
+                    className="-mr-1 inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-foreground/78 transition-colors hover:bg-accent hover:text-foreground"
                   >
                     <PanelLeft size={18} className="rotate-180" aria-hidden="true" />
                   </button>
@@ -644,7 +685,7 @@ export function Sidebar() {
                     setRecentScrollFade({ top, bottom })
                   }}
                   className={cn(
-                    'recent-session-scroll min-h-0 flex-1 space-y-0.5 overflow-y-auto pr-1 pb-5',
+                    'recent-session-scroll -mr-1 min-h-0 flex-1 space-y-0.5 overflow-y-auto pb-5',
                     recentScrollFade.top && recentScrollFade.bottom && 'recent-session-scroll-fade-both',
                     recentScrollFade.top && !recentScrollFade.bottom && 'recent-session-scroll-fade-top',
                     !recentScrollFade.top && recentScrollFade.bottom && 'recent-session-scroll-fade-bottom',
@@ -726,30 +767,76 @@ export function Sidebar() {
           )}
         </div>
 
-        {/* Settings */}
-        <button
-          onClick={() => navigate('/settings')}
-          title={expanded ? undefined : '设置'}
-          aria-label={expanded ? undefined : '设置'}
-          aria-current={isActive('/settings') ? 'page' : undefined}
-          className={itemCls(isActive('/settings'))}
-        >
-          <Settings size={18} className="flex-shrink-0" aria-hidden="true" />
-          {expanded && <span className="text-sm font-medium">设置</span>}
-        </button>
+        {/* Settings + Theme toggle */}
+        {expanded ? (
+          <div className="flex w-full items-center gap-1">
+            <button
+              onClick={() => navigate('/settings')}
+              aria-current={isActive('/settings') ? 'page' : undefined}
+              className={cn(
+                'flex flex-1 items-center gap-1.5 rounded-lg px-3 py-2 transition-colors',
+                isActive('/settings')
+                  ? 'bg-accent text-foreground'
+                  : 'text-foreground/78 hover:text-foreground hover:bg-accent'
+              )}
+            >
+              <Settings size={18} className="flex-shrink-0" aria-hidden="true" />
+              <span className="text-sm font-medium">设置</span>
+            </button>
 
-        {/* Theme toggle */}
-        <button
-          onClick={toggleTheme}
-          title={expanded ? undefined : isDark ? '切换亮色' : '切换暗色'}
-          aria-label={isDark ? '切换亮色模式' : '切换暗色模式'}
-          className={bottomItemCls}
-        >
-          {isDark
-            ? <Sun size={18} className="flex-shrink-0" aria-hidden="true" />
-            : <Moon size={18} className="flex-shrink-0" aria-hidden="true" />}
-          {expanded && <span className="text-sm font-medium">{isDark ? '亮色模式' : '暗色模式'}</span>}
-        </button>
+            <button
+              onClick={toggleTheme}
+              title={isDark ? '切换亮色' : '切换暗色'}
+              aria-label={isDark ? '切换亮色模式' : '切换暗色模式'}
+              className="-mr-1 inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-foreground/78 transition-colors hover:bg-accent hover:text-foreground"
+            >
+              {isDark
+                ? <Sun size={18} aria-hidden="true" />
+                : <Moon size={18} aria-hidden="true" />}
+            </button>
+          </div>
+        ) : (
+          <>
+            <button
+              onClick={() => navigate('/settings')}
+              title="设置"
+              aria-label="设置"
+              aria-current={isActive('/settings') ? 'page' : undefined}
+              className={itemCls(isActive('/settings'))}
+            >
+              <Settings size={18} className="flex-shrink-0" aria-hidden="true" />
+            </button>
+
+            <button
+              onClick={toggleTheme}
+              title={isDark ? '切换亮色' : '切换暗色'}
+              aria-label={isDark ? '切换亮色模式' : '切换暗色模式'}
+              className={bottomItemCls}
+            >
+              {isDark
+                ? <Sun size={18} className="flex-shrink-0" aria-hidden="true" />
+                : <Moon size={18} className="flex-shrink-0" aria-hidden="true" />}
+            </button>
+          </>
+        )}
+
+        {expanded && (
+          <div
+            onMouseDown={(event) => {
+              event.preventDefault()
+              setIsResizing(true)
+            }}
+            onDoubleClick={() => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH)}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="拖动调整侧边栏宽度"
+            title="拖动调整宽度（双击重置）"
+            className={cn(
+              'absolute right-0 top-0 z-10 h-full w-1 cursor-col-resize transition-colors',
+              isResizing ? 'bg-primary/60' : 'hover:bg-primary/40'
+            )}
+          />
+        )}
       </nav>
 
       {menuState && activeMenuItem && createPortal(
@@ -828,7 +915,7 @@ export function Sidebar() {
                     value={searchQuery}
                     onChange={(event) => setSearchQuery(event.target.value)}
                     onKeyDown={(event) => {
-                      if (event.metaKey && event.key === '0') {
+                      if (event.metaKey && event.key.toLowerCase() === 'n') {
                         const newSessionAction = quickActions.find((item) => item.id === 'new-session')
                         if (newSessionAction) {
                           event.preventDefault()
@@ -925,7 +1012,7 @@ export function Sidebar() {
                             <p className="mt-1 text-xs text-muted-foreground">{item.description}</p>
                           </div>
                           <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-                            {item.id === 'new-session' ? `${isMac ? '⌘' : 'Win'} + 0` : 'Enter'}
+                            {item.id === 'new-session' ? `${isMac ? '⌘' : 'Win'} + N` : 'Enter'}
                           </span>
                         </button>
                       )
