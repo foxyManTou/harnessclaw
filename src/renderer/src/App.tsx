@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { HashRouter as Router, Routes, Route, useLocation } from 'react-router-dom'
+import { HashRouter as Router, Routes, Route, useLocation, useNavigate } from 'react-router-dom'
 import { AppLayout } from './components/layout/AppLayout'
 import { HomePage } from './components/pages/HomePage'
 import { AgentsPage } from './components/pages/AgentsPage'
@@ -23,6 +23,63 @@ function RouteLogger() {
       details: { path: location.pathname },
     })
   }, [location.pathname])
+
+  return null
+}
+
+/**
+ * Global keyboard shortcuts. Mounted once inside the Router so it has
+ * access to `useNavigate`.
+ *
+ * - **Cmd+,** (macOS) / **Ctrl+,** (Windows / Linux): open Settings.
+ *   Mirrors the conventional "open Preferences" shortcut used by
+ *   macOS apps, Chrome, VS Code, etc. The comma key here is matched
+ *   by `event.key === ','` (which also covers Shift-comma rendering)
+ *   so the binding works regardless of layout-specific key code.
+ *   We deliberately skip the binding when the user is typing into an
+ *   editable element (input / textarea / contenteditable) so we don't
+ *   hijack literal "," input inside the composer or settings forms.
+ */
+function GlobalShortcuts() {
+  const navigate = useNavigate()
+  const location = useLocation()
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const meta = event.metaKey || event.ctrlKey
+      if (!meta) return
+      if (event.altKey || event.shiftKey) return
+
+      // ⌘/Ctrl + N — new session: jump to the home composer. Works from
+      // any route (including text inputs) because the chord isn't a
+      // literal anyone types into a field.
+      if (event.key.toLowerCase() === 'n') {
+        event.preventDefault()
+        event.stopPropagation()
+        navigate('/', { state: { focusComposer: true } })
+        return
+      }
+
+      if (event.key !== ',') return
+
+      // Don't override "," typed inside a composer / input / editable.
+      const target = event.target as HTMLElement | null
+      if (target) {
+        const tag = target.tagName
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+        if (target.isContentEditable) return
+      }
+
+      event.preventDefault()
+      event.stopPropagation()
+      if (location.pathname !== '/settings') {
+        navigate('/settings')
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown, { capture: true })
+    return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
+  }, [navigate, location.pathname])
 
   return null
 }
@@ -80,6 +137,7 @@ function App() {
   return (
     <Router>
       <RouteLogger />
+      <GlobalShortcuts />
       <AppLayout>
         <RoutedContent />
       </AppLayout>
