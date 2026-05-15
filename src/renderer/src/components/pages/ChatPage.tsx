@@ -20,9 +20,11 @@ import {
   SkillComposerInput,
   type SelectedSkillChip,
 } from '../common/SkillComposerInput'
+import { useAppConfig } from '@/hooks/useEngineConfig'
 import { PastedBlocksBar, usePastedBlocks } from '../common/PastedBlocksBar'
 import { PlanDraftCard, type PlanDraftStep } from '../common/PlanDraftCard'
 import { PlanStatusButton } from '../common/PlanStatusButton'
+import { SessionStatsButton } from '../common/SessionStatsButton'
 import { AvatarLightbox } from '../common/AvatarLightbox'
 import { ConfirmDeleteSessionDialog } from '../common/ConfirmDeleteSessionDialog'
 import emmaAvatar from '../../assets/sidebar-logo.png'
@@ -48,10 +50,18 @@ function resolveTeamAvatar(name?: string): string {
 
 // ─── File-path linkification ────────────────────────────────────────────────
 
-// Match absolute UNIX paths (/Users/..., /home/..., /var/..., etc.), tilde-prefixed paths
-// (~/foo/bar) and Windows drive paths (C:\foo\bar). Each must contain at least one separator
-// segment after the root anchor.
-const FILE_PATH_REGEX = /(?:~|\/[A-Za-z0-9._-]+|[A-Za-z]:[\\/])(?:[\\/][A-Za-z0-9._-]+)+/g
+// Match absolute UNIX paths, tilde-prefixed paths and Windows drive paths.
+//
+// The leading segment is constrained to a whitelist of well-known filesystem
+// roots so that arbitrary slash-separated labels like `/CRM/Jira/Figma`,
+// `/Marketing/Q3/Plan` or `/Sales/Pipeline` (which are category breadcrumbs,
+// NOT real paths) don't get rendered as clickable FilePathChips. Anything
+// that the OS would actually accept as the start of a path on macOS / Linux
+// (or any drive-prefixed Windows path) is still linkified normally.
+//
+// Each match must contain at least one separator segment after the root
+// anchor — bare `/Users` or `~` alone won't match.
+const FILE_PATH_REGEX = /(?:~|\/(?:Users|home|var|tmp|usr|opt|etc|private|Library|Applications|System|mnt|media|dev|proc|sys|srv|root|bin|sbin|run)|[A-Za-z]:[\\/])(?:[\\/][A-Za-z0-9._-]+)+/g
 const FILEPATH_HREF_PREFIX = 'filepath://'
 
 function remarkFilePaths() {
@@ -166,6 +176,11 @@ interface ArtifactRef {
   role?: string
 }
 
+interface ToolErrorRecovery {
+  action?: string
+  next_card_id?: string
+}
+
 interface ToolActivity {
   type:
     | 'hint'
@@ -193,6 +208,37 @@ interface ToolActivity {
   intent?: string
   ts: number
   subagent?: SubagentInfo
+  /**
+   * v2 §6.5 — terminal status from card.close.payload.status:
+   * `ok` / `failed` / `cancelled` / `skipped`. The renderer uses this to
+   * route between green-completed, red/orange-failed and gray
+   * cancelled/skipped treatments. `cancelled` is deliberately decoupled
+   * from `isError` so abort flows render as neutral gray, not error red.
+   */
+  status?: string
+  /**
+   * v2 §12 — categorized failure type. One of
+   * invalid_input / permission_denied / tool_timeout / user_aborted /
+   * rate_limit / overloaded / model_error / contract_fail /
+   * dependency_fail / internal. Unknown values fall back to `internal`
+   * presentation (never thrown / never rendered raw).
+   */
+  errorType?: string
+  /** v2 §12 — opaque error code for diagnostics, e.g. "HTTP 429". */
+  errorCode?: string
+  /** v2 §12 — engine hint that an automatic retry is in progress / will be attempted. */
+  retryable?: boolean
+  /** v2 §12 — countdown until next retry in ms. Display-only, not a control. */
+  retryAfterMs?: number
+  /** v2 §12 — recovery hint reserved for future engine versions. Render defensively. */
+  recovery?: ToolErrorRecovery
+  /**
+   * v2 §12 — developer-facing `error.message` (e.g. "unknown tool: WebFetch").
+   * Hidden from the main UI; only rendered inside the collapsible "详情"
+   * panel or a hover tooltip for diagnostics. The primary user-facing
+   * string lives in `content` and is sourced from `error.user_message`.
+   */
+  devMessage?: string
 }
 
 interface Message {
@@ -308,6 +354,15 @@ const WebPreviewContext = createContext<((data: WebPreviewData) => void) | null>
 function useOpenWebPreview(): ((data: WebPreviewData) => void) | null {
   return useContext(WebPreviewContext)
 }
+
+/**
+ * User preference for how plain http(s) links inside markdown messages should
+ * open: in the built-in WebPreviewDrawer (`'drawer'`) or via the system's
+ * default browser through `shell.openExternal` (`'external'`). Configured in
+ * Settings → UI 设置. Default is `'drawer'`.
+ */
+export type LinkOpenBehavior = 'drawer' | 'external'
+const LinkOpenBehaviorContext = createContext<LinkOpenBehavior>('drawer')
 
 type AttachmentItem = LocalAttachmentItem
 type RespondPermissionHandler = (requestId: string, approved: boolean, scope: 'once' | 'session') => Promise<void>
@@ -1512,6 +1567,73 @@ function safeUrlHostname(url: string): string {
 }
 
 /**
+ * Resolve a favicon URL for the given site host. Uses Google's public
+ * favicon proxy so we get a normalized PNG regardless of whether the
+ * site itself exposes a fetchable /favicon.ico. Returns an empty string
+ * when the host cannot be derived (which short-circuits `<FaviconImage>`
+ * to the default Globe glyph).
+ */
+function faviconUrl(host: string, size = 32): string {
+  if (!host) return ''
+  // Strip any path/protocol just in case; Google's proxy only wants the
+  // bare domain. Encodes high-bit characters defensively.
+  const bare = host.replace(/^https?:\/\//i, '').split('/')[0]
+  if (!bare) return ''
+  return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(bare)}&sz=${size}`
+}
+
+/**
+ * Small `<img>` wrapper that tries to fetch the site's real favicon and
+ * silently falls back to the lucide `Globe` glyph on network / 404 / CORS
+ * failure. The fallback ensures we never render a broken-image icon next
+ * to search results even when the favicon service is unreachable (e.g.
+ * offline mode, restrictive corp proxy).
+ */
+function FaviconImage({ url, size = 16, className }: { url: string; size?: number; className?: string }) {
+  const [status, setStatus] = useState<'loading' | 'loaded' | 'failed'>('loading')
+  const host = safeUrlHostname(url)
+  const src = faviconUrl(host, Math.max(16, size * 2))
+
+  // Stack the placeholder Globe behind the favicon `<img>`. While the
+  // network fetch is in flight (or if it 404s / is blocked by CSP / the
+  // host has no favicon), the Globe glyph remains visible. Once the
+  // image successfully loads we fade the placeholder out so the real
+  // favicon takes over without a flash of blank space.
+  if (!src || status === 'failed') {
+    return <Globe size={Math.round(size * 0.7)} className={className} />
+  }
+  return (
+    <span
+      className={cn('relative inline-flex items-center justify-center', className)}
+      style={{ width: size, height: size }}
+    >
+      <Globe
+        size={Math.round(size * 0.7)}
+        className={cn(
+          'absolute inset-0 m-auto transition-opacity',
+          status === 'loaded' ? 'opacity-0' : 'opacity-100'
+        )}
+      />
+      <img
+        src={src}
+        alt=""
+        width={size}
+        height={size}
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        onLoad={() => setStatus('loaded')}
+        onError={() => setStatus('failed')}
+        className={cn(
+          'relative block transition-opacity',
+          status === 'loaded' ? 'opacity-100' : 'opacity-0'
+        )}
+        style={{ width: size, height: size }}
+      />
+    </span>
+  )
+}
+
+/**
  * v0.3 (websocket protocol §2.4.2): when the server replays an unanswered
  * prompt after reconnect, it uses the same `request_id`. Search the whole
  * session's tool history for an existing card with the same callId+type and
@@ -2341,16 +2463,134 @@ function getToolRenderHintLabel(renderHint?: string): string {
 
 function getToolResultSummary(call: ToolActivity, result?: ToolActivity, filePreview?: FilePreviewData | null): string {
   if (!result) return 'Agent 正在执行这个步骤。'
+  // v2 §6.5 — status routing. `cancelled` / `skipped` are NOT errors;
+  // surface a neutral message instead of the red error string. For
+  // `failed` we always prefer the engine's user-facing message
+  // (sourced from error.user_message via the main-process tool_result
+  // event) over any heuristic hint, so categorized errors like rate
+  // limits or contract failures get accurate copy.
+  if (result.status === 'cancelled') return '已取消。'
+  if (result.status === 'skipped') return '已跳过。'
+  if (result.status === 'failed' || result.isError) {
+    if (result.content) return result.content
+    return '这个步骤没有顺利完成。'
+  }
   if (filePreview) return `涉及文件 ${filePreview.fileName}`
   if (result.filePath) return `关联文件 ${getFileName(result.filePath)}`
   if (result.renderHint === 'search') return '已返回搜索结果摘要。'
   if (result.renderHint === 'markdown') return '已抓取并整理为 Markdown 内容。'
-  if (result.renderHint === 'terminal') return result.isError ? '命令执行返回错误输出。' : '命令执行已完成。'
-  if (result.renderHint === 'agent') return result.isError ? '子 Agent 执行失败。' : '子 Agent 已返回摘要。'
-  if (result.isError) return '这个步骤没有顺利完成。'
+  if (result.renderHint === 'terminal') return '命令执行已完成。'
+  if (result.renderHint === 'agent') return '子 Agent 已返回摘要。'
   if (call.name === 'Write' || call.name === 'write_file') return '文件写入已完成。'
   if (call.name === 'Edit') return '文件变更已生成。'
   return '这个步骤已执行完成。'
+}
+
+/**
+ * v2 §12 ErrorInfo presentation table. Maps `error.type` → icon, short
+ * label, and a Tailwind color key consumed by `getToolErrorColorClasses`.
+ * Keep this as the SINGLE source of truth for failure visuals so that
+ * future engine-side additions to the enum can be slotted in by editing
+ * this one table — never branch on `error.type` ad-hoc in render code.
+ *
+ * Unknown / missing values fall back to the `internal` entry (red ⚠️)
+ * via `getToolErrorPresentation`. The renderer must never throw on an
+ * unknown type and must never render the raw enum string to the user.
+ */
+const TOOL_ERROR_PRESENTATION: Record<string, { icon: string; label: string; color: 'amber' | 'orange' | 'red' | 'gray' }> = {
+  invalid_input:     { icon: '📋', label: '输入错误',  color: 'amber'  },
+  permission_denied: { icon: '🔒', label: '权限不足',  color: 'amber'  },
+  tool_timeout:      { icon: '⏱', label: '超时',      color: 'orange' },
+  user_aborted:      { icon: '✋', label: '已取消',    color: 'gray'   },
+  rate_limit:        { icon: '🌐', label: '上游限流',  color: 'orange' },
+  overloaded:        { icon: '🌐', label: '上游繁忙',  color: 'orange' },
+  model_error:       { icon: '🤖', label: '上游错误',  color: 'orange' },
+  contract_fail:     { icon: '📋', label: '契约未达',  color: 'amber'  },
+  dependency_fail:   { icon: '🔗', label: '子任务失败', color: 'orange' },
+  internal:          { icon: '⚠️', label: '内部错误',  color: 'red'    },
+}
+
+function getToolErrorPresentation(errorType?: string): { icon: string; label: string; color: 'amber' | 'orange' | 'red' | 'gray' } {
+  if (errorType && Object.prototype.hasOwnProperty.call(TOOL_ERROR_PRESENTATION, errorType)) {
+    return TOOL_ERROR_PRESENTATION[errorType]
+  }
+  return TOOL_ERROR_PRESENTATION.internal
+}
+
+function getToolErrorColorClasses(color: 'amber' | 'orange' | 'red' | 'gray'): { badge: string; icon: string; text: string } {
+  switch (color) {
+    case 'amber':
+      return {
+        badge: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-300',
+        icon: 'text-amber-500',
+        text: 'text-amber-600 dark:text-amber-400',
+      }
+    case 'orange':
+      return {
+        badge: 'border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-900/40 dark:bg-orange-950/30 dark:text-orange-300',
+        icon: 'text-orange-500',
+        text: 'text-orange-600 dark:text-orange-400',
+      }
+    case 'gray':
+      return {
+        badge: 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700/60 dark:bg-slate-900/40 dark:text-slate-300',
+        icon: 'text-slate-500',
+        text: 'text-slate-600 dark:text-slate-300',
+      }
+    case 'red':
+    default:
+      return {
+        badge: 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300',
+        icon: 'text-red-500',
+        text: 'text-red-600 dark:text-red-400',
+      }
+  }
+}
+
+/**
+ * v2 §12 — read structured ErrorInfo back out of `metadata.errorInfo`.
+ * Used by `dbRowsToMessages` so that after a restart / session resume
+ * (when the activity is reconstructed from the SQLite `metadata_json`
+ * column) the renderer still has access to the categorized error type,
+ * retryable hint, recovery action, dev-only message, etc.
+ *
+ * The main process writes the same structure into both the top-level
+ * compat-event fields AND `metadata.errorInfo`, so live tool_result
+ * events and DB-restored activities end up with identical shape.
+ */
+function extractErrorInfoFromMetadata(metadata?: Record<string, unknown>): {
+  status?: string
+  errorType?: string
+  errorCode?: string
+  retryable?: boolean
+  retryAfterMs?: number
+  recovery?: ToolErrorRecovery
+  devMessage?: string
+} {
+  if (!metadata) return {}
+  const raw = metadata.errorInfo
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const r = raw as Record<string, unknown>
+  const recoveryRaw = r.recovery
+  const recovery = recoveryRaw && typeof recoveryRaw === 'object' && !Array.isArray(recoveryRaw)
+    ? {
+        action: typeof (recoveryRaw as Record<string, unknown>).action === 'string'
+          ? ((recoveryRaw as Record<string, unknown>).action as string)
+          : undefined,
+        next_card_id: typeof (recoveryRaw as Record<string, unknown>).next_card_id === 'string'
+          ? ((recoveryRaw as Record<string, unknown>).next_card_id as string)
+          : undefined,
+      }
+    : undefined
+  return {
+    status: typeof r.status === 'string' ? r.status : undefined,
+    errorType: typeof r.type === 'string' ? r.type : undefined,
+    errorCode: typeof r.code === 'string' ? r.code : undefined,
+    retryable: typeof r.retryable === 'boolean' ? r.retryable : undefined,
+    retryAfterMs: typeof r.retry_after_ms === 'number' ? r.retry_after_ms : undefined,
+    recovery,
+    devMessage: typeof r.message === 'string' ? r.message : undefined,
+  }
 }
 
 function getTaskStatusLabel(status: CollaborationTask['status']): string {
@@ -2905,6 +3145,16 @@ export function ChatPage() {
     if (!data?.url || !/^https?:\/\//i.test(data.url)) return
     setWebPreview(data)
   }, [])
+  // User-configurable behavior for plain http(s) link clicks inside assistant
+  // markdown messages. Persisted in app config under `ui.linkOpenBehavior`.
+  // Default is `'drawer'` — clicking a link opens the in-app WebPreviewDrawer
+  // (the same drawer used for search-result URL chips). Users who prefer the
+  // system browser can switch to `'external'` in Settings → UI 设置.
+  const { config: appConfig } = useAppConfig()
+  const linkOpenBehavior: LinkOpenBehavior =
+    (appConfig?.ui as { linkOpenBehavior?: string } | undefined)?.linkOpenBehavior === 'external'
+      ? 'external'
+      : 'drawer'
   const [input, setInput] = useState(initialMessage)
   const [selectedSkills, setSelectedSkills] = useState<SelectedSkillChip[]>([])
   const [attachments, setAttachments] = useState<AttachmentItem[]>(initialAttachments)
@@ -3405,20 +3655,34 @@ export function ChatPage() {
           completion_tokens: r.usage_completion || 0,
           total_tokens: r.usage_total || 0,
         } : undefined,
-        tools: r.tools.map((t) => ({
-          type: t.type as ToolActivity['type'],
-          name: t.name || undefined,
-          content: t.content,
-          callId: t.call_id || undefined,
-          isError: t.is_error === 1,
-          durationMs: typeof t.duration_ms === 'number' ? t.duration_ms : undefined,
-          renderHint: t.render_hint || undefined,
-          language: t.language || undefined,
-          filePath: t.file_path || undefined,
-          metadata: t.metadata_json ? parseJsonObject(t.metadata_json) || undefined : undefined,
-          ts: t.created_at,
-          subagent: t.subagent_json ? normalizeSubagent(JSON.parse(t.subagent_json)) : undefined,
-        })),
+        tools: r.tools.map((t) => {
+          const metadata = t.metadata_json ? parseJsonObject(t.metadata_json) || undefined : undefined
+          // v2 §12 — recover structured ErrorInfo (status / errorType /
+          // retryable / recovery / devMessage) from metadata.errorInfo so
+          // the failure presentation survives a restart or session resume.
+          const errInfo = extractErrorInfoFromMetadata(metadata)
+          return {
+            type: t.type as ToolActivity['type'],
+            name: t.name || undefined,
+            content: t.content,
+            callId: t.call_id || undefined,
+            isError: t.is_error === 1,
+            durationMs: typeof t.duration_ms === 'number' ? t.duration_ms : undefined,
+            renderHint: t.render_hint || undefined,
+            language: t.language || undefined,
+            filePath: t.file_path || undefined,
+            metadata,
+            ts: t.created_at,
+            subagent: t.subagent_json ? normalizeSubagent(JSON.parse(t.subagent_json)) : undefined,
+            status: errInfo.status,
+            errorType: errInfo.errorType,
+            errorCode: errInfo.errorCode,
+            retryable: errInfo.retryable,
+            retryAfterMs: errInfo.retryAfterMs,
+            recovery: errInfo.recovery,
+            devMessage: errInfo.devMessage,
+          }
+        }),
         contentSegments,
       }
     })
@@ -3853,8 +4117,12 @@ export function ChatPage() {
             }
           } else if (eventType === 'tool_end') {
             nextState.activeToolName = getToolEventName(payload) || existing.activeToolName
-            nextState.activeToolStatus = payload.is_error === true ? 'error' : 'completed'
-            nextState.activeToolSummary = summarizeInlineText(getToolResultEventContent(payload), 90) || (payload.is_error === true ? '工具执行失败' : '工具执行完成')
+            // v2 §6.5 — only `status === 'failed'` is a hard error. `cancelled`
+            // and `skipped` are NOT errors (they get neutral gray treatment),
+            // even though earlier code conflated cancelled with is_error.
+            const subStatus = typeof payload.status === 'string' ? payload.status : ''
+            nextState.activeToolStatus = (subStatus === 'failed' || payload.is_error === true) ? 'error' : 'completed'
+            nextState.activeToolSummary = summarizeInlineText(getToolResultEventContent(payload), 90) || ((subStatus === 'failed' || payload.is_error === true) ? '工具执行失败' : '工具执行完成')
             // v1.12: clear sub-agent intent shimmer once its tool finishes.
             if (existing.currentIntent && callIdInPayload && existing.currentIntent.toolUseId === callIdInPayload) {
               nextState.currentIntent = undefined
@@ -3885,20 +4153,44 @@ export function ChatPage() {
               ts: now,
               subagent: subagentInfo,
             }
-          : {
-              type: 'result',
-              name: getToolEventName(payload) || 'tool',
-              content: getToolResultEventContent(payload),
-              callId,
-              isError: payload.is_error === true,
-              durationMs: getToolDurationMs(payload),
-              renderHint: getToolRenderHint(payload),
-              language: getToolLanguage(payload),
-              filePath: getToolFilePath(payload),
-              metadata: getToolMetadata(payload),
-              ts: now,
-              subagent: subagentInfo,
-            }
+          : (() => {
+              // v2 §12 — mirror structured ErrorInfo from subagent payload
+              // onto the ToolActivity, matching the main-flow tool_result
+              // branch so failure presentation works inside the specialist
+              // panel too.
+              const rawRecovery = (payload.recovery && typeof payload.recovery === 'object' && !Array.isArray(payload.recovery))
+                ? (payload.recovery as Record<string, unknown>)
+                : undefined
+              const recovery: ToolErrorRecovery | undefined = rawRecovery ? {
+                action: typeof rawRecovery.action === 'string' ? rawRecovery.action : undefined,
+                next_card_id: typeof rawRecovery.next_card_id === 'string' ? rawRecovery.next_card_id : undefined,
+              } : undefined
+              const subStatus = typeof payload.status === 'string' ? payload.status : undefined
+              return {
+                type: 'result',
+                name: getToolEventName(payload) || 'tool',
+                content: getToolResultEventContent(payload),
+                callId,
+                // Decouple cancelled / skipped from isError — only `failed`
+                // (or a legacy `is_error: true` fallback) lights up the red
+                // error UI.
+                isError: subStatus === 'failed' || (subStatus === undefined && payload.is_error === true),
+                durationMs: getToolDurationMs(payload),
+                renderHint: getToolRenderHint(payload),
+                language: getToolLanguage(payload),
+                filePath: getToolFilePath(payload),
+                metadata: getToolMetadata(payload),
+                ts: now,
+                subagent: subagentInfo,
+                status: subStatus,
+                errorType: typeof payload.error_type === 'string' ? payload.error_type : undefined,
+                errorCode: typeof payload.error_code === 'string' ? payload.error_code : undefined,
+                retryable: typeof payload.retryable === 'boolean' ? payload.retryable : undefined,
+                retryAfterMs: typeof payload.retry_after_ms === 'number' ? payload.retry_after_ms : undefined,
+                recovery,
+                devMessage: typeof payload.dev_message === 'string' ? payload.dev_message : undefined,
+              } as ToolActivity
+            })()
 
         // Use the passive append helper so late sub-agent events arriving
         // after `response_end` (which clears `pendingAssistantIds`) do NOT
@@ -4404,6 +4696,17 @@ export function ChatPage() {
       case 'tool_end': {
         const sid = eventSessionId!
         const aid = ensureAssistantMessage(sid, Date.now())
+        // v2 §12 — pull structured ErrorInfo fields off the compat event.
+        // Main process forwards these top-level (additive; existing
+        // is_error / content / metadata / error fields kept) AND also
+        // tucks them into metadata.errorInfo so they survive DB restore.
+        const rawRecovery = (event.recovery && typeof event.recovery === 'object' && !Array.isArray(event.recovery))
+          ? (event.recovery as Record<string, unknown>)
+          : undefined
+        const recovery: ToolErrorRecovery | undefined = rawRecovery ? {
+          action: typeof rawRecovery.action === 'string' ? rawRecovery.action : undefined,
+          next_card_id: typeof rawRecovery.next_card_id === 'string' ? rawRecovery.next_card_id : undefined,
+        } : undefined
         const activity: ToolActivity = {
           type: 'result',
           name: getToolEventName(event),
@@ -4417,6 +4720,13 @@ export function ChatPage() {
           metadata: getToolMetadata(event),
           ts: Date.now(),
           subagent,
+          status: typeof event.status === 'string' ? event.status : undefined,
+          errorType: typeof event.error_type === 'string' ? event.error_type : undefined,
+          errorCode: typeof event.error_code === 'string' ? event.error_code : undefined,
+          retryable: typeof event.retryable === 'boolean' ? event.retryable : undefined,
+          retryAfterMs: typeof event.retry_after_ms === 'number' ? event.retry_after_ms : undefined,
+          recovery,
+          devMessage: typeof event.dev_message === 'string' ? event.dev_message : undefined,
         }
         updateSession(sid, (prev) => ({
           ...prev,
@@ -5442,6 +5752,7 @@ export function ChatPage() {
 
   return (
     <WebPreviewContext.Provider value={openWebPreview}>
+    <LinkOpenBehaviorContext.Provider value={linkOpenBehavior}>
     <div className="relative flex h-full overflow-hidden bg-background">
       {/* Main chat area */}
       <div className="relative flex-1 flex min-w-0 flex-col overflow-hidden">
@@ -5478,6 +5789,13 @@ export function ChatPage() {
                   artifacts={sessionArtifacts}
                   onOpenFilePreview={setFilePreview}
                 />
+                {/* Session-level stats popover (context window utilization,
+                    cost, tokens, latency, per sub-agent breakdown).
+                    Polls `/api/v1/sessions/{id}/metrics` on the Console
+                    port every 5s while the popover is open; cost is
+                    computed client-side from a static pricing table
+                    (see Session Metrics API doc §"客户端使用指南"). */}
+                <SessionStatsButton sessionId={activeSessionId} />
               </div>
             )}
           </div>
@@ -5536,7 +5854,8 @@ export function ChatPage() {
                   card collapses and we surface a small icon button in the
                   top-right of the conversation area. Click → popover with
                   read-only plan steps so the user can keep tabs on the
-                  execution roadmap while sub-agents run. */}
+                  execution roadmap while sub-agents run.
+                  (Session stats button lives in the title bar, not here.) */}
               {activeSession.planDraft?.confirmed && (
                 <div className="pointer-events-none absolute right-4 top-3 z-20 flex justify-end sm:right-6">
                   <PlanStatusButton
@@ -5848,6 +6167,7 @@ export function ChatPage() {
       />
       <WebPreviewDrawer preview={webPreview} onClose={() => setWebPreview(null)} />
     </div>
+    </LinkOpenBehaviorContext.Provider>
     </WebPreviewContext.Provider>
   )
 }
@@ -6312,6 +6632,12 @@ function MessageBubble({
     }
   }, [onOpenFilePreview])
 
+  // Link-open preference + drawer opener consumed by the markdown `a`
+  // renderer below. Lifted out of the JSX so we don't subscribe to context
+  // for every paragraph/code-block React renders.
+  const linkOpenBehavior = useContext(LinkOpenBehaviorContext)
+  const openWebPreviewFromCtx = useOpenWebPreview()
+
   const renderTextBlock = (text: string, key: string, compact = false) => (
     <div
       key={key}
@@ -6373,16 +6699,53 @@ function MessageBubble({
                     </a>
                   )
                 }
-                // External URLs (http/https/mailto) MUST NOT take over the
-                // BrowserWindow. Force `target="_blank"` so the click is
-                // routed through the main process `setWindowOpenHandler`,
-                // which calls `shell.openExternal` to open in the user's
-                // default system browser. `noopener noreferrer` blocks the
-                // opened page from reaching back into our window.
-                const isExternal =
-                  typeof href === 'string' &&
-                  /^(https?:|mailto:)/i.test(href)
-                if (isExternal) {
+                // External URLs (http/https) honor the user's link-open
+                // preference (Settings → UI 设置 → 链接打开方式):
+                //   • 'drawer'   — intercept the click and surface the URL
+                //     inside the in-app WebPreviewDrawer (the same drawer used
+                //     for search-result URL chips).
+                //   • 'external' — force `target="_blank"` so the click is
+                //     routed through the main process `setWindowOpenHandler`,
+                //     which calls `shell.openExternal` to open the user's
+                //     default system browser. `noopener noreferrer` blocks the
+                //     opened page from reaching back into our window.
+                // mailto: always falls through to the system handler — there
+                // is no sensible in-app preview for an email composer.
+                const isHttp = typeof href === 'string' && /^https?:/i.test(href)
+                const isMailto = typeof href === 'string' && /^mailto:/i.test(href)
+                if (isHttp) {
+                  if (linkOpenBehavior === 'drawer' && openWebPreviewFromCtx) {
+                    return (
+                      <a
+                        href={href}
+                        onClick={(event) => {
+                          event.preventDefault()
+                          const linkText =
+                            typeof children === 'string'
+                              ? children
+                              : Array.isArray(children)
+                                ? children.filter((c) => typeof c === 'string').join('')
+                                : undefined
+                          openWebPreviewFromCtx({ url: href as string, title: linkText || undefined })
+                        }}
+                        {...props}
+                      >
+                        {children}
+                      </a>
+                    )
+                  }
+                  return (
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      {...props}
+                    >
+                      {children}
+                    </a>
+                  )
+                }
+                if (isMailto) {
                   return (
                     <a
                       href={href}
@@ -7138,6 +7501,8 @@ function ToolCallCard({
   const [expanded, setExpanded] = useState(false)
   const contentId = useId()
   const filePreview = extractFilePreviewData(call, result)
+  // Tool name always comes from card.add (i.e. `call.name`) — never from
+  // close.inner.name which is empty by v2 protocol.
   const toolName = getToolDisplayName(call.name)
   const durationLabel = formatDurationMs(result?.durationMs)
   const renderHintLabel = result?.renderHint ? getToolRenderHintLabel(result.renderHint) : ''
@@ -7146,19 +7511,91 @@ function ToolCallCard({
   const searchQuery = isSearchResult ? extractSearchQuery(result?.metadata) : undefined
   const searchResultCount = isSearchResult ? extractSearchResultCount(result?.metadata) : undefined
   const openWebPreview = useOpenWebPreview()
+
+  // v2 §6.5 / §12 — terminal status routing. `failed` is the only hard
+  // error; `cancelled` and `skipped` get a neutral gray treatment, NOT
+  // the red error UI. Default to ok when the engine omitted status.
+  const status: 'ok' | 'failed' | 'cancelled' | 'skipped' = result
+    ? (result.status === 'failed' || result.status === 'cancelled' || result.status === 'skipped'
+        ? result.status
+        : (result.isError ? 'failed' : 'ok'))
+    : 'ok'
+  const errorPresentation = status === 'failed' ? getToolErrorPresentation(result?.errorType) : null
+  const errorColorClasses = errorPresentation ? getToolErrorColorClasses(errorPresentation.color) : null
+
+  // Build a "查看详情" payload — developer-only diagnostics (raw
+  // `error.message`, `error.code`, retry hint, recovery hint, full
+  // metadata) that lives behind the expand button. user_message stays
+  // on the main card body via `getToolResultSummary`.
+  const showRetryHint = status === 'failed' && (result?.retryable || (result?.retryAfterMs && result.retryAfterMs > 0))
+  const retryHintText = result?.retryAfterMs && result.retryAfterMs > 0
+    ? `约 ${Math.max(1, Math.round(result.retryAfterMs / 1000))} 秒后重试…`
+    : '自动重试中…'
+  // recovery.action is reserved — render defensively. Today the engine
+  // doesn't populate it, but if/when it does the UI will surface a small
+  // hint without requiring further code changes.
+  const recoveryHintText = (() => {
+    if (!result?.recovery || !result.recovery.action) return ''
+    switch (result.recovery.action) {
+      case 'retry':
+        return '正在重试…'
+      case 'fallback':
+        return result.recovery.next_card_id ? '已切换到备用方案，查看后续步骤。' : '已切换到备用方案。'
+      case 'abort':
+        return '已中止后续操作。'
+      default:
+        return ''
+    }
+  })()
+
   // Search render hints render through the dedicated URL list; for every
   // other render hint we surface the raw metadata blob as a JSON pre.
-  const metadataText = !isSearchResult && result?.metadata ? JSON.stringify(result.metadata, null, 2) : ''
+  // Empty metadata is "正确为空" — don't render a placeholder block for it.
+  // The `errorInfo` shim we tuck inside metadata for DB round-trip is
+  // surfaced separately under "诊断信息", so strip it from the generic
+  // metadata blob to avoid double-rendering.
+  const metadataForDisplay = (() => {
+    if (!result?.metadata) return undefined
+    if (isSearchResult) return undefined
+    const { errorInfo: _drop, ...rest } = result.metadata as Record<string, unknown>
+    return Object.keys(rest).length > 0 ? rest : undefined
+  })()
+  const metadataText = metadataForDisplay ? JSON.stringify(metadataForDisplay, null, 2) : ''
+
+  // Status pill — drives icon + label + colors. For `failed` we use the
+  // categorized errorPresentation; for `cancelled` / `skipped` we use a
+  // muted neutral; for `ok` and running we keep the legacy treatment.
+  const statusPillLabel = isRunning
+    ? '执行中'
+    : status === 'failed'
+      ? errorPresentation!.label
+      : status === 'cancelled'
+        ? '已取消'
+        : status === 'skipped'
+          ? '已跳过'
+          : result ? '完成' : ''
+  const statusPillTextClass = isRunning
+    ? 'text-yellow-500'
+    : status === 'failed'
+      ? errorColorClasses!.text
+      : status === 'cancelled' || status === 'skipped'
+        ? 'text-muted-foreground'
+        : result ? 'text-green-600' : 'text-muted-foreground'
 
   return (
     <div className="mb-1.5">
-      <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+      <div className={cn(
+        'overflow-hidden rounded-xl border bg-card shadow-sm',
+        status === 'failed' ? errorColorClasses!.badge : 'border-border'
+      )}>
         <div className="flex items-start gap-2 px-3 py-2 transition-colors hover:bg-muted/40">
-          <div className="flex h-5 flex-shrink-0 items-center justify-center">
+          <div className="flex h-5 flex-shrink-0 items-center justify-center" aria-hidden="true">
             {isRunning ? (
               <Loader2 size={12} className="animate-spin text-yellow-500" />
-            ) : result?.isError ? (
-              <AlertCircle size={12} className="text-red-500" />
+            ) : status === 'failed' ? (
+              <span className="text-[12px] leading-none" title={errorPresentation!.label}>{errorPresentation!.icon}</span>
+            ) : status === 'cancelled' || status === 'skipped' ? (
+              <span className="text-[12px] leading-none">{status === 'cancelled' ? '✋' : '⏭'}</span>
             ) : result ? (
               <Check size={12} className="text-green-500" />
             ) : (
@@ -7168,7 +7605,19 @@ function ToolCallCard({
           <div className="min-w-0 flex-1">
             <div className="flex min-h-5 items-center gap-2">
               <span className="flex-1 truncate text-xs font-medium leading-5 text-foreground">{toolName}</span>
-              {renderHintLabel && result && (
+              {/* v2 §12 — categorized failure badge next to the tool name.
+                  Only shown when status === 'failed'; never display the
+                  raw enum string. Unknown types fall back to internal. */}
+              {status === 'failed' && (
+                <span className={cn(
+                  'inline-flex h-5 flex-shrink-0 items-center gap-1 rounded-full border px-2 text-[10px] leading-none',
+                  errorColorClasses!.badge
+                )}>
+                  <span aria-hidden="true">{errorPresentation!.icon}</span>
+                  <span>{errorPresentation!.label}</span>
+                </span>
+              )}
+              {renderHintLabel && result && status !== 'failed' && (
                 <span className="inline-flex h-5 flex-shrink-0 items-center rounded-full border border-border bg-background px-2 text-[10px] leading-none text-muted-foreground">
                   {renderHintLabel}
                 </span>
@@ -7180,9 +7629,9 @@ function ToolCallCard({
               )}
               <span className={cn(
                 'inline-flex h-5 flex-shrink-0 items-center text-[10px] leading-none',
-                isRunning ? 'text-yellow-500' : result?.isError ? 'text-red-500' : result ? 'text-green-600' : 'text-muted-foreground'
+                statusPillTextClass
               )}>
-                {isRunning ? '执行中' : result?.isError ? '失败' : result ? '完成' : ''}
+                {statusPillLabel}
               </span>
             </div>
             {/* v1.12: agent.intent — pre-tool progress sentence rendered as a
@@ -7202,9 +7651,28 @@ function ToolCallCard({
                 </span>
               </p>
             )}
-            <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
+            <p className={cn(
+              'mt-1 text-[11px] leading-5',
+              status === 'failed' ? errorColorClasses!.text : 'text-muted-foreground'
+            )}>
               {isRunning ? 'Agent 正在执行这个步骤。' : getToolResultSummary(call, result, filePreview)}
             </p>
+
+            {/* v2 §12 — retry / recovery hints. Display-only; no control
+                buttons. Engine is responsible for the actual retry; this
+                is purely a status mirror so the user knows the system
+                isn't stuck. */}
+            {showRetryHint && (
+              <p className="mt-1 flex items-center gap-1.5 text-[11px] leading-5 text-muted-foreground">
+                <Loader2 size={10} className="animate-spin" />
+                <span>{retryHintText}</span>
+              </p>
+            )}
+            {recoveryHintText && (
+              <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
+                {recoveryHintText}
+              </p>
+            )}
 
             {filePreview && (
               <button
@@ -7270,7 +7738,14 @@ function ToolCallCard({
                   共 {searchResultCount ?? searchUrls.length} 条
                 </span>
               </div>
-              <ul className="space-y-1">
+              {/* Cap the visible list to roughly 5 rows; everything past
+                  that is reachable via vertical scroll. Each row is
+                  ~40px (py-1.5 + two text lines), so max-h-[208px] +
+                  space-y-1 gives a clean 5-row window with one row of
+                  scroll affordance. `pr-1` reserves space for the
+                  scrollbar so the right edge of items doesn't shift
+                  when scrolling becomes active. */}
+              <ul className="max-h-[208px] space-y-1 overflow-y-auto pr-1">
                 {searchUrls.map((entry, idx) => {
                   const host = safeUrlHostname(entry.url)
                   const label = entry.title || host
@@ -7282,8 +7757,8 @@ function ToolCallCard({
                         className="group flex w-full items-start gap-2 rounded-lg border border-border bg-background px-2 py-1.5 text-left transition-colors hover:border-primary/60 hover:bg-primary/5"
                         title={entry.url}
                       >
-                        <span className="mt-0.5 inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary">
-                          <Globe size={11} />
+                        <span className="mt-0.5 inline-flex h-5 w-5 flex-shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary">
+                          <FaviconImage url={entry.url} size={14} />
                         </span>
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-[12px] font-medium text-foreground group-hover:text-primary">
@@ -7299,6 +7774,48 @@ function ToolCallCard({
                   )
                 })}
               </ul>
+            </div>
+          )}
+          {/* v2 §12 — developer-facing diagnostics. Only rendered when
+              there's a real failure with structured ErrorInfo. Keeps
+              error.message ("unknown tool: WebFetch" / etc.) AND
+              error.code out of the main UI; only here on demand. */}
+          {status === 'failed' && (result?.devMessage || result?.errorCode || result?.errorType) && (
+            <div>
+              <p className="mb-1 text-[10px] text-muted-foreground">诊断信息</p>
+              <div className="space-y-1 rounded-lg bg-muted p-2 text-[11px] font-mono text-foreground/80">
+                {result?.errorType && (
+                  <div>
+                    <span className="text-muted-foreground">type:</span> {result.errorType}
+                  </div>
+                )}
+                {result?.errorCode && (
+                  <div>
+                    <span className="text-muted-foreground">code:</span> {result.errorCode}
+                  </div>
+                )}
+                {result?.devMessage && (
+                  <div className="whitespace-pre-wrap break-words">
+                    <span className="text-muted-foreground">message:</span> {result.devMessage}
+                  </div>
+                )}
+                {typeof result?.retryable === 'boolean' && (
+                  <div>
+                    <span className="text-muted-foreground">retryable:</span> {String(result.retryable)}
+                  </div>
+                )}
+                {typeof result?.retryAfterMs === 'number' && (
+                  <div>
+                    <span className="text-muted-foreground">retry_after_ms:</span> {result.retryAfterMs}
+                  </div>
+                )}
+                {result?.recovery?.action && (
+                  <div>
+                    <span className="text-muted-foreground">recovery:</span> {result.recovery.action}
+                    {result.recovery.next_card_id ? ` → ${result.recovery.next_card_id}` : ''}
+                  </div>
+                )}
+              </div>
             </div>
           )}
           {metadataText && (
@@ -8013,6 +8530,21 @@ function FilePreviewDrawer({
         aria-hidden="true"
       />
 
+      {/* Slide-in group: the handle, the artifact-list nav, and the main
+          drawer aside are wrapped together so they enter as a SINGLE
+          right-to-left unit. Previously only the aside animated, while the
+          handle + nav rendered at their final positions instantly — that
+          produced the "two-layer" visual disconnect (静态文件按钮已就位、
+          后方抽屉再滑入). With one shared wrapper the entire group slides
+          together and reads as one cohesive panel.
+          • `relative` so absolutely-positioned children (handle / nav)
+            anchor to this wrapper.
+          • Full width (`w-full h-full`) so child `right-[…]` offsets stay
+            relative to the viewport edge, identical to the old layout.
+          • Wrapper-level animation translateX(100%) shifts ALL children by
+            one viewport width — drawer, nav and handle slide in lockstep. */}
+      <div className="drawer-slide-in-from-right pointer-events-none relative flex h-full w-full">
+
       {/* Collapsible artifact list. Pops out to the LEFT of the drawer
           (positioned absolutely, anchored against the drawer's right edge)
           so it never steals horizontal space from the preview itself. The
@@ -8026,7 +8558,10 @@ function FilePreviewDrawer({
             aria-controls={`${titleId}-artifact-list`}
             title={artifactListOpen ? '收起文件列表' : '展开文件列表'}
             className={cn(
-              'absolute top-4 z-[210] inline-flex h-9 items-center gap-1 rounded-l-lg border border-r-0 border-border bg-card px-2 text-[11px] font-medium text-foreground shadow-md transition-[right] duration-200 ease-out hover:bg-muted',
+              // `pointer-events-auto` re-enables interaction inside the
+              // slide-in wrapper (which is pointer-events-none so the empty
+              // area to the left of the drawer still closes on click).
+              'pointer-events-auto absolute top-4 z-[210] inline-flex h-9 items-center gap-1 rounded-l-lg border border-r-0 border-border bg-card px-2 text-[11px] font-medium text-foreground shadow-md transition-[right] duration-200 ease-out hover:bg-muted',
               // Open → handle sits on the panel's left edge.
               // Closed → handle sits on the drawer's left edge.
               artifactListOpen
@@ -8064,8 +8599,10 @@ function FilePreviewDrawer({
               // the drawer. Closed → translate RIGHT by its own width so
               // it sits inside the drawer area, hidden behind the aside.
               // The transition then reads as "drawer 边 → 左侧弹出".
+              // `pointer-events-auto` re-enables interaction inside the
+              // slide-in wrapper (parent is `pointer-events-none`).
               artifactListOpen
-                ? 'translate-x-0'
+                ? 'pointer-events-auto translate-x-0'
                 : 'pointer-events-none translate-x-full',
             )}
           >
@@ -8133,7 +8670,7 @@ function FilePreviewDrawer({
 
       <aside
         ref={dialogRef}
-        className="relative ml-auto flex h-full w-full max-w-3xl flex-col border-l border-border bg-card shadow-2xl"
+        className="pointer-events-auto relative ml-auto flex h-full w-full max-w-3xl flex-col border-l border-border bg-card shadow-2xl"
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -8264,19 +8801,20 @@ function FilePreviewDrawer({
                   <div key={i} className="flex">
                     <span className="mr-4 inline-block w-8 flex-shrink-0 select-none text-right text-muted-foreground/50">{i + 1}</span>
                     <span className="min-w-0 flex-1">{line || ' '}</span>
-                  </div>
-                ))}
-              </pre>
-            </div>
-          )}
-        </div>
-      </aside>
-    </div>,
-    document.body
-  )
-}
+                    </div>
+                    ))}
+                    </pre>
+                    </div>
+                    )}
+                    </div>
+                    </aside>
+                    </div>{/* /drawer-slide-in-from-right wrapper */}
+                    </div>,
+                    document.body
+                    )
+                    }
 
-// ─── Web Preview Drawer ─────────────────────────────────────────────────────
+                    // ─── Web Preview Drawer ─────────────────────────────────────────────────────
 //
 // In-app preview of a search-result URL using Electron's <webview> tag (each
 // guest renderer is isolated, so untrusted external content cannot reach the
@@ -8398,7 +8936,7 @@ function WebPreviewDrawer({ preview, onClose }: { preview: WebPreviewData | null
 
       <aside
         ref={dialogRef}
-        className="relative ml-auto flex h-full w-full max-w-3xl flex-col border-l border-border bg-card shadow-2xl"
+        className="drawer-slide-in-from-right relative ml-auto flex h-full w-full max-w-3xl flex-col border-l border-border bg-card shadow-2xl"
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
