@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Paperclip, Send, ListChecks } from 'lucide-react'
 import { useHarnessclawStatus } from '../../hooks/useHarnessclawStatus'
@@ -16,24 +17,26 @@ import { PastedBlocksBar, usePastedBlocks } from '../common/PastedBlocksBar'
 
 type AttachmentItem = LocalAttachmentItem
 
-const statusMeta = {
-  connected: {
-    label: '已连接',
-    description: '把问题、目标或文件放进来，然后直接开始一次新对话。',
-  },
-  connecting: {
-    label: '连接中',
-    description: '连接正在建立。你可以先整理输入，准备好后立即发送。',
-  },
-  disconnected: {
-    label: '未连接',
-    description: '先写下想法也没关系，连接完成后就能继续处理。',
-  },
-} as const
-
 export function HomePage() {
+  const { t } = useTranslation()
   const location = useLocation()
   const [input, setInput] = useState('')
+
+  const statusMeta = useMemo(() => ({
+    connected: {
+      label: t('home.status.connected'),
+      description: t('home.status.connectedDesc'),
+    },
+    connecting: {
+      label: t('home.status.connecting'),
+      description: t('home.status.connectingDesc'),
+    },
+    disconnected: {
+      label: t('home.status.disconnected'),
+      description: t('home.status.disconnectedDesc'),
+    },
+  }), [t])
+
   const [selectedSkills, setSelectedSkills] = useState<SelectedSkillChip[]>([])
   const [attachments, setAttachments] = useState<AttachmentItem[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
@@ -45,7 +48,7 @@ export function HomePage() {
   const navigate = useNavigate()
   const maxLength = 2000
   const harnessclawStatus = useHarnessclawStatus()
-  const shortcutHint = 'Enter 发送，Shift + Enter 换行'
+  const shortcutHint = t('home.shortcutHint')
   const currentStatus = statusMeta[harnessclawStatus]
 
   useEffect(() => {
@@ -201,7 +204,7 @@ export function HomePage() {
         >
           {isDragOver && (
             <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-card text-sm text-primary">
-              松开即可添加文件
+              {t('home.dropToFiles')}
             </div>
           )}
 
@@ -219,7 +222,7 @@ export function HomePage() {
               onSelectedSkillsChange={setSelectedSkills}
               onKeyDown={handleKeyDown}
               onPaste={pasted.handlePaste}
-              placeholder="+ 输入问题、目标或下一步，我来接手。"
+              placeholder={t('home.inputPlaceholder')}
               maxLength={maxLength}
               className="min-h-[56px] max-h-[112px] leading-7"
               rows={3}
@@ -236,16 +239,16 @@ export function HomePage() {
                   onClick={handlePickFiles}
                   disabled={harnessclawStatus !== 'connected'}
                   className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-2 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-foreground disabled:opacity-50"
-                  title="选择本地文件"
+                  title={t('home.addFiles')}
                 >
                   <Paperclip size={12} />
-                  <span>添加文件</span>
+                  <span>{t('home.addFiles')}</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setPlanMode((v) => !v)}
                   aria-pressed={planMode}
-                  title={planMode ? '已开启 Plan 模式：本次提问将显式拆步执行' : '点击开启 Plan 模式（多步骤、复杂任务推荐）'}
+                  title={planMode ? t('home.planModeEnabled') : t('home.planModeDisabled')}
                   className={cn(
                     'inline-flex items-center gap-1.5 rounded-full border px-3 py-2 text-xs transition-colors',
                     planMode
@@ -254,10 +257,10 @@ export function HomePage() {
                   )}
                 >
                   <ListChecks size={12} />
-                  <span>Plan 模式</span>
+                  <span>{t('home.planMode')}</span>
                 </button>
                 <span className="text-xs text-muted-foreground">
-                  支持拖拽，{shortcutHint}
+                  {t('home.shortcutHint')}
                 </span>
               </div>
 
@@ -270,7 +273,7 @@ export function HomePage() {
                   disabled={!buildSkillComposerPayload(input, selectedSkills) && attachments.length === 0 && pasted.blocks.length === 0}
                   className="inline-flex items-center gap-2 rounded-full bg-foreground px-4 py-2 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50 dark:bg-primary dark:text-primary-foreground"
                 >
-                  <span>发送</span>
+                  <span>{t('home.send')}</span>
                   <Send size={14} aria-hidden="true" />
                 </button>
               </div>

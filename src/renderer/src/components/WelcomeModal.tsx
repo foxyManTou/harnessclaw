@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ArrowRight, Check, ChevronLeft, Loader2, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import emmaAvatar from '../assets/sidebar-logo.png'
@@ -21,58 +22,12 @@ type ConfigRecord = Record<string, unknown>
 const WORKSPACE_ROOT = '~/.harnessclaw/workspace'
 const FIRST_RUN_DONE_STORAGE_KEY = 'harnessclaw-first-run-complete'
 
-const engineOptions: Array<{
-  key: EngineMode
-  title: string
-  detail: string
-}> = [
-  {
-    key: 'openai',
-    title: 'OpenAI API',
-    detail: '接入 OpenAI 官方 API 或兼容其模型命名与网关配置的账户。',
-  },
-  {
-    key: 'anthropic',
-    title: 'Anthropic API',
-    detail: '接入 Anthropic 官方 API，作为 Claude 系列模型的默认入口。',
-  },
-]
-
-const profileOptions: Array<{
-  key: ProfileKey
-  title: string
-  detail: string
-}> = [
-  {
-    key: 'A',
-    title: '研发与自动化运维',
-    detail: '偏长链路执行，默认开启更高工具迭代上限。',
-  },
-  {
-    key: 'B',
-    title: '数据采集与研究分析',
-    detail: '偏多轮检索和整理，保持中等推理强度。',
-  },
-  {
-    key: 'C',
-    title: '复杂日常工作流',
-    detail: '偏稳定协作和批量处理，保持简洁默认值。',
-  },
-]
-
-const stages: Array<{ key: StageKey; title: string; subtitle: string }> = [
-  { key: 'emma', title: '认识 Emma', subtitle: '从一个能聊也能干活的 Agent 控制台开始。' },
-  { key: 'engine', title: '选择推理引擎', subtitle: '确定首次接入的模型 API 协议。' },
-  { key: 'connection', title: '配置连接信息', subtitle: '' },
-  { key: 'profile', title: '选择任务画像', subtitle: '' },
-]
-
 const emmaPrompts: Array<{ category: string; prompt: string }> = [
   // 研发
   { category: '研发', prompt: '帮我把这段函数重构得更易读，并补充单元测试。' },
   { category: '研发', prompt: '排查这段报错日志，定位最可能的根因并给出修复方案。' },
   { category: '研发', prompt: '审视这个 PR 的设计与边界，列出潜在风险点。' },
-  { category: '研发', prompt: '给这个接口加上限流和重试，并写好对应的单测。' },
+  { category: '研发', prompt: '给这个接口加上限流 and 重试，并写好对应的单测。' },
   // 研究
   { category: '研究', prompt: '搜索最近一周关于 RAG 的新论文，做一份要点摘要。' },
   { category: '研究', prompt: '对比 3 家头部向量数据库的架构与适用场景。' },
@@ -204,6 +159,54 @@ function buildAppConfig(previous: ConfigRecord, draft: SetupDraft): ConfigRecord
 }
 
 export function WelcomeModal() {
+  const { t } = useTranslation()
+
+  const engineOptions: Array<{
+    key: EngineMode
+    title: string
+    detail: string
+  }> = useMemo(() => [
+    {
+      key: 'openai',
+      title: 'OpenAI API',
+      detail: t('welcome.engineOptions.openaiDetail'),
+    },
+    {
+      key: 'anthropic',
+      title: 'Anthropic API',
+      detail: t('welcome.engineOptions.anthropicDetail'),
+    },
+  ], [t])
+
+  const profileOptions: Array<{
+    key: ProfileKey
+    title: string
+    detail: string
+  }> = useMemo(() => [
+    {
+      key: 'A',
+      title: t('welcome.profileOptions.devTitle'),
+      detail: t('welcome.profileOptions.devDetail'),
+    },
+    {
+      key: 'B',
+      title: t('welcome.profileOptions.researchTitle'),
+      detail: t('welcome.profileOptions.researchDetail'),
+    },
+    {
+      key: 'C',
+      title: t('welcome.profileOptions.opsTitle'),
+      detail: t('welcome.profileOptions.opsDetail'),
+    },
+  ], [t])
+
+  const stages: Array<{ key: StageKey; title: string; subtitle: string }> = useMemo(() => [
+    { key: 'emma', title: t('welcome.stages.emma'), subtitle: t('welcome.stages.emmaSubtitle') },
+    { key: 'engine', title: t('welcome.stages.engine'), subtitle: t('welcome.stages.engineSubtitle') },
+    { key: 'connection', title: t('welcome.stages.connection'), subtitle: '' },
+    { key: 'profile', title: t('welcome.stages.profile'), subtitle: '' },
+  ], [t])
+
   const [overlayState, setOverlayState] = useState<StartupOverlayState>(() => {
     if (typeof window === 'undefined') return 'checking'
     return window.localStorage.getItem(FIRST_RUN_DONE_STORAGE_KEY) === 'true' ? 'hidden' : 'checking'
@@ -301,7 +304,7 @@ export function WelcomeModal() {
       const engineResult = await window.engineConfig.save(buildEngineConfig(currentEngineConfig, finalDraft))
       const appResult = await window.appConfig.save(buildAppConfig(currentAppConfig, finalDraft))
       if (!engineResult.ok || !appResult.ok) {
-        throw new Error(engineResult.error || appResult.error || '保存配置失败')
+        throw new Error(engineResult.error || appResult.error || t('welcome.saveError'))
       }
       const launched = await window.appBridge.markLaunched()
       if (launched.ok) {
@@ -330,7 +333,7 @@ export function WelcomeModal() {
               <Sparkles size={16} />
             </div>
             <h2 id="first-run-title" className="text-base font-semibold leading-tight text-foreground">
-              {username ? `${username}，` : ''}很高兴认识你
+              {username ? `${username}，` : ''}{t('welcome.greeting')}
             </h2>
           </div>
           <span className="text-xs tabular-nums text-muted-foreground">
@@ -492,7 +495,7 @@ export function WelcomeModal() {
               className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
             >
               <ChevronLeft size={14} />
-              上一步
+              {t('welcome.back')}
             </button>
           )}
 
@@ -506,11 +509,11 @@ export function WelcomeModal() {
               {submitting ? (
                 <>
                   <Loader2 size={14} className="animate-spin" />
-                  <span>Emma 正在为你点灯…</span>
+                  <span>{t('welcome.submitting')}</span>
                 </>
               ) : (
                 <>
-                  <span>去见 Emma</span>
+                  <span>{t('welcome.finish')}</span>
                   <ArrowRight
                     size={14}
                     className="transition-transform duration-300 group-hover:translate-x-0.5 group-disabled:translate-x-0"
@@ -525,7 +528,7 @@ export function WelcomeModal() {
               disabled={!currentStageDone}
               className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              下一步
+              {t('welcome.next')}
               <ArrowRight size={14} />
             </button>
           )}

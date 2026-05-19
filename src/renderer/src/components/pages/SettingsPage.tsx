@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
 import { useLocation } from 'react-router-dom'
 import {
@@ -4708,6 +4709,7 @@ function ToolsSection() {
 // ─── UI Section ─────────────────────────────────────────────────────────────
 
 function UISection() {
+  const { t, i18n } = useTranslation()
   const { config, loading, updateConfig } = useAppConfig()
   const ui = (config?.ui || {}) as {
     theme?: string
@@ -4732,6 +4734,9 @@ function UISection() {
 
   const updateUi = (patch: Record<string, unknown>) => {
     updateConfig({ ui: { ...ui, ...patch } })
+    if (patch.language) {
+      void i18n.changeLanguage(patch.language as string)
+    }
   }
 
   const applyTheme = (v: string) => {
@@ -4760,7 +4765,10 @@ function UISection() {
     if (!loading && persistedTheme) {
       applyTheme(persistedTheme)
     }
-  }, [loading, persistedTheme])
+    if (!loading && ui.language) {
+      void i18n.changeLanguage(ui.language)
+    }
+  }, [loading, persistedTheme, ui.language])
 
   if (loading) {
     return <div className="flex items-center justify-center py-20"><Loader2 size={20} className="animate-spin text-muted-foreground" /></div>
@@ -4768,21 +4776,21 @@ function UISection() {
 
   return (
     <div>
-      <SectionHeader icon={Palette} title="UI 设置" subtitle="界面显示偏好" />
-      <GroupCard title="外观">
-        <SettingRow label="主题" description="选择界面颜色主题">
-          <Segment options={[{ label: '浅色', value: 'light' }, { label: '深色', value: 'dark' }, { label: '跟随系统', value: 'system' }]} value={theme} onChange={handleThemeChange} />
+      <SectionHeader icon={Palette} title={t('settings.ui.title')} subtitle={t('settings.ui.subtitle')} />
+      <GroupCard title={t('settings.ui.appearance')}>
+        <SettingRow label={t('settings.ui.theme')} description="选择界面颜色主题">
+          <Segment options={[{ label: t('settings.ui.themeLight'), value: 'light' }, { label: t('settings.ui.themeDark'), value: 'dark' }, { label: t('settings.ui.themeSystem'), value: 'system' }]} value={theme} onChange={handleThemeChange} />
         </SettingRow>
-        <SettingRow label="字体大小" description="调整界面文字大小">
-          <Segment options={[{ label: '小', value: 'small' }, { label: '中', value: 'medium' }, { label: '大', value: 'large' }]} value={fontSize} onChange={(v) => updateUi({ fontSize: v })} />
+        <SettingRow label={t('settings.ui.fontSize')} description="调整界面文字大小">
+          <Segment options={[{ label: t('settings.ui.fontSizeSmall'), value: 'small' }, { label: t('settings.ui.fontSizeMedium'), value: 'medium' }, { label: t('settings.ui.fontSizeLarge'), value: 'large' }]} value={fontSize} onChange={(v) => updateUi({ fontSize: v })} />
         </SettingRow>
-        <SettingRow label="语言" description="界面显示语言">
-          <SelectInput value={language} onChange={(v) => updateUi({ language: v })} options={[{ label: '中文', value: 'zh' }, { label: 'English', value: 'en' }]} />
+        <SettingRow label={t('settings.ui.language')} description="界面显示语言">
+          <SelectInput value={language} onChange={(v) => updateUi({ language: v })} options={[{ label: t('settings.ui.languageZh'), value: 'zh' }, { label: t('settings.ui.languageEn'), value: 'en' }]} />
         </SettingRow>
       </GroupCard>
 
-      <GroupCard title="代码编辑器">
-        <SettingRow label="代码主题" description="代码块的语法高亮风格">
+      <GroupCard title={t('settings.ui.editor')}>
+        <SettingRow label={t('settings.ui.codeTheme')} description="代码块的语法高亮风格">
           <SelectInput
             value={codeTheme}
             onChange={(v) => updateUi({ codeTheme: v })}
@@ -4795,7 +4803,7 @@ function UISection() {
             ]}
           />
         </SettingRow>
-        <SettingRow label="动画效果" description="启用界面过渡和微交互动画">
+        <SettingRow label={t('settings.ui.animation')} description="启用界面过渡和微交互动画">
           <Toggle checked={animation} onChange={(v) => updateUi({ animation: v })} />
         </SettingRow>
       </GroupCard>
