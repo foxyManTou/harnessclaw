@@ -10,20 +10,35 @@ export type ConfigStorageFormat = 'json' | 'yaml'
 const DEFAULT_PROJECTS = [
   {
     projectId: 'release-009',
-    name: 'v0.0.9 发布收口',
-    description: '聚合发布说明、回归验证与异常修复，保证版本切换时上下文和产出都留在同一个项目里。',
+    name: 'v0.0.9 Release Wrap-up',
+    description: 'Bring release notes, regression verification, and bug fixes together so context and deliverables stay in one project.',
   },
   {
     projectId: 'sidebar-refine',
-    name: '侧边栏交互优化',
-    description: '集中处理对话多选、边界点击区和溢出问题，避免在多个页面来回切换。',
+    name: 'Sidebar Interaction Refinement',
+    description: 'Handle multi-select conversations, click targets, and overflow issues in one place to avoid bouncing between pages.',
   },
   {
     projectId: 'skills-onboarding',
+    name: 'Skills Onboarding Cleanup',
+    description: 'Refine first-run guidance, repository entry points, and the default flow so new users can understand the next step faster.',
+  },
+] as const
+
+const LEGACY_DEFAULT_PROJECTS: Record<string, { name: string; description: string }> = {
+  'release-009': {
+    name: 'v0.0.9 发布收口',
+    description: '聚合发布说明、回归验证与异常修复，保证版本切换时上下文和产出都留在同一个项目里。',
+  },
+  'sidebar-refine': {
+    name: '侧边栏交互优化',
+    description: '集中处理对话多选、边界点击区和溢出问题，避免在多个页面来回切换。',
+  },
+  'skills-onboarding': {
     name: '技能引导整理',
     description: '整理首屏说明、仓库入口与默认流程，让新用户进入后能更快理解下一步操作。',
   },
-] as const
+}
 
 export function getDb(): Database.Database {
   if (db) return db
@@ -235,6 +250,7 @@ function initTables(db: Database.Database): void {
   }
 
   seedDefaultProjects(db)
+  migrateDefaultProjects(db)
 }
 
 // ─── Sessions ────────────────────────────────────────────────────────────────
@@ -693,6 +709,50 @@ function seedDefaultProjects(db: Database.Database): void {
 
   for (const project of DEFAULT_PROJECTS) {
     insert.run(project.projectId, project.name, project.description, now, now)
+  }
+}
+
+function isManagedDefaultProjectValue(
+  current: string,
+  canonical: string,
+  legacy: string | undefined,
+): boolean {
+  return current === canonical || (typeof legacy === 'string' && current === legacy)
+}
+
+function migrateDefaultProjects(db: Database.Database): void {
+  const now = Date.now()
+  const selectProject = db.prepare(`
+    SELECT project_id, name, description
+    FROM projects
+    WHERE project_id = ?
+  `)
+  const updateProject = db.prepare(`
+    UPDATE projects
+    SET name = ?, description = ?, updated_at = ?
+    WHERE project_id = ?
+  `)
+
+  for (const project of DEFAULT_PROJECTS) {
+    const current = selectProject.get(project.projectId) as {
+      project_id: string
+      name: string
+      description: string
+    } | undefined
+    if (!current) continue
+
+    const legacy = LEGACY_DEFAULT_PROJECTS[project.projectId]
+    const canMigrate =
+      isManagedDefaultProjectValue(current.name, project.name, legacy?.name) &&
+      isManagedDefaultProjectValue(current.description, project.description, legacy?.description)
+
+    // Only migrate rows that still match built-in seed content.
+    // If the user renamed or rewrote a default project, preserve it.
+    if (!canMigrate) continue
+
+    if (current.name === project.name && current.description === project.description) continue
+
+    updateProject.run(project.name, project.description, now, project.projectId)
   }
 }
 
