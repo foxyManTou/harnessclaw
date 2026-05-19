@@ -1,0 +1,89 @@
+{
+  "sidebar": {
+    "home": "Home",
+    "xLab": "X·LAB",
+    "skills": "Skills",
+    "chat": "Chat",
+    "projects": "Projects",
+    "team": "Team",
+    "settings": "Settings",
+    "search": "Search",
+    "recent": "Recent",
+    "noRecent": "No recent chats",
+    "rename": "Rename",
+    "delete": "Delete",
+    "joinProject": "Join Project",
+    "exitProject": "Exit Project",
+    "expand": "Expand Sidebar",
+    "collapse": "Collapse Sidebar",
+    "more": "More"
+  },
+  "settings": {
+    "title": "Settings",
+    "ui": {
+      "title": "UI Settings",
+      "subtitle": "Interface display preferences",
+      "appearance": "Appearance",
+      "theme": "Theme",
+      "themeLight": "Light",
+      "themeDark": "Dark",
+      "themeSystem": "System",
+      "fontSize": "Font Size",
+      "fontSizeSmall": "Small",
+      "fontSizeMedium": "Medium",
+      "fontSizeLarge": "Large",
+      "language": "Language",
+      "languageZh": "Chinese",
+      "languageEn": "English",
+      "editor": "Code Editor",
+      "codeTheme": "Code Theme",
+      "animation": "Animation"
+    }
+  },
+  "welcome": {
+    "greeting": "Nice to meet you",
+    "stages": {
+      "emma": "Meet Emma",
+      "emmaSubtitle": "Start with an Agent console that can both chat and work.",
+      "engine": "Select Inference Engine",
+      "engineSubtitle": "Determine the model API protocol for the first connection.",
+      "connection": "Configure Connection",
+      "profile": "Select Task Profile"
+    },
+    "engineOptions": {
+      "openaiDetail": "Connect to OpenAI official API or accounts compatible with its model naming and gateway configuration.",
+      "anthropicDetail": "Connect to Anthropic official API as the default entry point for Claude series models."
+    },
+    "profileOptions": {
+      "devTitle": "R&D and Automated Ops",
+      "devDetail": "Focused on long-chain execution, with higher tool iteration limits by default.",
+      "researchTitle": "Data Collection and Research Analysis",
+      "researchDetail": "Focused on multi-round retrieval and organization, maintaining medium reasoning intensity.",
+      "opsTitle": "Complex Daily Workflow",
+      "opsDetail": "Focused on stable collaboration and batch processing, maintaining concise default values."
+    },
+    "back": "Back",
+    "next": "Next",
+    "finish": "Meet Emma",
+    "submitting": "Emma is lighting the lamp for you...",
+    "saveError": "Failed to save configuration"
+  },
+  "home": {
+    "status": {
+      "connected": "Connected",
+      "connectedDesc": "Put your questions, goals or files here, and start a new conversation directly.",
+      "connecting": "Connecting",
+      "connectingDesc": "Connection is being established. You can organize your input first and send it once ready.",
+      "disconnected": "Disconnected",
+      "disconnectedDesc": "It's okay to write down your thoughts first; you can continue once the connection is complete."
+    },
+    "dropToFiles": "Drop to add files",
+    "inputPlaceholder": "+ Enter your question, goal or next step, I'll take it from here.",
+    "addFiles": "Add Files",
+    "planMode": "Plan Mode",
+    "planModeEnabled": "Plan Mode enabled: this query will be executed in explicit steps",
+    "planModeDisabled": "Click to enable Plan Mode (recommended for multi-step, complex tasks)",
+    "shortcutHint": "Enter to send, Shift + Enter for new line",
+    "send": "Send"
+  }
+}

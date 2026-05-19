@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { createPortal } from 'react-dom'
 import {
@@ -62,25 +63,6 @@ interface AssignProjectDialogState {
   sessionId: string
 }
 
-const navGroups: NavGroup[] = [
-  {
-    items: [
-      { icon: House, path: '/', label: '首页' },
-      // The search button is rendered immediately after `/` (see
-      // `renderSearchButton` below), so X·LAB lands between 搜索 and 技能.
-      { icon: FlaskConical, path: '/x-lab', label: 'X·LAB' },
-      { icon: Puzzle, path: '/skills', label: '技能' },
-    ],
-  },
-  {
-    items: [
-      { icon: Zap, path: '/sessions', label: '对话' },
-      { icon: FolderKanban, path: '/projects', label: '项目' },
-      { icon: Users, path: '/team', label: 'Team' },
-    ],
-  },
-]
-
 const isMac = navigator.platform.toUpperCase().includes('MAC')
 const RECENT_WINDOW_SIZE = 8
 const FLOATING_MENU_WIDTH = 132
@@ -92,8 +74,27 @@ const MAX_SIDEBAR_WIDTH = 440
 const DEFAULT_SIDEBAR_WIDTH = 288
 
 export function Sidebar() {
+  const { t } = useTranslation()
   const location = useLocation()
   const navigate = useNavigate()
+
+  const navGroups: NavGroup[] = useMemo(() => [
+    {
+      items: [
+        { icon: House, path: '/', label: t('sidebar.home') },
+        { icon: FlaskConical, path: '/x-lab', label: t('sidebar.xLab') },
+        { icon: Puzzle, path: '/skills', label: t('sidebar.skills') },
+      ],
+    },
+    {
+      items: [
+        { icon: Zap, path: '/sessions', label: t('sidebar.chat') },
+        { icon: FolderKanban, path: '/projects', label: t('sidebar.projects') },
+        { icon: Users, path: '/team', label: t('sidebar.team') },
+      ],
+    },
+  ], [t])
+
   const harnessclawStatus = useHarnessclawStatus()
   const selectedRecentSessionId = typeof location.state?.sessionId === 'string' ? location.state.sessionId : ''
   const [expanded, setExpanded] = useState(() => localStorage.getItem('sidebar-expanded') === 'true')
@@ -351,9 +352,9 @@ export function Sidebar() {
       id: session.session_id,
       title: session.title,
       updatedAt: session.updated_at,
-      label: session.title.trim() || '未命名对话',
+      label: session.title.trim() || t('sidebar.noRecent'),
     }))
-  }, [recentSessions])
+  }, [recentSessions, t])
 
   const handleOpenRecentSession = (sessionId: string) => {
     closeSearch()
@@ -535,14 +536,14 @@ export function Sidebar() {
   const renderSearchButton = () => (
     <button
       onClick={openSearch}
-      title={expanded ? undefined : '搜索'}
-      aria-label={expanded ? undefined : '搜索'}
+      title={expanded ? undefined : t('sidebar.search')}
+      aria-label={expanded ? undefined : t('sidebar.search')}
       className={itemCls(searchOpen)}
     >
       <Search size={18} className="flex-shrink-0" aria-hidden="true" />
       {expanded && (
         <>
-          <span className="flex-1 text-left text-sm font-medium">搜索</span>
+          <span className="flex-1 text-left text-sm font-medium">{t('sidebar.search')}</span>
           <span className="rounded-md border border-border bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
             {isMac ? '⌘K' : 'Win+K'}
           </span>
@@ -668,7 +669,7 @@ export function Sidebar() {
                 aria-label={recentExpanded ? '收起最近聊天' : '展开最近聊天'}
               >
                 <MessageSquareText size={13} />
-                <span className="flex-1 text-left">最近</span>
+                <span className="flex-1 text-left">{t('sidebar.recent')}</span>
                 <ChevronDown
                   size={13}
                   className={cn('transition-transform duration-200', recentExpanded && 'rotate-180')}
@@ -693,7 +694,7 @@ export function Sidebar() {
                 >
                   {recentItems.length === 0 ? (
                     <div className="px-3 py-2 text-xs leading-5 text-muted-foreground">
-                      暂无最近聊天
+                      {t('sidebar.noRecent')}
                     </div>
                   ) : (
                     recentItems.map((item) => (
@@ -781,7 +782,7 @@ export function Sidebar() {
               )}
             >
               <Settings size={18} className="flex-shrink-0" aria-hidden="true" />
-              <span className="text-sm font-medium">设置</span>
+              <span className="text-sm font-medium">{t('sidebar.settings')}</span>
             </button>
 
             <button
@@ -854,7 +855,7 @@ export function Sidebar() {
             className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
           >
             <Pencil size={14} />
-            重命名
+            {t('sidebar.rename')}
           </button>
           {recentSessions.find((s) => s.session_id === activeMenuItem.id)?.project_id ? (
             <button
@@ -865,7 +866,7 @@ export function Sidebar() {
               className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
             >
               <FolderMinus size={14} />
-              退出项目
+              {t('sidebar.exitProject')}
             </button>
           ) : (
             <button
@@ -876,7 +877,7 @@ export function Sidebar() {
               className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
             >
               <FolderPlus size={14} />
-              加入项目
+              {t('sidebar.joinProject')}
             </button>
           )}
           <button
@@ -890,7 +891,7 @@ export function Sidebar() {
             className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-600 transition-colors hover:bg-red-50 dark:hover:bg-red-950/20"
           >
             <Trash2 size={14} />
-            删除
+            {t('sidebar.delete')}
           </button>
         </div>,
         document.body

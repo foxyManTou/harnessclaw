@@ -1,0 +1,89 @@
+{
+  "sidebar": {
+    "home": "首页",
+    "xLab": "X·LAB",
+    "skills": "技能",
+    "chat": "对话",
+    "projects": "项目",
+    "team": "团队",
+    "settings": "设置",
+    "search": "搜索",
+    "recent": "最近",
+    "noRecent": "暂无最近聊天",
+    "rename": "重命名",
+    "delete": "删除",
+    "joinProject": "加入项目",
+    "exitProject": "退出项目",
+    "expand": "展开侧边栏",
+    "collapse": "收起侧边栏",
+    "more": "更多操作"
+  },
+  "settings": {
+    "title": "设置",
+    "ui": {
+      "title": "UI 设置",
+      "subtitle": "界面显示偏好",
+      "appearance": "外观",
+      "theme": "主题",
+      "themeLight": "浅色",
+      "themeDark": "深色",
+      "themeSystem": "跟随系统",
+      "fontSize": "字体大小",
+      "fontSizeSmall": "小",
+      "fontSizeMedium": "中",
+      "fontSizeLarge": "大",
+      "language": "语言",
+      "languageZh": "中文",
+      "languageEn": "English",
+      "editor": "代码编辑器",
+      "codeTheme": "代码主题",
+      "animation": "动画效果"
+    }
+  },
+  "welcome": {
+    "greeting": "很高兴认识你",
+    "stages": {
+      "emma": "认识 Emma",
+      "emmaSubtitle": "从一个能聊也能干活的 Agent 控制台开始。",
+      "engine": "选择推理引擎",
+      "engineSubtitle": "确定首次接入的模型 API 协议。",
+      "connection": "配置连接信息",
+      "profile": "选择任务画像"
+    },
+    "engineOptions": {
+      "openaiDetail": "接入 OpenAI 官方 API 或兼容其模型命名与网关配置的账户。",
+      "anthropicDetail": "接入 Anthropic 官方 API，作为 Claude 系列模型的默认入口。"
+    },
+    "profileOptions": {
+      "devTitle": "研发与自动化运维",
+      "devDetail": "偏长链路执行，默认开启更高工具迭代上限。",
+      "researchTitle": "数据采集与研究分析",
+      "researchDetail": "偏多轮检索和整理，保持中等推理强度。",
+      "opsTitle": "复杂日常工作流",
+      "opsDetail": "偏稳定协作和批量处理，保持简洁默认值。"
+    },
+    "back": "上一步",
+    "next": "下一步",
+    "finish": "去见 Emma",
+    "submitting": "Emma 正在为你点灯…",
+    "saveError": "保存配置失败"
+  },
+  "home": {
+    "status": {
+      "connected": "已连接",
+      "connectedDesc": "把问题、目标或文件放进来，然后直接开始一次新对话。",
+      "connecting": "连接中",
+      "connectingDesc": "连接正在建立。你可以先整理输入，准备好后立即发送。",
+      "disconnected": "未连接",
+      "disconnectedDesc": "先写下想法也没关系，连接完成后就能继续处理。"
+    },
+    "dropToFiles": "松开即可添加文件",
+    "inputPlaceholder": "+ 输入问题、目标或下一步，我来接手。",
+    "addFiles": "添加文件",
+    "planMode": "Plan 模式",
+    "planModeEnabled": "已开启 Plan 模式：本次提问将显式拆步执行",
+    "planModeDisabled": "点击开启 Plan 模式（多步骤、复杂任务推荐）",
+    "shortcutHint": "Enter 发送，Shift + Enter 换行",
+    "send": "发送"
+  }
+}
