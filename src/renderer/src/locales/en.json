@@ -23,7 +23,12 @@
     "manage": "Manage",
     "add": "Add",
     "confirmDelete": "Confirm Delete?",
-    "processing": "Processing..."
+    "processing": "Processing...",
+    "actions": {
+      "more": "More"
+    },
+    "config": "Configure",
+    "view": "View"
   },
   "sidebar": {
     "home": "Home",
@@ -401,7 +406,8 @@
       "noProjects": "No projects available",
       "current": "Current",
       "join": "Join Project",
-      "exit": "Leave Project"
+      "exit": "Leave Project",
+      "subtitle": "Assign this session to a project"
     },
     "deleteConfirm": {
       "batchDesc": "All messages and history of the {{count}} selected sessions will be permanently deleted and cannot be recovered."
@@ -593,7 +599,8 @@
       "subagentEndFailed": "Subtask lifecycle ended with failure",
       "subagentEnd": "Subtask lifecycle ended",
       "loadFailed": "Load failed",
-      "apiNotFound": "Management API not found (please confirm engine version ≥ 2026-05-14)"
+      "apiNotFound": "Management API not found (please confirm engine version ≥ 2026-05-14)",
+      "subagentTask": "Subagent task"
     },
     "tool": {
       "nameLabel": "Tool Name",
@@ -631,7 +638,8 @@
       "noContent": "No file content to display",
       "noContentDesc": "This tool call returned no previewable text.",
       "binaryTitle": "Binary file, cannot preview directly",
-      "binaryDesc": "This format (e.g. .docx / .pdf / .xlsx) is not UTF-8 text. Use the Export action in the top-right to save the original file."
+      "binaryDesc": "This format (e.g. .docx / .pdf / .xlsx) is not UTF-8 text. Use the Export action in the top-right to save the original file.",
+      "preview": "Preview"
     },
     "web": {
       "refresh": "Refresh",
@@ -676,7 +684,8 @@
       "memberCount": "{{n}} members",
       "prevTeamAria": "Previous Team",
       "nextTeamAria": "Next Team",
-      "switchTeamAria": "Switch to {{name}}"
+      "switchTeamAria": "Switch to {{name}}",
+      "switchToAria": "Switch to {{name}}"
     },
     "chatQuickSwitch": "Quick Chat Switch",
     "jumpToChat": "Jump to chat {{n}}",
@@ -762,7 +771,8 @@
       "running": "Running",
       "idle": "Idle",
       "completed": "Completed",
-      "failed": "Failed"
+      "failed": "Failed",
+      "aborted": "Aborted"
     },
     "teamEvent": {
       "memberJoin": "Member Joined",
@@ -1672,5 +1682,140 @@
       "unknownMember": "Unknown Agent",
       "memberCount": "{{n}} Agents"
     }
+  },
+  "attachments": {
+    "removeAria": "Remove attachment"
+  },
+  "pasted": {
+    "closeAria": "Close preview",
+    "label": "Pasted text",
+    "lines": "{{count}} lines",
+    "previewTitle": "Pasted text preview",
+    "removeAria": "Remove pasted text"
+  },
+  "plan": {
+    "buttonLabel": "Plan",
+    "close": "Close",
+    "dependsOn": "Depends on",
+    "dialogTitle": "Execution Plan",
+    "draft": {
+      "addStep": "Add step",
+      "deleteStepAria": "Delete step",
+      "execute": "Execute Plan",
+      "goalLabel": "Goal",
+      "newStep": "New step",
+      "noSteps": "No steps yet — add one to begin.",
+      "regenerate": "Regenerate",
+      "reject": "Reject",
+      "stepPlaceholder": "Describe this step...",
+      "title": "Plan Draft"
+    },
+    "noSteps": "No steps",
+    "status": {
+      "completed": "Completed",
+      "dispatched": "Dispatched",
+      "failed": "Failed",
+      "pending": "Pending",
+      "running": "Running",
+      "skipped": "Skipped"
+    },
+    "summary": {
+      "completed": "{{count}} completed",
+      "failed": "{{count}} failed",
+      "progress": "{{done}} / {{total}}",
+      "running": "{{count}} running",
+      "waiting": "{{count}} waiting"
+    },
+    "taskPlan": "Task Plan"
+  },
+  "stats": {
+    "breakdown": {
+      "agent": "Agent",
+      "contribution": "Contribution",
+      "input": "Input",
+      "mainBadge": "Main",
+      "noSubagents": "No subagent activity",
+      "output": "Output",
+      "title": "Agent Breakdown"
+    },
+    "buckets": {
+      "cache": "Cache",
+      "includingCache": "incl. cache",
+      "input": "Input",
+      "output": "Output",
+      "percentOfInput": "% of input",
+      "thinking": "Thinking"
+    },
+    "cards": {
+      "avgLatency": "Avg Latency",
+      "cacheHit": "Cache Hit",
+      "cacheSaved": "Cache Saved",
+      "includingThinking": "incl. thinking",
+      "inputTokens": "Input Tokens",
+      "outputTokens": "Output Tokens",
+      "totalTokens": "Total Tokens",
+      "ttft": "TTFT"
+    },
+    "close": "Close",
+    "contextWindow": "Context Window",
+    "dialogTitle": "Session Stats",
+    "fetchError": "Failed to fetch stats",
+    "fetchErrorHint": "Make sure the engine is running.",
+    "noData": "No data yet",
+    "refresh": "Refresh",
+    "remaining": "Remaining",
+    "title": "Stats"
+  },
+  "storage": {
+    "export": {
+      "config": "Export Config",
+      "configDesc": "Export the current app config as JSON.",
+      "db": "Export Database",
+      "dbDesc": "Export sessions and messages as a SQLite snapshot.",
+      "failed": "Export failed",
+      "logs": "Export Logs",
+      "logsDesc": "Bundle runtime logs into a single archive.",
+      "openFailed": "Failed to open exported file",
+      "success": "Exported to {{path}}",
+      "title": "Export Data"
+    }
+  },
+  "ui": {
+    "viewAvatar": "View avatar"
+  },
+  "updates": {
+    "autoCheckHint": "Updates are checked automatically on startup.",
+    "available": "Update available",
+    "check": "Check for updates",
+    "checkDesc": "Check Github for a newer release.",
+    "checkFailed": "Failed to check for updates",
+    "checking": "Checking…",
+    "checkingSource": "Checking release source…",
+    "checkingStatus": "Status: checking",
+    "currentVersion": "Current Version",
+    "currentVersionDesc": "The version currently installed.",
+    "downloadDeferred": "Download deferred until later — {{version}}",
+    "downloadDeferredGeneric": "Download deferred until later.",
+    "downloadDone": "Download finished — {{version}}",
+    "downloadDoneGeneric": "Download finished.",
+    "downloadProgress": "Downloading {{version}}… {{percent}}%",
+    "downloadProgressGeneric": "Downloading… {{percent}}%",
+    "downloadStarted": "Download started — {{version}}",
+    "downloadStartedGeneric": "Download started.",
+    "downloaded": "Update downloaded — restart to install",
+    "downloading": "Downloading…",
+    "error": "Update error: {{message}}",
+    "foundNew": "New version available — {{version}}",
+    "foundNewGeneric": "A new version is available.",
+    "idle": "Idle",
+    "latest": "Already up to date — {{version}}",
+    "latestGeneric": "Already up to date.",
+    "notAvailable": "No updates available",
+    "progress": "{{percent}}%",
+    "status": "Update Status",
+    "statusDesc": "Latest result from the update checker.",
+    "subtitle": "Manage automatic updates and check for new releases.",
+    "title": "Updates",
+    "version": "Version {{version}}"
   }
 }
