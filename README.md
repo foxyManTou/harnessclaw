@@ -1,3 +1,5 @@
+![Logo](./logo.png)
+
 # Harnessclaw
 
 [English](./README.md) | [简体中文](./README_zh.md)
