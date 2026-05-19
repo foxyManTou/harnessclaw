@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   ListChecks,
   X,
@@ -104,19 +105,20 @@ function getStepBadge(status: PlanStepStatus | undefined): StepBadge {
   }
 }
 
-function statusLabel(status: PlanStepStatus | undefined): string {
+function statusLabel(t: any, status: PlanStepStatus | undefined): string {
   switch (status) {
-    case 'running': return '运行中'
-    case 'dispatched': return '已派发'
-    case 'completed': return '已完成'
-    case 'failed': return '失败'
-    case 'skipped': return '已跳过'
+    case 'running': return t('plan.status.running')
+    case 'dispatched': return t('plan.status.dispatched')
+    case 'completed': return t('plan.status.completed')
+    case 'failed': return t('plan.status.failed')
+    case 'skipped': return t('plan.status.skipped')
     case 'pending':
-    default: return '待执行'
+    default: return t('plan.status.pending')
   }
 }
 
 export function PlanStatusButton({ plan, className }: PlanStatusButtonProps) {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -172,18 +174,18 @@ export function PlanStatusButton({ plan, className }: PlanStatusButtonProps) {
 
   const summaryLine = (() => {
     if (plan.planStatus === 'completed') {
-      return `计划已完成 · ${counts.completed}/${counts.total} 步成功`
+      return t('plan.summary.completed', { completed: counts.completed, total: counts.total })
     }
     if (plan.planStatus === 'failed') {
-      return `计划失败 · ${counts.failed} 步失败、${counts.skipped} 步跳过`
+      return t('plan.summary.failed', { failed: counts.failed, skipped: counts.skipped })
     }
     if (counts.running > 0) {
-      return `运行中 · ${counts.completed}/${counts.total} 已完成`
+      return t('plan.summary.running', { completed: counts.completed, total: counts.total })
     }
     if (counts.completed > 0) {
-      return `已完成 ${counts.completed}/${counts.total} 步`
+      return t('plan.summary.progress', { completed: counts.completed, total: counts.total })
     }
-    return `计划已批准，等待派发 · 共 ${counts.total} 步`
+    return t('plan.summary.waiting', { total: counts.total })
   })()
 
   return (
@@ -192,7 +194,7 @@ export function PlanStatusButton({ plan, className }: PlanStatusButtonProps) {
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        aria-label="查看执行计划"
+        aria-label={t('plan.buttonLabel')}
         className={cn(
           'group inline-flex items-center gap-1.5 rounded-full border bg-card/95 px-3 py-1.5 text-[12px] font-medium shadow-sm backdrop-blur-sm transition-colors',
           buttonAccent,
@@ -200,7 +202,7 @@ export function PlanStatusButton({ plan, className }: PlanStatusButtonProps) {
         )}
       >
         {buttonIcon}
-        <span>执行计划</span>
+        <span>{t('plan.buttonLabel')}</span>
         <span className="rounded-full bg-muted px-1.5 py-px text-[10px] font-semibold text-muted-foreground">
           {counts.completed}/{counts.total}
         </span>
@@ -209,23 +211,23 @@ export function PlanStatusButton({ plan, className }: PlanStatusButtonProps) {
       {open && (
         <div
           role="dialog"
-          aria-label="执行计划"
+          aria-label={t('plan.dialogTitle')}
           className="absolute right-0 top-[calc(100%+8px)] z-30 w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-border bg-card shadow-xl"
         >
           {/* Header */}
           <div className="flex items-start justify-between gap-2 border-b border-border bg-muted/40 px-4 py-3">
             <div className="min-w-0">
               <div className="text-[10px] font-black uppercase tracking-[0.1em] text-muted-foreground">
-                Task Plan · {plan.planStatus === 'completed' ? '已完成' : plan.planStatus === 'failed' ? '已失败' : '执行中'}
+                {t('plan.taskPlan')} · {plan.planStatus === 'completed' ? t('plan.status.completed') : plan.planStatus === 'failed' ? t('plan.status.failed') : t('plan.status.running')}
               </div>
               <div className="mt-0.5 truncate text-[13px] font-semibold text-foreground" title={plan.goal}>
-                {plan.goal || '执行计划'}
+                {plan.goal || t('plan.dialogTitle')}
               </div>
             </div>
             <button
               type="button"
               onClick={() => setOpen(false)}
-              aria-label="关闭"
+              aria-label={t('plan.close')}
               className="-mr-1 -mt-1 flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
               <X size={14} />
@@ -242,7 +244,7 @@ export function PlanStatusButton({ plan, className }: PlanStatusButtonProps) {
           <div className="max-h-[60vh] overflow-y-auto px-3 py-2">
             {plan.steps.length === 0 ? (
               <div className="px-2 py-4 text-center text-[12px] text-muted-foreground">
-                暂无步骤
+                {t('plan.noSteps')}
               </div>
             ) : (
               <ol className="space-y-1">
@@ -276,7 +278,7 @@ export function PlanStatusButton({ plan, className }: PlanStatusButtonProps) {
                           {step.description || step.id}
                         </div>
                         <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
-                          <span>{statusLabel(step.status)}</span>
+                          <span>{statusLabel(t, step.status)}</span>
                           {step.subagent_type && (
                             <>
                               <span>·</span>
@@ -288,7 +290,7 @@ export function PlanStatusButton({ plan, className }: PlanStatusButtonProps) {
                           {step.depends_on && step.depends_on.length > 0 && (
                             <>
                               <span>·</span>
-                              <span>依赖 {step.depends_on.join(', ')}</span>
+                              <span>{t('plan.dependsOn', { deps: step.depends_on.join(', ') })}</span>
                             </>
                           )}
                         </div>

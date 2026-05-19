@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   BarChart3,
   MessageCircle,
@@ -455,6 +456,7 @@ function clampPercent(numerator: number, denominator: number): number {
 }
 
 export function SessionStatsButton({ sessionId, stats: overrideStats, className }: SessionStatsButtonProps) {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const [polled, setPolled] = useState<SessionStatsValue | undefined>(undefined)
   const [fetchState, setFetchState] = useState<'idle' | 'loading' | 'error' | 'no_data'>('idle')
@@ -603,16 +605,16 @@ export function SessionStatsButton({ sessionId, stats: overrideStats, className 
   const contextRemainingPct = Math.max(0, 100 - contextUsedPct)
 
   const cacheHitLabel = typeof stats.cacheHitRatio === 'number'
-    ? `缓存命中 ${Math.round(stats.cacheHitRatio * 100)}%`
+    ? t('stats.cards.cacheHit', { percent: Math.round(stats.cacheHitRatio * 100) })
     : undefined
   const thinkingLabel = typeof stats.thinkingTokens === 'number' && stats.thinkingTokens > 0
-    ? `含思考 ${formatCompactTokens(stats.thinkingTokens)}`
+    ? t('stats.cards.includingThinking', { n: formatCompactTokens(stats.thinkingTokens) })
     : undefined
   const firstTokenLabel = typeof stats.firstTokenLatencyMs === 'number'
-    ? `首 token ${formatLatency(stats.firstTokenLatencyMs)}`
+    ? t('stats.cards.ttft', { latency: formatLatency(stats.firstTokenLatencyMs) })
     : undefined
   const savingsLabel = typeof stats.cachedSavingsUsd === 'number' && stats.cachedSavingsUsd > 0
-    ? `缓存省 ${formatCost(stats.cachedSavingsUsd)}`
+    ? t('stats.cards.cacheSaved', { cost: formatCost(stats.cachedSavingsUsd) })
     : undefined
 
   return (
@@ -621,14 +623,14 @@ export function SessionStatsButton({ sessionId, stats: overrideStats, className 
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        aria-label="查看会话统计"
+        aria-label={t('stats.title')}
         className={cn(
           'group inline-flex items-center gap-1.5 rounded-full border border-border bg-card/95 px-3 py-1.5 text-[12px] font-medium text-foreground shadow-sm backdrop-blur-sm transition-colors hover:border-primary/40 hover:text-primary',
           open && 'border-primary/40 bg-card text-primary',
         )}
       >
         <BarChart3 size={14} strokeWidth={2.2} className="text-primary" />
-        <span>统计</span>
+        <span>{t('stats.title')}</span>
         {/*
           The trigger badge used to show `formatCost(totalCostUsd)`.
           Per UX guidance we now suppress monetary numbers from the
@@ -640,7 +642,7 @@ export function SessionStatsButton({ sessionId, stats: overrideStats, className 
       {open && (
         <div
           role="dialog"
-          aria-label="会话统计"
+          aria-label={t('stats.dialogTitle')}
           className="absolute right-0 top-[calc(100%+8px)] z-30 w-[min(42rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-border bg-card shadow-xl"
         >
           {/* Refresh + close buttons — float over the panel header.
@@ -652,7 +654,7 @@ export function SessionStatsButton({ sessionId, stats: overrideStats, className 
               <button
                 type="button"
                 onClick={() => void fetchMetrics()}
-                aria-label="刷新统计"
+                aria-label={t('stats.refresh')}
                 disabled={fetchState === 'loading'}
                 className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -662,7 +664,7 @@ export function SessionStatsButton({ sessionId, stats: overrideStats, className 
             <button
               type="button"
               onClick={() => setOpen(false)}
-              aria-label="关闭"
+              aria-label={t('stats.close')}
               className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
               <X size={14} />
@@ -682,8 +684,8 @@ export function SessionStatsButton({ sessionId, stats: overrideStats, className 
                 : 'border-border bg-muted/40 text-muted-foreground',
             )}>
               {fetchState === 'error'
-                ? <>无法获取统计数据：{errorMessage || '请稍后重试'}</>
-                : <>暂无统计数据 — 当前会话还未产生 LLM 调用</>}
+                ? t('stats.fetchError', { error: errorMessage || t('stats.fetchErrorHint') })
+                : t('stats.noData')}
             </div>
           )}
 
@@ -691,13 +693,13 @@ export function SessionStatsButton({ sessionId, stats: overrideStats, className 
             {/* ── Context window utilization ─────────────────────────── */}
             <section>
               <div className="flex items-baseline justify-between gap-3">
-                <div className="text-[13px] font-semibold text-foreground">上下文窗口</div>
+                <div className="text-[13px] font-semibold text-foreground">{t('stats.contextWindow')}</div>
                 <div className="text-[12px] text-muted-foreground">
                   <span className="font-semibold text-foreground">{stats.contextUsed.toLocaleString('en-US')}</span>
                   <span className="mx-1 text-muted-foreground/80">/</span>
                   <span>{stats.contextLimit.toLocaleString('en-US')}</span>
                   <span className="mx-1 text-muted-foreground/60">·</span>
-                  <span>剩余 </span>
+                  <span>{t('stats.remaining')} </span>
                   <span className="font-semibold text-emerald-600 dark:text-emerald-400">{contextRemainingPct.toFixed(1)}%</span>
                 </div>
               </div>
@@ -715,7 +717,7 @@ export function SessionStatsButton({ sessionId, stats: overrideStats, className 
               />
               {stats.contextBreakdown && (
                 <ul className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px] text-muted-foreground">
-                  {CONTEXT_BUCKETS.map((bucket) => {
+                  {CONTEXT_BUCKETS(t).map((bucket) => {
                     const value = bucket.selector(stats.contextBreakdown!)
                     if (!value || value <= 0) return null
                     const isActive = activeBucket === bucket.id
@@ -759,26 +761,26 @@ export function SessionStatsButton({ sessionId, stats: overrideStats, className 
                 isn't surfaced as a dollar amount anywhere. */}
             <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <StatCard
-                label="总 token"
+                label={t('stats.cards.totalTokens')}
                 value={(stats.inputTokens + stats.outputTokens).toLocaleString('en-US')}
               />
-              <StatCard label="输入 token" value={stats.inputTokens.toLocaleString('en-US')} sub={cacheHitLabel} />
-              <StatCard label="输出 token" value={stats.outputTokens.toLocaleString('en-US')} sub={thinkingLabel} />
-              <StatCard label="平均延迟" value={formatLatency(stats.avgLatencyMs)} sub={firstTokenLabel} />
+              <StatCard label={t('stats.cards.inputTokens')} value={stats.inputTokens.toLocaleString('en-US')} sub={cacheHitLabel} />
+              <StatCard label={t('stats.cards.outputTokens')} value={stats.outputTokens.toLocaleString('en-US')} sub={thinkingLabel} />
+              <StatCard label={t('stats.cards.avgLatency')} value={formatLatency(stats.avgLatencyMs)} sub={firstTokenLabel} />
             </section>
 
             {/* ── 子 agent 分解 ───────────────────────────────────────── */}
             <section>
-              <div className="mb-2 text-[13px] font-semibold text-foreground">子 agent 分解</div>
+              <div className="mb-2 text-[13px] font-semibold text-foreground">{t('stats.breakdown.title')}</div>
               <div className="overflow-hidden rounded-xl border border-border bg-background">
                 {/* Column headers. Share column is cost-weighted under
                     the hood but labeled "贡献占比" so the user reads
                     it as a relative contribution rather than money. */}
                 <div className="grid grid-cols-[1.5fr,0.8fr,0.8fr,1.6fr] items-center gap-3 border-b border-border bg-muted/40 px-3 py-2 text-[11px] font-medium text-muted-foreground">
-                  <div>Agent</div>
-                  <div className="text-right">输入</div>
-                  <div className="text-right">输出</div>
-                  <div>贡献占比</div>
+                  <div>{t('stats.breakdown.agent')}</div>
+                  <div className="text-right">{t('stats.breakdown.input')}</div>
+                  <div className="text-right">{t('stats.breakdown.output')}</div>
+                  <div>{t('stats.breakdown.contribution')}</div>
                 </div>
                 <ul className="divide-y divide-border">
                   {rows.map((row) => {
@@ -793,7 +795,7 @@ export function SessionStatsButton({ sessionId, stats: overrideStats, className 
                           <span className="truncate font-medium" title={row.name}>{row.name}</span>
                           {row.badge && (
                             <span className="inline-flex h-4 flex-shrink-0 items-center rounded-sm bg-muted px-1 text-[10px] font-medium text-muted-foreground">
-                              {row.badge}
+                              {row.badge === '主' ? t('stats.breakdown.mainBadge') : row.badge}
                             </span>
                           )}
                         </div>
@@ -824,7 +826,7 @@ export function SessionStatsButton({ sessionId, stats: overrideStats, className 
                   })}
                   {rows.length === 0 && (
                     <li className="px-3 py-6 text-center text-[12px] text-muted-foreground">
-                      暂无子 agent 数据
+                      {t('stats.breakdown.noSubagents')}
                     </li>
                   )}
                 </ul>
@@ -869,37 +871,37 @@ interface ContextBucket {
   hint?: (b: SessionStatsContextBreakdown) => string | undefined
 }
 
-const CONTEXT_BUCKETS: ContextBucket[] = [
+const CONTEXT_BUCKETS = (t: any): ContextBucket[] => [
   {
     id: 'input',
-    label: '输入',
+    label: t('stats.buckets.input'),
     color: 'bg-sky-500',
     ring: 'ring-sky-400/40',
     // The legend reports the *full* input. The bar segment uses the
     // non-cached portion (computed in the bar) so segments stay
     // non-overlapping; see comment on SessionStatsContextBreakdown.
     selector: (b) => b.inputTokens,
-    hint: (b) => (b.cacheTokens > 0 ? `含缓存 ${formatCompactTokens(b.cacheTokens)}` : undefined),
+    hint: (b) => (b.cacheTokens > 0 ? t('stats.buckets.includingCache', { n: formatCompactTokens(b.cacheTokens) }) : undefined),
   },
   {
     id: 'cache',
-    label: '缓存',
+    label: t('stats.buckets.cache'),
     color: 'bg-violet-500',
     ring: 'ring-violet-400/40',
     selector: (b) => b.cacheTokens,
     hint: (b) =>
-      b.inputTokens > 0 ? `占输入 ${((b.cacheTokens / b.inputTokens) * 100).toFixed(1)}%` : undefined,
+      b.inputTokens > 0 ? t('stats.buckets.percentOfInput', { percent: ((b.cacheTokens / b.inputTokens) * 100).toFixed(1) }) : undefined,
   },
   {
     id: 'output',
-    label: '输出',
+    label: t('stats.buckets.output'),
     color: 'bg-emerald-500',
     ring: 'ring-emerald-400/40',
     selector: (b) => b.outputTokens,
   },
   {
     id: 'thinking',
-    label: '思考',
+    label: t('stats.buckets.thinking'),
     color: 'bg-amber-500',
     ring: 'ring-amber-400/40',
     selector: (b) => b.thinkingTokens,
@@ -1009,8 +1011,9 @@ function ContextBucketFloatingTooltip({
   activeBucket: ContextBucketId | null
   position: { x: number; y: number } | null
 }) {
+  const { t } = useTranslation()
   if (!breakdown || !activeBucket || !position) return null
-  const bucket = CONTEXT_BUCKETS.find((b) => b.id === activeBucket)
+  const bucket = CONTEXT_BUCKETS(t).find((b) => b.id === activeBucket)
   if (!bucket) return null
   const value = bucket.selector(breakdown)
 

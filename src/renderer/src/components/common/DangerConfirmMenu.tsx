@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { Trash2 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 
@@ -20,16 +21,24 @@ export function DangerConfirmMenu({
   confirming,
   disabled = false,
   pending = false,
-  actionLabel = '删除',
-  title = '确认删除？',
-  cancelLabel = '取消',
-  confirmLabel = '确认',
-  pendingLabel = '处理中',
+  actionLabel,
+  title,
+  cancelLabel,
+  confirmLabel,
+  pendingLabel,
   className,
   onRequestConfirm,
   onCancel,
   onConfirm,
 }: DangerConfirmMenuProps) {
+  const { t } = useTranslation()
+
+  const finalActionLabel = actionLabel ?? t('common.delete')
+  const finalTitle = title ?? t('common.confirmDelete')
+  const finalCancelLabel = cancelLabel ?? t('common.cancel')
+  const finalConfirmLabel = confirmLabel ?? t('common.confirm')
+  const finalPendingLabel = pendingLabel ?? t('common.processing')
+
   if (confirming) {
     return (
       <div
@@ -43,14 +52,14 @@ export function DangerConfirmMenu({
       >
         <div className="w-full max-w-[260px] rounded-2xl border border-border bg-popover p-3 shadow-[0_18px_48px_rgba(15,23,42,0.18)]">
           <div className="space-y-3">
-            <p className="text-center text-sm font-medium text-foreground">{title}</p>
+            <p className="text-center text-sm font-medium text-foreground">{finalTitle}</p>
             <div className="flex justify-center gap-2">
               <button
                 type="button"
                 onClick={onCancel}
                 className="inline-flex min-h-10 min-w-20 items-center justify-center rounded-xl bg-destructive px-3 py-2 text-sm font-medium text-destructive-foreground transition-opacity hover:opacity-90"
               >
-                {cancelLabel}
+                {finalCancelLabel}
               </button>
               <button
                 type="button"
@@ -58,7 +67,7 @@ export function DangerConfirmMenu({
                 onClick={onConfirm}
                 className="inline-flex min-h-10 min-w-20 items-center justify-center rounded-xl border border-border bg-card px-3 py-2 text-center text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {pending ? pendingLabel : confirmLabel}
+                {pending ? finalPendingLabel : finalConfirmLabel}
               </button>
             </div>
           </div>
@@ -76,7 +85,7 @@ export function DangerConfirmMenu({
         className="flex w-full items-center justify-center gap-2 rounded-lg px-2.5 py-2 text-center text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
       >
         <Trash2 size={14} className="text-destructive" />
-        <span>{actionLabel}</span>
+        <span>{finalActionLabel}</span>
       </button>
     </div>
   )

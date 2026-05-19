@@ -260,6 +260,7 @@ function SliderInput({
 // ─── Connection Section ─────────────────────────────────────────────────────
 
 function ConnectionSection() {
+  const { t } = useTranslation()
   const { config, loading, updateConfig } = useEngineConfig()
 
   const gw = (config?.gateway || {}) as { host?: string; port?: number; heartbeat?: { enabled?: boolean; intervalS?: number } }
@@ -295,11 +296,11 @@ function ConnectionSection() {
         setProbeState('ok')
       } else {
         setProbeState('fail')
-        setProbeError(result.error || '无法连接')
+        setProbeError(result.error || t('settings.connection.gateway.probeFailed'))
       }
     } catch {
       setProbeState('fail')
-      setProbeError('检测请求失败')
+      setProbeError(t('settings.connection.gateway.requestFailed'))
     }
     setTimeout(() => setProbeState('idle'), 4000)
   }
@@ -310,12 +311,12 @@ function ConnectionSection() {
 
   return (
     <div>
-      <SectionHeader icon={Wifi} title="连接设置" subtitle="Gateway 连接与心跳" />
-      <GroupCard title="Gateway 连接">
-        <SettingRow label="监听地址" description="Gateway 服务端绑定的主机地址">
+      <SectionHeader icon={Wifi} title={t('settings.connection.title')} subtitle={t('settings.connection.subtitle')} />
+      <GroupCard title={t('settings.connection.gateway.title')}>
+        <SettingRow label={t('settings.connection.gateway.host')} description={t('settings.connection.gateway.hostDesc')}>
           <TextInput value={host} onChange={(v) => updateGateway({ host: v })} placeholder="0.0.0.0" className="w-40" mono />
         </SettingRow>
-        <SettingRow label="端口" description="Console API 端口，默认 8090">
+        <SettingRow label={t('settings.connection.gateway.port')} description={t('settings.connection.gateway.portDesc')}>
           <div className="flex items-center gap-2">
             <NumberInput value={port} onChange={(v) => updateGateway({ port: v })} min={1} max={65535} className="w-20" />
             <button
@@ -332,34 +333,34 @@ function ConnectionSection() {
               )}
             >
               {probeState === 'testing' ? (
-                <><Loader2 size={12} className="animate-spin" /> 检测中</>
+                <><Loader2 size={12} className="animate-spin" /> {t('settings.connection.gateway.probing')}</>
               ) : probeState === 'ok' ? (
-                <><Check size={12} /> 已连接</>
+                <><Check size={12} /> {t('settings.connection.gateway.connected')}</>
               ) : probeState === 'fail' ? (
-                <><X size={12} /> {probeError || '失败'}</>
+                <><X size={12} /> {probeError || t('settings.connection.gateway.failed')}</>
               ) : (
-                <><Radio size={12} /> 检测</>
+                <><Radio size={12} /> {t('settings.connection.gateway.probe')}</>
               )}
             </button>
           </div>
         </SettingRow>
-        <SettingRow label="自动重连" description="连接断开后自动尝试重新连接">
+        <SettingRow label={t('settings.connection.gateway.autoReconnect')} description={t('settings.connection.gateway.autoReconnectDesc')}>
           <Toggle checked={autoReconnect} onChange={setAutoReconnect} />
         </SettingRow>
-        <SettingRow label="重连间隔" description="每次重连尝试之间的等待时间">
-          <NumberInput value={reconnectInterval} onChange={setReconnectInterval} suffix="秒" min={1} max={60} disabled={!autoReconnect} />
+        <SettingRow label={t('settings.connection.gateway.reconnectInterval')} description={t('settings.connection.gateway.reconnectIntervalDesc')}>
+          <NumberInput value={reconnectInterval} onChange={setReconnectInterval} suffix={t('settings.connection.seconds')} min={1} max={60} disabled={!autoReconnect} />
         </SettingRow>
-        <SettingRow label="连接超时" description="建立连接的最大等待时间">
-          <NumberInput value={connTimeout} onChange={setConnTimeout} suffix="秒" min={3} max={60} />
+        <SettingRow label={t('settings.connection.gateway.timeout')} description={t('settings.connection.gateway.timeoutDesc')}>
+          <NumberInput value={connTimeout} onChange={setConnTimeout} suffix={t('settings.connection.seconds')} min={3} max={60} />
         </SettingRow>
       </GroupCard>
 
-      <GroupCard title="心跳">
-        <SettingRow label="心跳检测" description="定期发送 ping 保持连接活跃">
+      <GroupCard title={t('settings.connection.heartbeat.title')}>
+        <SettingRow label={t('settings.connection.heartbeat.enabled')} description={t('settings.connection.heartbeat.enabledDesc')}>
           <Toggle checked={hbEnabled} onChange={(v) => updateGateway({ heartbeat: { ...gw.heartbeat, enabled: v } })} />
         </SettingRow>
-        <SettingRow label="心跳间隔" description="发送心跳包的时间间隔">
-          <NumberInput value={hbInterval} onChange={(v) => updateGateway({ heartbeat: { ...gw.heartbeat, intervalS: v } })} suffix="秒" min={10} max={7200} disabled={!hbEnabled} />
+        <SettingRow label={t('settings.connection.heartbeat.interval')} description={t('settings.connection.heartbeat.intervalDesc')}>
+          <NumberInput value={hbInterval} onChange={(v) => updateGateway({ heartbeat: { ...gw.heartbeat, intervalS: v } })} suffix={t('settings.connection.seconds')} min={10} max={7200} disabled={!hbEnabled} />
         </SettingRow>
       </GroupCard>
     </div>
@@ -369,6 +370,7 @@ function ConnectionSection() {
 // ─── Auth Section ───────────────────────────────────────────────────────────
 
 function AuthSection() {
+  const { t } = useTranslation()
   type AuthMode = 'none' | 'token' | 'password' | 'trusted-proxy'
   const { config, loading, updateConfig } = useAppConfig()
   const auth = (config?.auth || {}) as { mode?: AuthMode; token?: string; password?: string }
@@ -402,20 +404,20 @@ function AuthSection() {
 
   return (
     <div>
-      <SectionHeader icon={Shield} title="认证设置" subtitle="本地配置，无需 API 支持" />
-      <GroupCard title="认证模式">
-        <SettingRow label="认证方式" description="选择连接 Gateway 时使用的认证协议">
+      <SectionHeader icon={Shield} title={t('settings.auth.title')} subtitle={t('settings.auth.subtitle')} />
+      <GroupCard title={t('settings.auth.mode.title')}>
+        <SettingRow label={t('settings.auth.mode.label')} description={t('settings.auth.mode.desc')}>
           <Segment options={authModeOptions} value={mode} onChange={(v) => updateAuth({ mode: v as AuthMode })} />
         </SettingRow>
 
         {mode === 'token' && (
-          <SettingRow label="Token" description="连接时使用的访问令牌">
+          <SettingRow label={t('settings.auth.token.label')} description={t('settings.auth.token.desc')}>
             <div className="flex items-center gap-1.5">
               <input
                 type={showSecret ? 'text' : 'password'}
                 value={token}
                 onChange={(e) => updateAuth({ token: e.target.value })}
-                placeholder="输入 Token"
+                placeholder={t('settings.auth.token.placeholder')}
                 className="w-48 h-7 px-2.5 text-sm bg-background border border-border rounded-md outline-none focus:ring-1 focus:ring-ring transition-shadow text-foreground placeholder:text-muted-foreground"
               />
               <button onClick={() => setShowSecret(!showSecret)} className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors">
@@ -426,13 +428,13 @@ function AuthSection() {
         )}
 
         {mode === 'password' && (
-          <SettingRow label="密码" description="连接时使用的认证密码">
+          <SettingRow label={t('settings.auth.password.label')} description={t('settings.auth.password.desc')}>
             <div className="flex items-center gap-1.5">
               <input
                 type={showSecret ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => updateAuth({ password: e.target.value })}
-                placeholder="输入密码"
+                placeholder={t('settings.auth.password.placeholder')}
                 className="w-48 h-7 px-2.5 text-sm bg-background border border-border rounded-md outline-none focus:ring-1 focus:ring-ring transition-shadow text-foreground placeholder:text-muted-foreground"
               />
               <button onClick={() => setShowSecret(!showSecret)} className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors">
@@ -444,13 +446,13 @@ function AuthSection() {
 
         {mode === 'none' && (
           <div className="py-3 text-xs text-muted-foreground">
-            无需认证，直接连接 Gateway。仅适用于本地开发环境。
+            {t('settings.auth.mode.noneDesc')}
           </div>
         )}
 
         {mode === 'trusted-proxy' && (
           <div className="py-3 text-xs text-muted-foreground">
-            通过受信任代理转发认证信息，由代理层负责鉴权。
+            {t('settings.auth.mode.proxyDesc')}
           </div>
         )}
       </GroupCard>
@@ -462,10 +464,10 @@ function AuthSection() {
           className="flex-1 flex items-center justify-center gap-2 h-8 rounded-lg bg-foreground text-background text-sm font-medium hover:bg-foreground/90 transition-colors disabled:opacity-60"
         >
           {testState === 'testing' && <Loader2 size={14} className="animate-spin" />}
-          {testState === 'testing' ? '连接中...' : '测试连接'}
+          {testState === 'testing' ? t('settings.auth.testing') : t('settings.auth.test')}
         </button>
-        {testState === 'ok' && <span className="flex items-center gap-1.5 text-sm text-green-600 font-medium"><Check size={14} /> 连接成功</span>}
-        {testState === 'fail' && <span className="flex items-center gap-1.5 text-sm text-red-500 font-medium"><X size={14} /> 连接失败</span>}
+        {testState === 'ok' && <span className="flex items-center gap-1.5 text-sm text-green-600 font-medium"><Check size={14} /> {t('settings.auth.success')}</span>}
+        {testState === 'fail' && <span className="flex items-center gap-1.5 text-sm text-red-500 font-medium"><X size={14} /> {t('settings.auth.failed')}</span>}
       </div>
     </div>
   )
@@ -497,10 +499,10 @@ interface ProviderEndpointRef {
   providerDisabled?: boolean
 }
 
-const PROTOCOL_GROUPS: { type: ProviderType; label: string }[] = [
-  { type: 'anthropic', label: 'Anthropic 协议' },
-  { type: 'openai', label: 'OpenAI 协议' },
-  { type: 'gemini', label: 'Gemini 协议' },
+const PROTOCOL_GROUPS = (t: any): { type: ProviderType; label: string }[] => [
+  { type: 'anthropic', label: t('models.protocols.anthropic') },
+  { type: 'openai', label: t('models.protocols.openai') },
+  { type: 'gemini', label: t('models.protocols.gemini') },
 ]
 
 // Engine 2026-05-14+: routing is `agent.primary` (single endpoint) +
@@ -519,14 +521,15 @@ function ProviderStrategyRow({
   blinkPrimarySignal,
 }: {
   // Settings-page navigation callback. Wired up by the parent so the
-  // "跳转设置" affordance can switch to the 模型配置 section without
+  // "跳转设置" affordance can switch to the models section without
   // ProviderStrategyRow needing to know about react-router.
   onNavigateToModels?: () => void
   // Monotonically-increasing counter. Each increment briefly flashes
   // the 主 Provider dropdown to draw the user's eye when they jump in
-  // from the 模型配置 page's "去配置 Agent LLM 节点" affordance.
+  // from the models page's "去配置 Agent LLM 节点" affordance.
   blinkPrimarySignal?: number
 }) {
+  const { t } = useTranslation()
   const [blinkingPrimary, setBlinkingPrimary] = useState(false)
   useEffect(() => {
     if (blinkPrimarySignal === undefined || blinkPrimarySignal === 0) return
@@ -562,8 +565,8 @@ function ProviderStrategyRow({
       // older than the rewrite or the path is genuinely wrong.
       setUnavailable(
         pRes.status === 404
-          ? '管理 API 未找到（请确认引擎版本 ≥ 2026-05-14）'
-          : pRes.message || pRes.error || '加载失败',
+          ? t('chat.status.apiNotFound')
+          : pRes.message || pRes.error || t('chat.status.loadFailed'),
       )
       setLoading(false)
       return
@@ -662,16 +665,16 @@ function ProviderStrategyRow({
   // is implied by the endpoint name in practice).
   const primaryOptions = useMemo<{ label: string; value: string }[]>(() => {
     const opts: { label: string; value: string }[] = []
-    if (!primary) opts.push({ label: '请选择...', value: '' })
+    if (!primary) opts.push({ label: t('models.select'), value: '' })
     for (const e of allEndpoints) {
       if (e.providerDisabled && e.ref !== primary) continue
       opts.push({ label: e.ref, value: e.ref })
     }
     if (primary && !allEndpoints.some((e) => e.ref === primary)) {
-      opts.push({ label: `${primary} (未识别)`, value: primary })
+      opts.push({ label: t('models.unrecognized', { name: primary }), value: primary })
     }
     return opts
-  }, [allEndpoints, primary])
+  }, [allEndpoints, primary, t])
 
   // persistChain takes the full flat chain; the main-process adapter
   // splits it back into `{primary, fallback_chain}` for PATCH /agent.
@@ -775,15 +778,15 @@ function ProviderStrategyRow({
   }
 
   const stateBadge = (s?: string): { cls: string; label: string } => {
-    if (s === 'healthy') return { cls: 'bg-emerald-500', label: '正常' }
-    if (s === 'tripped') return { cls: 'bg-rose-500', label: '熔断' }
-    if (s === 'ready_to_probe') return { cls: 'bg-amber-500', label: '试探' }
-    return { cls: 'bg-muted-foreground/40', label: '未知' }
+    if (s === 'healthy') return { cls: 'bg-emerald-500', label: t('models.status.healthy') }
+    if (s === 'tripped') return { cls: 'bg-rose-500', label: t('models.status.tripped') }
+    if (s === 'ready_to_probe') return { cls: 'bg-amber-500', label: t('models.status.ready_to_probe') }
+    return { cls: 'bg-muted-foreground/40', label: t('models.status.unknown') }
   }
 
   return (
     <>
-      <SettingRow label="主 Provider">
+      <SettingRow label={t('settings.models.primaryProvider')}>
         <div className="flex items-center gap-2">
           {/*
             Quick-jump to the 模型配置 settings section. Sits to the
@@ -796,8 +799,8 @@ function ProviderStrategyRow({
             <button
               type="button"
               onClick={onNavigateToModels}
-              title="跳转设置"
-              aria-label="跳转设置"
+              title={t('settings.models.jumpToSettings')}
+              aria-label={t('settings.models.jumpToSettings')}
               className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-card text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             >
               <ExternalLink size={13} />
@@ -813,8 +816,8 @@ function ProviderStrategyRow({
       </SettingRow>
 
       <SettingRow
-        label="Provider 负载兜底"
-        description="当主模型不可用时按 fallback_chain 顺序降级"
+        label={t('settings.models.fallbackEnabled')}
+        description={t('settings.models.fallbackEnabledDesc')}
       >
         <Toggle
           checked={fallbackEnabled}
@@ -841,17 +844,17 @@ function ProviderStrategyRow({
                   )}
                 >
                   <Plus size={12} />
-                  添加节点
+                  {t('agents.fallback.addNode')}
                 </button>
 
                 {addOpen && (
                   <div className="absolute right-0 top-full z-30 mt-1 max-h-[60vh] w-72 overflow-y-auto rounded-lg border border-border bg-card p-2 shadow-lg">
-                    {PROTOCOL_GROUPS.every((g) => (addableByType.get(g.type)?.length ?? 0) === 0) ? (
+                    {PROTOCOL_GROUPS(t).every((g) => (addableByType.get(g.type)?.length ?? 0) === 0) ? (
                       <div className="px-2 py-3 text-center text-xs text-muted-foreground">
-                        没有可添加的节点
+                        {t('agents.fallback.noNodes')}
                       </div>
                     ) : (
-                      PROTOCOL_GROUPS.map((group) => {
+                      PROTOCOL_GROUPS(t).map((group) => {
                         const items = addableByType.get(group.type) ?? []
                         if (items.length === 0) return null
                         return (
@@ -891,13 +894,13 @@ function ProviderStrategyRow({
             <div className="px-2 py-2" onDragLeave={handleListDragLeave}>
               {loading ? (
                 <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
-                  <Loader2 size={14} className="animate-spin" /> 加载中
+                  <Loader2 size={14} className="animate-spin" /> {t('common.loading')}
                 </div>
               ) : unavailable ? (
                 <div className="px-2 py-4 text-xs text-muted-foreground">{unavailable}</div>
               ) : fallback.length === 0 ? (
                 <div className="px-2 py-4 text-xs text-muted-foreground">
-                  暂无兜底节点。点击右上角「添加节点」开始配置。
+                  {t('agents.fallback.empty')}
                 </div>
               ) : (
                 // Drag list renders fallback only — primary is shown
@@ -974,8 +977,8 @@ function ProviderStrategyRow({
                             'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground',
                             busy && 'cursor-not-allowed opacity-30',
                           )}
-                          aria-label="移除节点"
-                          title="移除"
+                          aria-label={t('agents.fallback.removeNode')}
+                          title={t('agents.fallback.remove')}
                         >
                           <X size={12} />
                         </button>
@@ -1013,43 +1016,43 @@ type TemperaturePreset = {
   recommended?: boolean
 }
 
-const TEMPERATURE_PRESETS: TemperaturePreset[] = [
+const TEMPERATURE_PRESETS = (t: any): TemperaturePreset[] => [
   {
     key: 'precise',
-    name: '精准',
-    fullName: '精准模式',
+    name: t('agents.stylePrecise'),
+    fullName: t('agents.stylePreciseFull'),
     icon: Target,
     defaultValue: 0.12,
-    description: '回答稳定、可重复，几乎每次都会给出相同的结果。',
-    scenarios: ['代码生成', '数据提取', '文本分类', '事实问答', '翻译'],
+    description: t('agents.stylePreciseDesc'),
+    scenarios: [t('chat.tools.Write'), t('projects.title'), t('chat.file.artifacts'), t('chat.ask.title'), t('sidebar.settings')],
   },
   {
     key: 'balanced',
-    name: '平衡',
-    fullName: '平衡模式',
+    name: t('agents.styleBalanced'),
+    fullName: t('agents.styleBalancedFull'),
     icon: Scale,
     defaultValue: 0.35,
     recommended: true,
-    description: '准确为主，表达自然，适合日常使用。',
-    scenarios: ['日常对话', '邮件草稿', '文档总结', '客服回复', '概念解释', '学习辅导'],
+    description: t('agents.styleBalancedDesc'),
+    scenarios: [t('chat.newChat'), t('sidebar.chat'), t('sessions.title'), t('chat.status.organizingAnswer'), t('xlab.title')],
   },
   {
     key: 'flexible',
-    name: '灵活',
-    fullName: '灵活模式',
+    name: t('agents.styleFlexible'),
+    fullName: t('agents.styleFlexibleFull'),
     icon: Lightbulb,
     defaultValue: 0.62,
-    description: '思路开阔，愿意提供多种角度的回答。',
-    scenarios: ['头脑风暴', '营销文案', '产品命名', '方案建议', '内容润色', '改写优化'],
+    description: t('agents.styleFlexibleDesc'),
+    scenarios: [t('home.inputPlaceholder'), t('team.title'), t('skills.title'), t('search.placeholder')],
   },
   {
     key: 'creative',
-    name: '创意',
-    fullName: '创意模式',
+    name: t('agents.styleCreative'),
+    fullName: t('agents.styleCreativeFull'),
     icon: Sparkles,
     defaultValue: 0.85,
-    description: '大胆发散，每次都有新惊喜。',
-    scenarios: ['故事创作', '诗歌写作', '广告标语', '角色对话', '艺术构思', '命名脑洞'],
+    description: t('agents.styleCreativeDesc'),
+    scenarios: [t('chat.greetings.night.title'), t('chat.greetings.morning.title'), t('chat.greetings.afternoon.title'), t('chat.greetings.evening.title')],
   },
 ]
 
@@ -1057,11 +1060,11 @@ const TEMPERATURE_PRESETS: TemperaturePreset[] = [
 // half-open on the low side so 0.25 → balanced, 0.5 → flexible,
 // 0.75 → creative; the slider's 0.05 step never lands on a boundary
 // exactly anyway.
-function presetForTemperature(value: number): TemperaturePreset {
-  if (value < 0.25) return TEMPERATURE_PRESETS[0]
-  if (value < 0.5) return TEMPERATURE_PRESETS[1]
-  if (value < 0.75) return TEMPERATURE_PRESETS[2]
-  return TEMPERATURE_PRESETS[3]
+function presetForTemperature(value: number, presets: TemperaturePreset[]): TemperaturePreset {
+  if (value < 0.25) return presets[0]
+  if (value < 0.5) return presets[1]
+  if (value < 0.75) return presets[2]
+  return presets[3]
 }
 
 // Full-width temperature control. Replaces the plain Temperature
@@ -1079,7 +1082,9 @@ function TemperaturePresets({
   value: number
   onChange: (v: number) => void
 }) {
-  const active = useMemo(() => presetForTemperature(value), [value])
+  const { t } = useTranslation()
+  const presets = useMemo(() => TEMPERATURE_PRESETS(t), [t])
+  const active = useMemo(() => presetForTemperature(value, presets), [value, presets])
   const ActiveIcon = active.icon
 
   // The preset card is meant to be a transient explanation: appears
@@ -1116,7 +1121,7 @@ function TemperaturePresets({
   return (
     <div className="py-4 border-b border-border last:border-0">
       <div className="flex items-center justify-between mb-2">
-        <p className="text-sm font-medium text-foreground">回答风格</p>
+        <p className="text-sm font-medium text-foreground">{t('agents.style')}</p>
         <span className="text-xs font-mono text-muted-foreground transition-opacity duration-500">
           {active.name} · {value.toFixed(2)}
         </span>
@@ -1135,10 +1140,10 @@ function TemperaturePresets({
       <div className="flex items-center justify-between mt-2 mb-3">
         <div className="flex items-center gap-1 text-xs text-muted-foreground">
           <Target size={12} />
-          <span>更精准</span>
+          <span>{t('agents.morePrecise')}</span>
         </div>
         <div className="flex items-center gap-1 text-xs text-muted-foreground">
-          <span>更有创意</span>
+          <span>{t('agents.moreCreative')}</span>
           <Sparkles size={12} />
         </div>
       </div>
@@ -1180,7 +1185,7 @@ function TemperaturePresets({
               </h4>
               {active.recommended && (
                 <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-foreground text-card font-medium">
-                  推荐
+                  {t('agents.recommended')}
                 </span>
               )}
             </div>
@@ -1190,7 +1195,7 @@ function TemperaturePresets({
             >
               {active.description}
             </p>
-            <div className="text-[10px] text-muted-foreground mb-1.5">适合这些场景:</div>
+            <div className="text-[10px] text-muted-foreground mb-1.5">{t('agents.suitableScenarios')}</div>
             <div className="flex flex-wrap gap-1.5">
               {active.scenarios.map((s) => (
                 <span
@@ -1206,7 +1211,7 @@ function TemperaturePresets({
       </div>
 
       <div className="grid grid-cols-4 gap-2">
-        {TEMPERATURE_PRESETS.map((p) => {
+        {presets.map((p) => {
           const isActive = p.key === active.key
           return (
             <button
@@ -1240,6 +1245,7 @@ function TemperaturePresets({
 //  3) temperature here is canonical [0, 1] (engine rescales per
 //     provider type), unlike the old [0, 2] yaml-stored value.
 function AgentTuningGroup() {
+  const { t } = useTranslation()
   const [loading, setLoading] = useState(true)
   const [unavailable, setUnavailable] = useState<string | null>(null)
   const [maxTokens, setMaxTokens] = useState<number>(0)
@@ -1264,8 +1270,8 @@ function AgentTuningGroup() {
     if (!res.ok) {
       setUnavailable(
         res.status === 404
-          ? '管理 API 未找到（请确认引擎版本 ≥ 2026-05-14）'
-          : res.message || res.error || '加载失败',
+          ? t('models.apiNotFound')
+          : res.message || res.error || t('common.loadFailed'),
       )
       setLoading(false)
       return
@@ -1319,9 +1325,9 @@ function AgentTuningGroup() {
 
   if (loading) {
     return (
-      <GroupCard title="Agent 调用参数">
+      <GroupCard title={t('agents.params')}>
         <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
-          <Loader2 size={14} className="animate-spin" /> 加载中
+          <Loader2 size={14} className="animate-spin" /> {t('common.loading')}
         </div>
       </GroupCard>
     )
@@ -1329,17 +1335,17 @@ function AgentTuningGroup() {
 
   if (unavailable) {
     return (
-      <GroupCard title="Agent 调用参数">
+      <GroupCard title={t('agents.params')}>
         <div className="py-4 text-xs text-muted-foreground">{unavailable}</div>
       </GroupCard>
     )
   }
 
   return (
-    <GroupCard title="Agent 调用参数">
+    <GroupCard title={t('agents.params')}>
       <SettingRow
         label="Max Tokens"
-        description="单次回复的最大 Token 数（0 = 使用 endpoint 默认）"
+        description={t('agents.maxTokens')}
       >
         <div className="flex items-center gap-2">
           {busy && <Loader2 size={12} className="animate-spin text-muted-foreground" />}
@@ -1357,7 +1363,7 @@ function AgentTuningGroup() {
       </SettingRow>
       <SettingRow
         label="Context Window"
-        description="上下文窗口预算 (Tokens, 0 = 不限制)"
+        description={t('agents.contextBudget')}
       >
         <NumberInput
           value={contextWindow}
@@ -1392,6 +1398,7 @@ function AgentSection({
   // when this counter increments.
   blinkPrimarySignal?: number
 }) {
+  const { t } = useTranslation()
   const { config, loading, updateConfig } = useEngineConfig()
 
   const agents = (config?.agents || {}) as { defaults?: Record<string, unknown> }
@@ -1414,9 +1421,9 @@ function AgentSection({
 
   return (
     <div>
-      <SectionHeader icon={Bot} title="Agent 默认设置" subtitle="新建 Agent 的默认参数" />
+      <SectionHeader icon={Bot} title={t('agents.title')} subtitle={t('agents.subtitle')} />
 
-      <GroupCard title="模型">
+      <GroupCard title={t('agents.model')}>
         <ProviderStrategyRow onNavigateToModels={onNavigateToModels} blinkPrimarySignal={blinkPrimarySignal} />
       </GroupCard>
 
@@ -1427,13 +1434,13 @@ function AgentSection({
           (see providers-management-api.md "调用参数生效规则"). */}
       <AgentTuningGroup />
 
-      <GroupCard title="生成参数">
-        <SettingRow label="Reasoning Effort" description="推理强度 (留空使用模型默认)">
+      <GroupCard title={t('agents.generation')}>
+        <SettingRow label="Reasoning Effort" description={t('agents.reasoningEffort')}>
           <SelectInput
             value={reasoningEffort || ''}
             onChange={(v) => updateDefaults({ reasoningEffort: v || null })}
             options={[
-              { label: '默认', value: '' },
+              { label: t('agents.reasoningDefault'), value: '' },
               { label: 'low', value: 'low' },
               { label: 'medium', value: 'medium' },
               { label: 'high', value: 'high' },
@@ -1442,11 +1449,11 @@ function AgentSection({
         </SettingRow>
       </GroupCard>
 
-      <GroupCard title="工具与工作区">
-        <SettingRow label="Max Tool Iterations" description="Agent 单轮最大工具调用次数">
+      <GroupCard title={t('agents.toolsAndWorkspace')}>
+        <SettingRow label="Max Tool Iterations" description={t('agents.maxToolIterations')}>
           <NumberInput value={maxToolIterations} onChange={(v) => updateDefaults({ maxToolIterations: v })} min={1} max={200} className="w-20" />
         </SettingRow>
-        <SettingRow label="工作目录" description="Agent 的默认文件工作区路径">
+        <SettingRow label={t('agents.workspace')} description={t('agents.workspaceDesc')}>
           <TextInput value={workspace} onChange={(v) => updateDefaults({ workspace: v })} className="w-52" mono />
         </SettingRow>
       </GroupCard>
@@ -2000,20 +2007,22 @@ interface ModelTagDef {
   border: string
 }
 
-const MODEL_TAGS: ModelTagDef[] = [
-  { key: 'vision',    label: '视觉', icon: Eye,    fg: '#16A34A', bg: '#DCFCE7', border: '#BBF7D0' },
-  { key: 'web',       label: '联网', icon: Globe,  fg: '#2563EB', bg: '#DBEAFE', border: '#BFDBFE' },
-  { key: 'reasoning', label: '推理', icon: Sun,    fg: '#7C3AED', bg: '#EDE9FE', border: '#DDD6FE' },
-  { key: 'tools',     label: '工具', icon: Wrench, fg: '#EA580C', bg: '#FFEDD5', border: '#FED7AA' },
+const MODEL_TAGS = (t: any): ModelTagDef[] => [
+  { key: 'vision',    label: t('models.capabilities.vision'), icon: Eye,    fg: '#16A34A', bg: '#DCFCE7', border: '#BBF7D0' },
+  { key: 'web',       label: t('models.capabilities.web'), icon: Globe,  fg: '#2563EB', bg: '#DBEAFE', border: '#BFDBFE' },
+  { key: 'reasoning', label: t('models.capabilities.reasoning'), icon: Sun,    fg: '#7C3AED', bg: '#EDE9FE', border: '#DDD6FE' },
+  { key: 'tools',     label: t('models.capabilities.tools'), icon: Wrench, fg: '#EA580C', bg: '#FFEDD5', border: '#FED7AA' },
 ]
 
-const MODEL_TAG_MAP: Record<string, ModelTagDef> =
-  Object.fromEntries(MODEL_TAGS.map((t) => [t.key, t]))
-
-function ModelTagBadge({ tag }: { tag: ModelTagDef }) {
+function ModelTagBadge({ tagKey, t }: { tagKey: string; t: any }) {
   const [tooltipPos, setTooltipPos] = useState<{ left: number; top: number } | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const badgeRef = useRef<HTMLSpanElement | null>(null)
+
+  const tags = useMemo(() => MODEL_TAGS(t), [t])
+  const tag = useMemo(() => tags.find((t) => t.key === tagKey), [tags, tagKey])
+  if (!tag) return null
+
   const Icon = tag.icon
 
   // Tooltip is rendered via a portal with `position: fixed`, so it escapes
@@ -2422,6 +2431,7 @@ function ModelSection({
   // the next decision: which enabled provider drives the agent.
   onNavigateToAgents?: () => void
 }) {
+  const { t } = useTranslation()
   const [appConfig, setAppConfig] = useState<Record<string, unknown> | null>(null)
   const [providers, setProviders] = useState<Record<ManagedProviderKey, ProviderConfig>>(() =>
     MANAGED_PROVIDER_KEYS.reduce((acc, key) => {
@@ -2531,7 +2541,7 @@ function ModelSection({
         setSelectedProvider(nextDefaultProvider === 'custom' ? 'xunfei' : nextDefaultProvider)
       } catch {
         setPersistState('error')
-        setPersistMessage('模型配置读取失败')
+        setPersistMessage(t('models.persist.readFailed'))
       } finally {
         setLoading(false)
       }
@@ -2550,7 +2560,7 @@ function ModelSection({
     ) => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
       setPersistState('saving')
-      setPersistMessage('正在保存 UI 偏好...')
+      setPersistMessage(t('models.persist.saving'))
       saveTimerRef.current = setTimeout(async () => {
         if (!appConfig) return
 
@@ -2559,7 +2569,7 @@ function ModelSection({
 
         if (!appResult.ok) {
           setPersistState('error')
-          setPersistMessage(appResult.error || '模型配置保存失败')
+          setPersistMessage(appResult.error || t('models.persist.saveFailed'))
           return
         }
 
@@ -2589,10 +2599,10 @@ function ModelSection({
       const detail = message ? `${error}: ${message}` : error
       setToastNotice({
         tone: 'error',
-        message: `${label}失败 (${detail})`,
+        message: t('models.hotReloadError', { label, detail }),
       })
     },
-    [],
+    [t],
   )
 
   // PATCH /api/v1/providers/{p} — debounced 500ms so typing in the api_key
@@ -2642,13 +2652,13 @@ function ModelSection({
             base_url: baseUrl,
           })
           if (retry.ok) return
-          reportHotReloadError('凭证更新', retry.error || `http_${retry.status}`, retry.message)
+          reportHotReloadError(t('models.hotReloadLabels.apiKey'), retry.error || `http_${retry.status}`, retry.message)
           return
         }
-        reportHotReloadError('厂商创建', createRes.error || `http_${createRes.status}`, createRes.message)
+        reportHotReloadError(t('models.hotReloadLabels.create'), createRes.error || `http_${createRes.status}`, createRes.message)
       }, 500)
     },
-    [providers, reportHotReloadError],
+    [providers, reportHotReloadError, t],
   )
 
   useEffect(() => {
@@ -2676,7 +2686,7 @@ function ModelSection({
         // Chain<2 → API not mounted. Let the caller proceed and silent-
         // skip its own 404. Network/timeout: same treatment.
         if (list.status === 404 || list.status === 0) return true
-        reportHotReloadError('厂商查询', list.error || `http_${list.status}`, list.message)
+        reportHotReloadError(t('models.hotReloadLabels.list'), list.error || `http_${list.status}`, list.message)
         return false
       }
       if (list.data.providers.some((p) => p.name === key)) return true
@@ -2698,10 +2708,10 @@ function ModelSection({
       if (res.status === 404 || res.status === 0) return true
       // 400 update_failed with "already exists" is racy-safe — treat as ok.
       if (res.status === 400 && /exist/i.test(res.message || '')) return true
-      reportHotReloadError('厂商创建', res.error || `http_${res.status}`, res.message)
+      reportHotReloadError(t('models.hotReloadLabels.create'), res.error || `http_${res.status}`, res.message)
       return false
     },
-    [providers, reportHotReloadError],
+    [providers, reportHotReloadError, t],
   )
 
   // POST /api/v1/providers/{p}/endpoints + append to fallback-chain.
@@ -2756,13 +2766,13 @@ function ModelSection({
           })
           if (!patchRes.ok && patchRes.status !== 404 && patchRes.status !== 0) {
             reportHotReloadError(
-              '模型启用',
+              t('models.hotReloadLabels.enable'),
               patchRes.error || `http_${patchRes.status}`,
               patchRes.message,
             )
           }
         } else {
-          reportHotReloadError('模型创建', res.error || `http_${res.status}`, res.message)
+          reportHotReloadError(t('models.hotReloadLabels.modelCreate'), res.error || `http_${res.status}`, res.message)
           return
         }
       }
@@ -2782,7 +2792,7 @@ function ModelSection({
       const putRes = await window.agentApi.updateFallbackChain(nextChain)
       if (!putRes.ok && putRes.status !== 404 && putRes.status !== 0) {
         reportHotReloadError(
-          '链路更新',
+          t('models.hotReloadLabels.update'),
           putRes.error || `http_${putRes.status}`,
           putRes.message,
         )
@@ -2808,7 +2818,7 @@ function ModelSection({
       // safe to ignore here. Surface other errors.
       if (res.error === 'update_failed') return
       reportHotReloadError(
-        disabled ? '模型停用' : '模型启用',
+        disabled ? t('models.hotReloadLabels.disable') : t('models.hotReloadLabels.enable'),
         res.error || `http_${res.status}`,
         res.message,
       )
@@ -2824,10 +2834,10 @@ function ModelSection({
     async (key: ManagedProviderKey, modelId: string): Promise<void> => {
       const res = await window.agentApi.deleteEndpoint(key, modelId)
       if (!res.ok && res.status !== 404 && res.status !== 0 && res.error !== 'update_failed') {
-        reportHotReloadError('模型删除', res.error || `http_${res.status}`, res.message)
+        reportHotReloadError(t('models.hotReloadLabels.delete'), res.error || `http_${res.status}`, res.message)
       }
     },
-    [reportHotReloadError],
+    [reportHotReloadError, t],
   )
 
   // PATCH /api/v1/providers/{p}/endpoints/{e}. Renames are not
@@ -2849,10 +2859,10 @@ function ModelSection({
       }
       const res = await window.agentApi.patchEndpoint(key, previousId, patch)
       if (!res.ok && res.status !== 404 && res.status !== 0 && res.error !== 'update_failed') {
-        reportHotReloadError('模型更新', res.error || `http_${res.status}`, res.message)
+        reportHotReloadError(t('models.hotReloadLabels.modelUpdate'), res.error || `http_${res.status}`, res.message)
       }
     },
-    [reportHotReloadError],
+    [reportHotReloadError, t],
   )
 
   useEffect(() => {
@@ -2934,16 +2944,16 @@ function ModelSection({
     const provider = providers[key]
     const display = getDisplayName(key)
     if (!provider.apiKey.trim()) {
-      return { message: `${display} 缺少 API 密钥`, field: 'apiKey' }
+      return { message: t('models.validation.missingKey', { name: display }), field: 'apiKey' }
     }
     if (!(provider.apiBase?.trim() || PROVIDER_DEFAULT_BASES[key])) {
-      return { message: `${display} 缺少 API 地址`, field: 'apiBase' }
+      return { message: t('models.validation.missingBase', { name: display }), field: 'apiBase' }
     }
     if (provider.models.length === 0) {
-      return { message: `${display} 至少需要添加一个模型`, field: 'models' }
+      return { message: t('models.validation.noModels', { name: display }), field: 'models' }
     }
     if (!provider.models.some((m) => m.enabled)) {
-      return { message: `${display} 至少需要勾选一个模型`, field: 'models' }
+      return { message: t('models.validation.noneSelected', { name: display }), field: 'models' }
     }
     return null
   }
@@ -3010,7 +3020,7 @@ function ModelSection({
         // inside every hotCreateEndpoint call.
         const list = await window.agentApi.listProviders()
         if (!list.ok && list.status !== 404 && list.status !== 0) {
-          reportHotReloadError('厂商查询', list.error || `http_${list.status}`, list.message)
+          reportHotReloadError(t('models.hotReloadLabels.list'), list.error || `http_${list.status}`, list.message)
           return
         }
         const apiUnavailable = !list.ok
@@ -3036,7 +3046,7 @@ function ModelSection({
             if (!createRes.ok && createRes.status !== 404 && createRes.status !== 0) {
               if (!(createRes.status === 400 && /exist/i.test(createRes.message || ''))) {
                 reportHotReloadError(
-                  '厂商创建',
+                  t('models.hotReloadLabels.create'),
                   createRes.error || `http_${createRes.status}`,
                   createRes.message,
                 )
@@ -3058,7 +3068,7 @@ function ModelSection({
               const patchRes = await window.agentApi.patchProvider(key, patchBody)
               if (!patchRes.ok && patchRes.status !== 404 && patchRes.status !== 0) {
                 reportHotReloadError(
-                  '厂商启用',
+                  t('models.hotReloadLabels.enable'),
                   patchRes.error || `http_${patchRes.status}`,
                   patchRes.message,
                 )
@@ -3091,7 +3101,7 @@ function ModelSection({
                 await window.agentApi.patchEndpoint(key, model.id, { disabled: false })
               } else {
                 reportHotReloadError(
-                  '模型创建',
+                  t('models.hotReloadLabels.modelCreate'),
                   postRes.error || `http_${postRes.status}`,
                   postRes.message,
                 )
@@ -3108,7 +3118,7 @@ function ModelSection({
             if (!patchRes.ok && patchRes.status !== 404 && patchRes.status !== 0
                 && patchRes.error !== 'update_failed') {
               reportHotReloadError(
-                '模型启用',
+                t('models.hotReloadLabels.enable'),
                 patchRes.error || `http_${patchRes.status}`,
                 patchRes.message,
               )
@@ -3137,7 +3147,7 @@ function ModelSection({
           const putRes = await window.agentApi.updateFallbackChain(nextChain)
           if (!putRes.ok && putRes.status !== 404 && putRes.status !== 0) {
             reportHotReloadError(
-              '链路更新',
+              t('models.hotReloadLabels.update'),
               putRes.error || `http_${putRes.status}`,
               putRes.message,
             )
@@ -3151,7 +3161,7 @@ function ModelSection({
         const res = await window.agentApi.patchProvider(key, { disabled: true })
         if (!res.ok && res.status !== 404 && res.status !== 0) {
           reportHotReloadError(
-            '厂商停用',
+            t('models.hotReloadLabels.disable'),
             res.error || `http_${res.status}`,
             res.message,
           )
@@ -3197,10 +3207,10 @@ function ModelSection({
     if (createRes.status === 400 && /exist/i.test(createRes.message || '')) {
       const retry = await window.agentApi.patchProvider(key, { type: next })
       if (retry.ok) return
-      reportHotReloadError('协议切换', retry.error || `http_${retry.status}`, retry.message)
+      reportHotReloadError(t('models.hotReloadLabels.protocol'), retry.error || `http_${retry.status}`, retry.message)
       return
     }
-    reportHotReloadError('协议切换', createRes.error || `http_${createRes.status}`, createRes.message)
+    reportHotReloadError(t('models.hotReloadLabels.protocol'), createRes.error || `http_${createRes.status}`, createRes.message)
   }
 
   const handleTest = async () => {
@@ -3233,10 +3243,10 @@ function ModelSection({
       const result = await window.agentApi.listRegistryModels()
       if (!result.ok) {
         const friendly = result.error === 'network_error'
-          ? '无法连接到引擎，请确认控制台端口已启动'
+          ? t('models.engineError')
           : result.error === 'timeout'
-            ? '请求超时'
-            : `请求失败：${result.error}${result.message ? ` (${result.message})` : ''}`
+            ? t('models.timeout')
+            : t('models.requestFailed', { error: `${result.error}${result.message ? ` (${result.message})` : ''}` })
         setToastNotice({ tone: 'error', message: friendly })
         return
       }
@@ -3253,8 +3263,8 @@ function ModelSection({
         setToastNotice({
           tone: 'error',
           message: targetProvider === 'custom'
-            ? '注册表未返回任何模型'
-            : `注册表中没有 ${getDisplayName(targetProvider)} 的模型`,
+            ? t('models.noModelsInRegistry')
+            : t('models.noModelsForProvider', { name: getDisplayName(targetProvider) }),
         })
         return
       }
@@ -3344,12 +3354,12 @@ function ModelSection({
       setToastNotice({
         tone: 'success',
         message: addedCount > 0
-          ? `已同步 ${finalLength} 个模型，新增 ${addedCount} 个`
-          : `已同步 ${finalLength} 个模型`,
+          ? t('models.syncOk', { total: finalLength, added: addedCount })
+          : t('models.syncOkNoAdded', { total: finalLength }),
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      setToastNotice({ tone: 'error', message: `获取模型列表失败：${message}` })
+      setToastNotice({ tone: 'error', message: t('models.syncFailed', { reason: message }) })
     } finally {
       setModelFetchState('idle')
     }
@@ -3358,7 +3368,7 @@ function ModelSection({
   const handleAddModel = () => {
     const id = addModelId.trim()
     if (!id) {
-      setToastNotice({ tone: 'error', message: '请输入模型 ID' })
+      setToastNotice({ tone: 'error', message: t('models.addModelId') })
       return
     }
     const current = providers[selectedProvider].models
@@ -3366,7 +3376,7 @@ function ModelSection({
     if (editingModelId) {
       // Edit existing entry
       if (id !== editingModelId && current.some((m) => m.id === id)) {
-        setToastNotice({ tone: 'error', message: '该模型 ID 已存在' })
+        setToastNotice({ tone: 'error', message: t('models.modelExists') })
         return
       }
       const previousEntry = current.find((m) => m.id === editingModelId)
@@ -3396,7 +3406,7 @@ function ModelSection({
     }
 
     if (current.some((m) => m.id === id)) {
-      setToastNotice({ tone: 'error', message: '该模型已存在' })
+      setToastNotice({ tone: 'error', message: t('models.modelAlreadyExists') })
       return
     }
     const entry: ProviderModelEntry = { id }
@@ -3533,7 +3543,7 @@ function ModelSection({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="搜索模型平台..."
+              placeholder={t('models.searchPlaceholder')}
               className="w-full h-8 pl-8 pr-3 text-sm bg-background border border-border rounded-lg outline-none focus:ring-1 focus:ring-ring transition-shadow text-foreground placeholder:text-muted-foreground"
             />
           </div>
@@ -3578,7 +3588,7 @@ function ModelSection({
           {providerKeys.length === 0 && (
             <div className="px-2 py-4">
               <div className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground">
-                没有匹配的模型平台
+                {t('models.noMatch')}
               </div>
             </div>
           )}
@@ -3609,7 +3619,7 @@ function ModelSection({
                     type="button"
                     onClick={() => window.appRuntime?.openExternal?.(PROVIDER_DOCS_PAGES[selectedProvider])}
                     className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
-                    title="访问官网"
+                    title={t('models.visitOfficialSite')}
                   >
                     <ExternalLink size={14} />
                   </button>
@@ -3625,15 +3635,15 @@ function ModelSection({
               {selectedProvider === 'custom' && (
                 <div className="flex items-center justify-between gap-4">
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-foreground">协议兼容</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">指定 Custom provider 写入 llm.providers 时使用的协议格式</p>
+                    <p className="text-sm font-medium text-foreground">{t('models.protocolLabel')}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{t('models.protocolDesc')}</p>
                   </div>
                   <Segment
                     value={selected.protocol}
                     onChange={(value) => updateProvider(selectedProvider, { protocol: value as ProviderConfig['protocol'] })}
                     options={[
-                      { label: 'OpenAI 协议', value: 'openai' },
-                      { label: 'Anthropic 协议', value: 'anthropic' },
+                      { label: t('models.protocols.openai'), value: 'openai' },
+                      { label: t('models.protocols.anthropic'), value: 'anthropic' },
                     ]}
                   />
                 </div>
@@ -3642,11 +3652,11 @@ function ModelSection({
               {/* API 密钥 */}
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <p className="text-sm font-semibold text-foreground">API 密钥</p>
+                  <p className="text-sm font-semibold text-foreground">{t('models.apiKeyLabel')}</p>
                   <button
                     type="button"
                     className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
-                    title="高级设置"
+                    title={t('common.advanced')}
                   >
                     <SlidersHorizontal size={14} />
                   </button>
@@ -3659,7 +3669,7 @@ function ModelSection({
                       updateProvider(selectedProvider, { apiKey: e.target.value })
                       schedulePatchProviderCredentials(selectedProvider)
                     }}
-                    placeholder="API 密钥"
+                    placeholder={t('models.apiKeyPlaceholder')}
                     className={cn(
                       'h-10 w-full rounded-md border border-border bg-background pl-3 pr-[5.5rem] text-sm text-foreground outline-none transition-shadow placeholder:text-muted-foreground focus:ring-1 focus:ring-ring',
                       flashApiKey && 'animate-pulse border-amber-400 ring-2 ring-amber-400 ring-offset-1'
@@ -3685,7 +3695,7 @@ function ModelSection({
                       {testState === 'testing' && <Loader2 size={12} className="animate-spin" />}
                       {testState === 'ok' && <Check size={12} />}
                       {testState === 'fail' && <X size={12} />}
-                      {testState === 'testing' ? '检测中' : testState === 'ok' ? '可用' : testState === 'fail' ? '失败' : '检测'}
+                      {testState === 'testing' ? t('models.test.testing') : testState === 'ok' ? t('models.test.ok') : testState === 'fail' ? t('models.test.fail') : t('models.test.normal')}
                     </button>
                   </div>
                 </div>
@@ -3696,10 +3706,10 @@ function ModelSection({
                       onClick={() => window.appRuntime?.openExternal?.(PROVIDER_APIKEY_PAGES[selectedProvider])}
                       className="text-sky-500 hover:text-sky-600 hover:underline"
                     >
-                      点击这里获取密钥
+                      {t('models.getApiKey')}
                     </button>
                   ) : <span />}
-                  <span className="text-muted-foreground">多个密钥使用逗号分隔</span>
+                  <span className="text-muted-foreground">{t('models.apiKeyHint')}</span>
                 </div>
               </div>
 
@@ -3707,7 +3717,7 @@ function ModelSection({
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-1.5">
-                    <p className="text-sm font-semibold text-foreground">API 地址</p>
+                    <p className="text-sm font-semibold text-foreground">{t('models.apiBaseLabel')}</p>
                     {/*
                       Engine `type` badge. Click opens a small popup with
                       the three protocol options (openai / anthropic /
@@ -3716,7 +3726,7 @@ function ModelSection({
                     <button
                       type="button"
                       onClick={() => setEngineTypePopupOpen((v) => !v)}
-                      title="点击选择协议类型"
+                      title={t('models.protocolType')}
                       className={cn(
                         'inline-flex h-5 items-center rounded-full border px-1.5 text-[10px] font-medium uppercase tracking-wide transition-colors',
                         getEffectiveEngineType(selectedProvider, selected) === 'openai'
@@ -3735,14 +3745,14 @@ function ModelSection({
                       type="button"
                       onClick={() => setEngineTypePopupOpen((v) => !v)}
                       className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
-                      title="选择协议类型"
+                      title={t('models.protocolType')}
                     >
                       <SlidersHorizontal size={14} />
                     </button>
                     {engineTypePopupOpen && (
                       <div className="absolute right-0 top-full z-30 mt-1 w-44 rounded-lg border border-border bg-card p-1 shadow-lg">
                         <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                          协议类型
+                          {t('models.protocolType')}
                         </div>
                         {ENGINE_TYPE_OPTIONS.map((t) => {
                           const active = getEffectiveEngineType(selectedProvider, selected) === t
@@ -3782,7 +3792,7 @@ function ModelSection({
                   )}
                 />
                 <p className="mt-2 text-xs text-muted-foreground">
-                  预览：
+                  {t('models.previewLabel')}
                   {(selected.apiBase?.trim() || PROVIDER_DEFAULT_BASES[selectedProvider] || '').replace(/\/+$/, '')}
                   {getApiPathSuffix(getEffectiveEngineType(selectedProvider, selected))}
                 </p>
@@ -3792,7 +3802,7 @@ function ModelSection({
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
-                    <p className="text-sm font-semibold text-foreground">模型</p>
+                    <p className="text-sm font-semibold text-foreground">{t('models.modelsLabel')}</p>
                     {selected.models.length > 0 && (
                       <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full">
                         {selected.models.length}
@@ -3802,7 +3812,7 @@ function ModelSection({
                       type="button"
                       onClick={() => setModelSearchVisible((v) => !v)}
                       className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
-                      title="搜索模型"
+                      title={t('models.searchModels')}
                     >
                       <Search size={14} />
                     </button>
@@ -3811,7 +3821,7 @@ function ModelSection({
                     type="button"
                     onClick={handleFetchModels}
                     disabled={modelFetchState === 'loading'}
-                    title="刷新模型列表"
+                    title={t('models.modelsLabel')}
                     className={cn(
                       'rounded p-1 text-muted-foreground transition-colors hover:text-foreground',
                       modelFetchState === 'loading' && 'opacity-60'
@@ -3829,7 +3839,7 @@ function ModelSection({
                     type="text"
                     value={modelSearchQuery}
                     onChange={(e) => setModelSearchQuery(e.target.value)}
-                    placeholder="搜索模型..."
+                    placeholder={t('models.searchModels')}
                     className="mb-2 h-9 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
                   />
                 )}
@@ -3837,7 +3847,7 @@ function ModelSection({
                 {/* Model groups */}
                 {selected.models.length === 0 ? (
                   <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-xs text-muted-foreground">
-                    暂无模型，点击右上角刷新或下方添加
+                    {t('models.noModels')}
                   </div>
                 ) : (
                   <div className="space-y-2">
@@ -3902,29 +3912,27 @@ function ModelSection({
                                       {entry.tags && entry.tags.length > 0 && (
                                         <div className="ml-2 flex items-center gap-1">
                                           {entry.tags
-                                            .map((k) => MODEL_TAG_MAP[k])
-                                            .filter(Boolean)
-                                            .map((tag) => (
-                                              <ModelTagBadge key={tag.key} tag={tag} />
+                                            .map((tagKey) => (
+                                              <ModelTagBadge key={tagKey} tagKey={tagKey} t={t} />
                                             ))}
                                         </div>
                                       )}
                                     </div>
-                                    <HoverHint label="配置">
+                                    <HoverHint label={t('common.edit')}>
                                       <button
                                         type="button"
                                         onClick={() => handleEditModel(entry)}
-                                        aria-label="配置"
+                                        aria-label={t('common.edit')}
                                         className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
                                       >
                                         <Settings2 size={14} />
                                       </button>
                                     </HoverHint>
-                                    <HoverHint label={isEnabled ? '关闭' : '启用'}>
+                                    <HoverHint label={isEnabled ? t('common.close') : t('skills.repo.enabled')}>
                                       <button
                                         type="button"
                                         onClick={() => handleToggleModelEnabled(entry.id)}
-                                        aria-label={isEnabled ? '关闭' : '启用'}
+                                        aria-label={isEnabled ? t('common.close') : t('skills.repo.enabled')}
                                         aria-pressed={isEnabled}
                                         className={cn(
                                           'flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border transition-all',
@@ -3937,11 +3945,11 @@ function ModelSection({
                                         <Check size={12} strokeWidth={3} />
                                       </button>
                                     </HoverHint>
-                                    <HoverHint label="删除">
+                                    <HoverHint label={t('common.delete')}>
                                       <button
                                         type="button"
                                         onClick={() => handleRemoveModel(entry.id)}
-                                        aria-label="删除"
+                                        aria-label={t('common.delete')}
                                         className="rounded p-1 text-muted-foreground transition-colors hover:text-red-500"
                                       >
                                         <X size={14} />
@@ -3960,23 +3968,23 @@ function ModelSection({
 
                 {PROVIDER_MODELS_PAGES[selectedProvider] && (
                   <p className="mt-3 text-xs text-muted-foreground">
-                    查看{' '}
+                    {t('common.view')}{' '}
                     <button
                       type="button"
                       onClick={() => window.appRuntime?.openExternal?.(PROVIDER_DOCS_PAGES[selectedProvider])}
                       className="text-sky-500 hover:underline"
                     >
-                      {getDisplayName(selectedProvider)} 文档
+                      {getDisplayName(selectedProvider)} {t('common.docs')}
                     </button>{' '}
-                    和{' '}
+                    {t('common.and')}{' '}
                     <button
                       type="button"
                       onClick={() => window.appRuntime?.openExternal?.(PROVIDER_MODELS_PAGES[selectedProvider])}
                       className="text-sky-500 hover:underline"
                     >
-                      模型
+                      {t('models.modelsLabel')}
                     </button>{' '}
-                    获取更多详情
+                    {t('common.forMoreDetails')}
                   </p>
                 )}
 
@@ -3989,7 +3997,7 @@ function ModelSection({
                     className="inline-flex h-9 items-center gap-1.5 rounded-md bg-violet-600 px-3 text-sm font-medium text-white transition-colors hover:bg-violet-700 disabled:opacity-60"
                   >
                     <SlidersHorizontal size={14} />
-                    管理
+                    {t('common.manage')}
                   </button>
                   <button
                     type="button"
@@ -3997,7 +4005,7 @@ function ModelSection({
                     className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-muted"
                   >
                     <span className="text-base leading-none">+</span>
-                    添加
+                    {t('common.add')}
                   </button>
                 </div>
 
@@ -4013,7 +4021,7 @@ function ModelSection({
                   onClick={onNavigateToAgents}
                   className="inline-flex h-9 items-center gap-1.5 rounded-md bg-violet-600 px-4 text-sm font-medium text-white shadow-sm transition-colors hover:bg-violet-700"
                 >
-                  去配置 Agent LLM 节点
+                  {t('models.goToAgents')}
                   <ExternalLink size={14} />
                 </button>
               </div>
@@ -4035,13 +4043,13 @@ function ModelSection({
           >
             <div className="flex items-center justify-between px-6 py-5">
               <h3 id="add-model-title" className="text-lg font-semibold text-foreground">
-                {editingModelId ? '编辑模型' : '添加模型'}
+                {editingModelId ? t('models.editModel') : t('models.addModel')}
               </h3>
               <button
                 type="button"
                 onClick={closeAddModal}
                 className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
-                aria-label="关闭"
+                aria-label={t('common.close')}
               >
                 <X size={18} />
               </button>
@@ -4051,8 +4059,8 @@ function ModelSection({
               <div className="grid grid-cols-[auto_1fr] items-center gap-x-6 gap-y-5">
                 <label htmlFor="add-model-id" className="flex items-center gap-1 text-sm text-foreground">
                   <span className="text-red-500">*</span>
-                  <span>模型 ID</span>
-                  <HelpIcon title="模型在服务端的唯一标识，必填" />
+                  <span>{t('models.modelIdLabel')}</span>
+                  <HelpIcon title={t('models.modelIdHint')} />
                 </label>
                 <input
                   id="add-model-id"
@@ -4064,13 +4072,13 @@ function ModelSection({
                     if (e.key === 'Escape') closeAddModal()
                   }}
                   autoFocus
-                  placeholder="必填 例如 gpt-3.5-turbo"
+                  placeholder={t('models.modelIdPlaceholder')}
                   className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
                 />
 
                 <label htmlFor="add-model-name" className="flex items-center gap-1 text-sm text-foreground">
-                  <span>模型名称</span>
-                  <HelpIcon title="可选，显示在列表中的友好名称" />
+                  <span>{t('models.modelNameLabel')}</span>
+                  <HelpIcon title={t('models.modelNameHint')} />
                 </label>
                 <input
                   id="add-model-name"
@@ -4081,13 +4089,13 @@ function ModelSection({
                     if (e.key === 'Enter') handleAddModel()
                     if (e.key === 'Escape') closeAddModal()
                   }}
-                  placeholder="例如 GPT-4"
+                  placeholder={t('models.modelNamePlaceholder')}
                   className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
                 />
 
                 <label htmlFor="add-model-group" className="flex items-center gap-1 text-sm text-foreground">
-                  <span>分组名称</span>
-                  <HelpIcon title="可选，用于将模型按系列分组" />
+                  <span>{t('models.modelGroupLabel')}</span>
+                  <HelpIcon title={t('models.modelGroupHint')} />
                 </label>
                 <div className="relative">
                   {(() => {
@@ -4138,7 +4146,7 @@ function ModelSection({
                               }
                             }
                           }}
-                          placeholder="例如 ChatGPT"
+                          placeholder={t('models.addModal.namePlaceholder')}
                           autoComplete="off"
                           className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
                         />
@@ -4183,7 +4191,7 @@ function ModelSection({
               {editingModelId && advancedOpen && (
                 <div className="mt-2 border-t border-border pt-5">
                   <div className="mb-2 flex items-center gap-1">
-                    <span className="text-sm font-medium text-foreground">模型类型</span>
+                    <span className="text-sm font-medium text-foreground">{t('models.addModal.tagsLabel')}</span>
                     <AlertTriangle size={14} className="text-amber-500" />
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -4235,7 +4243,7 @@ function ModelSection({
                     className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-muted"
                   >
                     <SlidersHorizontal size={14} />
-                    高级设置
+                    {t('common.advanced')}
                     {advancedOpen
                       ? <ChevronDown size={14} className="text-muted-foreground" />
                       : <ChevronRight size={14} className="text-muted-foreground" />}
@@ -4248,7 +4256,7 @@ function ModelSection({
                   onClick={handleAddModel}
                   className="inline-flex h-9 items-center gap-1.5 rounded-md bg-violet-600 px-4 text-sm font-medium text-white transition-colors hover:bg-violet-700"
                 >
-                  {editingModelId ? '保存修改' : '添加模型'}
+                  {editingModelId ? t('common.save') : t('common.add')}
                 </button>
               </div>
             </div>
@@ -4269,25 +4277,25 @@ function ModelSection({
 
 // ─── Channel Config Helpers ─────────────────────────────────────────────────
 
-const CHANNEL_DISPLAY: Record<string, { name: string; icon: string; color: string }> = {
-  dingtalk:  { name: '钉钉', icon: '钉', color: '#3370FF' },
-  discord:   { name: 'Discord', icon: 'D', color: '#5865F2' },
-  email:     { name: 'Email', icon: '@', color: '#EA4335' },
-  feishu:    { name: '飞书', icon: '飞', color: '#3370FF' },
-  mochat:    { name: 'MoChat', icon: 'M', color: '#00C853' },
-  qq:        { name: 'QQ', icon: 'Q', color: '#12B7F5' },
-  slack:     { name: 'Slack', icon: 'S', color: '#4A154B' },
-  telegram:  { name: 'Telegram', icon: 'T', color: '#26A5E4' },
-  wecom:     { name: '企业微信', icon: '企', color: '#07C160' },
-  whatsapp:  { name: 'WhatsApp', icon: 'W', color: '#25D366' },
-  harnessclaw:      { name: 'Harnessclaw', icon: 'H', color: '#F59E0B' },
-}
+const CHANNEL_DISPLAY = (t: any): Record<string, { name: string; icon: string; color: string }> => ({
+  dingtalk:  { name: t('settings.channels.names.dingtalk'), icon: '钉', color: '#3370FF' },
+  discord:   { name: t('settings.channels.names.discord'), icon: 'D', color: '#5865F2' },
+  email:     { name: t('settings.channels.names.email'), icon: '@', color: '#EA4335' },
+  feishu:    { name: t('settings.channels.names.feishu'), icon: '飞', color: '#3370FF' },
+  mochat:    { name: t('settings.channels.names.mochat'), icon: 'M', color: '#00C853' },
+  qq:        { name: t('settings.channels.names.qq'), icon: 'Q', color: '#12B7F5' },
+  slack:     { name: t('settings.channels.names.slack'), icon: 'S', color: '#4A154B' },
+  telegram:  { name: t('settings.channels.names.telegram'), icon: 'T', color: '#26A5E4' },
+  wecom:     { name: t('settings.channels.names.wecom'), icon: '企', color: '#07C160' },
+  whatsapp:  { name: t('settings.channels.names.whatsapp'), icon: 'W', color: '#25D366' },
+  harnessclaw:      { name: t('settings.channels.names.harnessclaw'), icon: 'H', color: '#F59E0B' },
+})
 
 const CHANNEL_KEYS = ['dingtalk', 'discord', 'email', 'harnessclaw', 'feishu', 'mochat', 'qq', 'slack', 'telegram', 'wecom', 'whatsapp']
 
 // Channel field labels (simplified Chinese)
-const FIELD_LABELS: Record<string, string> = {
-  enabled: '启用',
+const FIELD_LABELS = (t: any): Record<string, string> => ({
+  enabled: t('settings.channels.labels.enabled'),
   clientId: 'Client ID',
   clientSecret: 'Client Secret',
   token: 'Token',
@@ -4304,43 +4312,43 @@ const FIELD_LABELS: Record<string, string> = {
   bridgeToken: 'Bridge Token',
   imapHost: 'IMAP Host',
   imapPort: 'IMAP Port',
-  imapUsername: 'IMAP 用户名',
-  imapPassword: 'IMAP 密码',
-  imapMailbox: 'IMAP 邮箱',
+  imapUsername: t('settings.channels.labels.imapUsername'),
+  imapPassword: t('settings.channels.labels.imapPassword'),
+  imapMailbox: t('settings.channels.labels.imapMailbox'),
   imapUseSsl: 'IMAP SSL',
   smtpHost: 'SMTP Host',
   smtpPort: 'SMTP Port',
-  smtpUsername: 'SMTP 用户名',
-  smtpPassword: 'SMTP 密码',
+  smtpUsername: t('settings.channels.labels.smtpUsername'),
+  smtpPassword: t('settings.channels.labels.smtpPassword'),
   smtpUseTls: 'SMTP TLS',
   smtpUseSsl: 'SMTP SSL',
-  fromAddress: '发件地址',
-  autoReplyEnabled: '自动回复',
-  pollIntervalSeconds: '轮询间隔 (秒)',
-  markSeen: '标记已读',
-  maxBodyChars: '最大正文字符数',
-  subjectPrefix: '主题前缀',
+  fromAddress: t('settings.channels.labels.fromAddress'),
+  autoReplyEnabled: t('settings.channels.labels.autoReplyEnabled'),
+  pollIntervalSeconds: t('settings.channels.labels.pollIntervalSeconds'),
+  markSeen: t('settings.channels.labels.markSeen'),
+  maxBodyChars: t('settings.channels.labels.maxBodyChars'),
+  subjectPrefix: t('settings.channels.labels.subjectPrefix'),
   gatewayUrl: 'Gateway URL',
   intents: 'Intents',
-  groupPolicy: '群组策略',
-  reactEmoji: '回应表情',
-  replyToMessage: '回复消息',
-  replyInThread: '线程回复',
-  userTokenReadOnly: '用户 Token 只读',
-  msgFormat: '消息格式',
-  welcomeMessage: '欢迎消息',
+  groupPolicy: t('settings.channels.labels.groupPolicy'),
+  reactEmoji: t('settings.channels.labels.reactEmoji'),
+  replyToMessage: t('settings.channels.labels.replyToMessage'),
+  replyInThread: t('settings.channels.labels.replyInThread'),
+  userTokenReadOnly: t('settings.channels.labels.userTokenReadOnly'),
+  msgFormat: t('settings.channels.labels.msgFormat'),
+  welcomeMessage: t('settings.channels.labels.welcomeMessage'),
   bridgeUrl: 'Bridge URL',
   baseUrl: 'Base URL',
   socketUrl: 'Socket URL',
   socketPath: 'Socket Path',
-  mode: '模式',
+  mode: t('settings.channels.labels.mode'),
   webhookPath: 'Webhook Path',
-  consentGranted: '已授权',
-  allowFrom: '允许来源',
-  groupAllowFrom: '允许的群组来源',
-  host: '主机地址',
-  port: '端口',
-}
+  consentGranted: t('settings.channels.labels.consentGranted'),
+  allowFrom: t('settings.channels.labels.allowFrom'),
+  groupAllowFrom: t('settings.channels.labels.groupAllowFrom'),
+  host: t('settings.channels.labels.host'),
+  port: t('settings.channels.labels.port'),
+})
 
 // Fields to skip rendering (complex nested objects)
 const SKIP_FIELDS = new Set(['sessions', 'panels', 'groups', 'mention', 'dm', 'proxy',
@@ -4350,6 +4358,7 @@ const SKIP_FIELDS = new Set(['sessions', 'panels', 'groups', 'mention', 'dm', 'p
 // ─── Channel Section ────────────────────────────────────────────────────────
 
 function ChannelSection() {
+  const { t } = useTranslation()
   const { config, loading, updateConfig } = useEngineConfig()
 
   const channels = (config?.channels || {}) as Record<string, unknown>
@@ -4367,7 +4376,7 @@ function ChannelSection() {
   const filteredKeys = CHANNEL_KEYS.filter((key) => {
     if (!searchQuery) return true
     const q = searchQuery.toLowerCase()
-    const info = CHANNEL_DISPLAY[key]
+    const info = CHANNEL_DISPLAY(t)[key]
     return key.toLowerCase().includes(q) || (info?.name || '').toLowerCase().includes(q)
   })
 
@@ -4376,13 +4385,13 @@ function ChannelSection() {
   }
 
   const chData = (channels[selectedChannel] || {}) as Record<string, unknown>
-  const chInfo = CHANNEL_DISPLAY[selectedChannel] || { name: selectedChannel, icon: selectedChannel[0].toUpperCase(), color: '#888' }
+  const chInfo = CHANNEL_DISPLAY(t)[selectedChannel] || { name: selectedChannel, icon: selectedChannel[0].toUpperCase(), color: '#888' }
   const isEnabled = (chData.enabled as boolean) ?? false
 
   // Render a field based on its type
   const renderField = (fieldKey: string, fieldValue: unknown) => {
     if (fieldKey === 'enabled' || SKIP_FIELDS.has(fieldKey)) return null
-    const label = FIELD_LABELS[fieldKey] || fieldKey
+    const label = FIELD_LABELS(t)[fieldKey] || fieldKey
 
     if (typeof fieldValue === 'boolean') {
       return (
@@ -4412,14 +4421,14 @@ function ChannelSection() {
     if (Array.isArray(fieldValue)) {
       const strValue = (fieldValue as string[]).join(', ')
       return (
-        <SettingRow key={fieldKey} label={label} description="多个值用逗号分隔">
+        <SettingRow key={fieldKey} label={label} description={t('settings.channels.hints.commaSeparated')}>
           <TextInput
             value={strValue}
             onChange={(v) => {
               const arr = v.split(/[,，]\s*/).map(s => s.trim()).filter(Boolean)
               updateChannel(selectedChannel, { [fieldKey]: arr })
             }}
-            placeholder="留空表示不限制"
+            placeholder={t('settings.channels.hints.noLimit')}
             className="w-52"
           />
         </SettingRow>
@@ -4439,7 +4448,7 @@ function ChannelSection() {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="搜索渠道..."
+              placeholder={t('settings.channels.searchPlaceholder')}
               className="w-full h-8 pl-8 pr-3 text-sm bg-background border border-border rounded-lg outline-none focus:ring-1 focus:ring-ring transition-shadow text-foreground placeholder:text-muted-foreground"
             />
           </div>
@@ -4448,18 +4457,18 @@ function ChannelSection() {
         {/* Global settings */}
         <div className="px-3 pb-2 mb-1 border-b border-border">
           <div className="flex items-center justify-between py-1.5">
-            <span className="text-xs text-muted-foreground">发送进度</span>
+            <span className="text-xs text-muted-foreground">{t('settings.channels.sendProgress')}</span>
             <Toggle checked={sendProgress} onChange={(v) => updateConfig({ channels: { ...channels, sendProgress: v } })} />
           </div>
           <div className="flex items-center justify-between py-1.5">
-            <span className="text-xs text-muted-foreground">工具提示</span>
+            <span className="text-xs text-muted-foreground">{t('settings.channels.sendToolHints')}</span>
             <Toggle checked={sendToolHints} onChange={(v) => updateConfig({ channels: { ...channels, sendToolHints: v } })} />
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto px-1.5 pb-2">
           {filteredKeys.map((key) => {
-            const info = CHANNEL_DISPLAY[key]
+            const info = CHANNEL_DISPLAY(t)[key]
             const ch = (channels[key] || {}) as Record<string, unknown>
             const enabled = (ch.enabled as boolean) ?? false
             const isActive = key === selectedChannel
@@ -4500,7 +4509,7 @@ function ChannelSection() {
           </div>
 
           {/* Fields */}
-          <GroupCard title="配置">
+          <GroupCard title={t('common.config')}>
             {Object.entries(chData).map(([k, v]) => renderField(k, v))}
           </GroupCard>
         </div>
@@ -4531,6 +4540,7 @@ function SecretFieldRow({ label, value, onChange }: { label: string; value: stri
 // ─── Tools Section ──────────────────────────────────────────────────────────
 
 function ToolsSection() {
+  const { t } = useTranslation()
   const { config, loading, updateConfig } = useEngineConfig()
 
   const tools = (config?.tools || {}) as Record<string, unknown>
@@ -4575,19 +4585,19 @@ function ToolsSection() {
 
   return (
     <div>
-      <SectionHeader icon={Wrench} title="工具配置" subtitle="搜索、执行与 MCP" />
+      <SectionHeader icon={Wrench} title={t('tools.title')} subtitle={t('tools.subtitle')} />
 
       <GroupCard title="iFly Search">
-        <SettingRow label="启用 iFly Search" description="同步到 HarnessClaw Engine 的 tools.web_search 模块">
+        <SettingRow label={t('tools.iflySearch.label')} description={t('tools.iflySearch.desc')}>
           <Toggle checked={iflySearch.enabled === true} onChange={(v) => updateIflySearch({ enabled: v })} />
         </SettingRow>
-        <SettingRow label="API Key" description="iFly Search API Key">
+        <SettingRow label={t('tools.iflySearch.apiKey')} description={t('tools.iflySearch.apiKey') + " (API Key)"}>
           <div className="flex items-center gap-1.5">
             <input
               type={showIflyApiKey ? 'text' : 'password'}
               value={iflySearch.api_key || ''}
               onChange={(e) => updateIflySearch({ api_key: e.target.value })}
-              placeholder="输入 API Key"
+              placeholder={t('tools.iflySearch.apiKey')}
               className="w-52 h-7 px-2.5 text-sm bg-background border border-border rounded-md outline-none focus:ring-1 focus:ring-ring transition-shadow text-foreground font-mono"
             />
             <button onClick={() => setShowIflyApiKey(!showIflyApiKey)} className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors">
@@ -4595,13 +4605,13 @@ function ToolsSection() {
             </button>
           </div>
         </SettingRow>
-        <SettingRow label="API Secret" description="iFly Search API Secret">
+        <SettingRow label={t('tools.iflySearch.apiSecret')} description={t('tools.iflySearch.apiSecret') + " (API Secret)"}>
           <div className="flex items-center gap-1.5">
             <input
               type={showIflyApiSecret ? 'text' : 'password'}
               value={iflySearch.api_secret || ''}
               onChange={(e) => updateIflySearch({ api_secret: e.target.value })}
-              placeholder="输入 API Secret"
+              placeholder={t('tools.iflySearch.apiSecret')}
               className="w-52 h-7 px-2.5 text-sm bg-background border border-border rounded-md outline-none focus:ring-1 focus:ring-ring transition-shadow text-foreground font-mono"
             />
             <button onClick={() => setShowIflyApiSecret(!showIflyApiSecret)} className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors">
@@ -4609,10 +4619,10 @@ function ToolsSection() {
             </button>
           </div>
         </SettingRow>
-        <SettingRow label="App ID" description="iFly Search App ID">
-          <TextInput value={iflySearch.app_id || ''} onChange={(v) => updateIflySearch({ app_id: v })} placeholder="输入 App ID" className="w-52" mono />
+        <SettingRow label={t('tools.iflySearch.appId')} description={t('tools.iflySearch.appId') + " (App ID)"}>
+          <TextInput value={iflySearch.app_id || ''} onChange={(v) => updateIflySearch({ app_id: v })} placeholder={t('tools.iflySearch.appId')} className="w-52" mono />
         </SettingRow>
-        <SettingRow label="Host" description="iFly Search 服务 Host">
+        <SettingRow label={t('tools.iflySearch.host')} description={t('tools.iflySearch.hostDesc')}>
           <TextInput
             value={iflySearch.host || 'cbm-search-api.cn-huabei-1.xf-yun.com'}
             onChange={(v) => updateIflySearch({ host: v })}
@@ -4621,7 +4631,7 @@ function ToolsSection() {
             mono
           />
         </SettingRow>
-        <SettingRow label="Path" description="iFly Search 请求 Path">
+        <SettingRow label={t('tools.iflySearch.path')} description={t('tools.iflySearch.pathDesc')}>
           <TextInput
             value={iflySearch.path || '/biz/search'}
             onChange={(v) => updateIflySearch({ path: v })}
@@ -4630,7 +4640,7 @@ function ToolsSection() {
             mono
           />
         </SettingRow>
-        <SettingRow label="Limit" description="每次请求返回的最大条数">
+        <SettingRow label={t('tools.iflySearch.limit')} description={t('tools.iflySearch.limitDesc')}>
           <NumberInput
             value={iflySearch.limit ?? 5}
             onChange={(v) => updateIflySearch({ limit: v })}
@@ -4641,10 +4651,10 @@ function ToolsSection() {
       </GroupCard>
 
       <GroupCard title="Tavily Search">
-        <SettingRow label="启用 Tavily Search" description="同步到 HarnessClaw Engine 的 tools.tavily_search 模块">
+        <SettingRow label={t('tools.tavilySearch.label')} description={t('tools.tavilySearch.desc')}>
           <Toggle checked={tavilySearch.enabled === true} onChange={(v) => updateTavilySearch({ enabled: v })} />
         </SettingRow>
-        <SettingRow label="API Key" description="Tavily Search API Key">
+        <SettingRow label={t('tools.tavilySearch.apiKey')} description={t('tools.tavilySearch.apiKey') + " (API Key)"}>
           <div className="flex items-center gap-1.5">
             <input
               type={showTavilyApiKey ? 'text' : 'password'}
@@ -4660,14 +4670,14 @@ function ToolsSection() {
               type="button"
               onClick={() => window.open('https://app.tavily.com/home', '_blank', 'noopener,noreferrer')}
               className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:text-foreground hover:border-foreground/20"
-              title="打开 Tavily 控制台"
-              aria-label="打开 Tavily 控制台"
+              title={t('tools.tavilySearch.console')}
+              aria-label={t('tools.tavilySearch.console')}
             >
               <ExternalLink size={12} />
             </button>
           </div>
         </SettingRow>
-        <SettingRow label="最大结果数" description="每次 Tavily Search 请求返回的最大条数">
+        <SettingRow label={t('tools.tavilySearch.limit')} description={t('tools.tavilySearch.limitDesc')}>
           <NumberInput
             value={tavilySearch.max_results ?? 5}
             onChange={(v) => updateTavilySearch({ max_results: v })}
@@ -4677,27 +4687,27 @@ function ToolsSection() {
         </SettingRow>
       </GroupCard>
 
-      <GroupCard title="命令执行">
-        <SettingRow label="超时时间" description="执行命令的最大等待秒数">
-          <NumberInput value={exec.timeout ?? 60} onChange={(v) => updateExec({ timeout: v })} suffix="秒" min={5} max={600} />
+      <GroupCard title={t('tools.exec.title')}>
+        <SettingRow label={t('tools.exec.timeout')} description={t('tools.exec.timeoutDesc')}>
+          <NumberInput value={exec.timeout ?? 60} onChange={(v) => updateExec({ timeout: v })} suffix={t('common.seconds')} min={5} max={600} />
         </SettingRow>
-        <SettingRow label="PATH 追加" description="追加到 PATH 环境变量的路径">
+        <SettingRow label={t('tools.exec.pathAppend')} description={t('tools.exec.pathAppendDesc')}>
           <TextInput value={exec.pathAppend || ''} onChange={(v) => updateExec({ pathAppend: v })} placeholder="/usr/local/bin" className="w-52" mono />
         </SettingRow>
-        <SettingRow label="限制工作区" description="仅允许在 workspace 目录中执行命令">
+        <SettingRow label={t('tools.exec.restrictWorkspace')} description={t('tools.exec.restrictWorkspaceDesc')}>
           <Toggle checked={restrictToWorkspace} onChange={(v) => updateConfig({ tools: { ...tools, restrictToWorkspace: v } })} />
         </SettingRow>
       </GroupCard>
 
-      <GroupCard title="MCP Servers">
+      <GroupCard title={t('tools.mcp.title')}>
         <div className="py-4">
           {mcpCount === 0 ? (
             <div className="flex items-center justify-center py-6 border border-dashed border-border rounded-lg">
-              <p className="text-xs text-muted-foreground">暂无 MCP Server 配置</p>
+              <p className="text-xs text-muted-foreground">{t('tools.mcp.noServers')}</p>
             </div>
           ) : (
             <div className="text-sm text-muted-foreground">
-              已配置 {mcpCount} 个 MCP Server
+              {t('tools.mcp.configured', { count: mcpCount })}
             </div>
           )}
         </div>
@@ -4778,19 +4788,19 @@ function UISection() {
     <div>
       <SectionHeader icon={Palette} title={t('settings.ui.title')} subtitle={t('settings.ui.subtitle')} />
       <GroupCard title={t('settings.ui.appearance')}>
-        <SettingRow label={t('settings.ui.theme')} description="选择界面颜色主题">
+        <SettingRow label={t('settings.ui.theme')} description={t('settings.ui.themeDesc')}>
           <Segment options={[{ label: t('settings.ui.themeLight'), value: 'light' }, { label: t('settings.ui.themeDark'), value: 'dark' }, { label: t('settings.ui.themeSystem'), value: 'system' }]} value={theme} onChange={handleThemeChange} />
         </SettingRow>
-        <SettingRow label={t('settings.ui.fontSize')} description="调整界面文字大小">
+        <SettingRow label={t('settings.ui.fontSize')} description={t('settings.ui.fontSizeDesc')}>
           <Segment options={[{ label: t('settings.ui.fontSizeSmall'), value: 'small' }, { label: t('settings.ui.fontSizeMedium'), value: 'medium' }, { label: t('settings.ui.fontSizeLarge'), value: 'large' }]} value={fontSize} onChange={(v) => updateUi({ fontSize: v })} />
         </SettingRow>
-        <SettingRow label={t('settings.ui.language')} description="界面显示语言">
+        <SettingRow label={t('settings.ui.language')} description={t('settings.ui.languageDesc')}>
           <SelectInput value={language} onChange={(v) => updateUi({ language: v })} options={[{ label: t('settings.ui.languageZh'), value: 'zh' }, { label: t('settings.ui.languageEn'), value: 'en' }]} />
         </SettingRow>
       </GroupCard>
 
       <GroupCard title={t('settings.ui.editor')}>
-        <SettingRow label={t('settings.ui.codeTheme')} description="代码块的语法高亮风格">
+        <SettingRow label={t('settings.ui.codeTheme')} description={t('settings.ui.codeThemeDesc')}>
           <SelectInput
             value={codeTheme}
             onChange={(v) => updateUi({ codeTheme: v })}
@@ -4803,7 +4813,7 @@ function UISection() {
             ]}
           />
         </SettingRow>
-        <SettingRow label={t('settings.ui.animation')} description="启用界面过渡和微交互动画">
+        <SettingRow label={t('settings.ui.animation')} description={t('settings.ui.animationDesc')}>
           <Toggle checked={animation} onChange={(v) => updateUi({ animation: v })} />
         </SettingRow>
       </GroupCard>
@@ -4814,6 +4824,7 @@ function UISection() {
 // ─── Storage Section ────────────────────────────────────────────────────────
 
 function StorageSection() {
+  const { t } = useTranslation()
   const { config, loading, updateConfig } = useAppConfig()
   const storage = (config?.storage || {}) as { dbPath?: string }
   const dbPath = storage.dbPath || defaultDbDisplayPath
@@ -4830,16 +4841,16 @@ function StorageSection() {
   const handleExport = async (type: 'chat' | 'config' | 'logs') => {
     const result = await window.appRuntime.exportData(type)
     if (result.ok && result.path) {
-      setExportState({ type, text: `已导出到 ${result.path}`, ok: true })
+      setExportState({ type, text: t('storage.export.success', { path: result.path }), ok: true })
     } else {
-      setExportState({ type, text: result.error || '导出失败', ok: false })
+      setExportState({ type, text: result.error || t('storage.export.failed'), ok: false })
     }
   }
 
   const handleBrowseDbPath = async () => {
     const result = await window.appRuntime.openDatabaseLocation(dbPath)
     if (!result.ok) {
-      setExportState({ type: 'browse', text: result.error || '打开数据库目录失败', ok: false })
+      setExportState({ type: 'browse', text: result.error || t('storage.export.openFailed'), ok: false })
     }
   }
 
@@ -4849,21 +4860,21 @@ function StorageSection() {
 
   return (
     <div>
-      <SectionHeader icon={HardDrive} title="数据与存储" subtitle="本地文件与缓存管理" />
-      <GroupCard title="存储">
-        <SettingRow label="数据库路径" description="本地 SQLite 数据库文件位置">
+      <SectionHeader icon={HardDrive} title={t('settings.storage.title')} subtitle={t('settings.storage.subtitle')} />
+      <GroupCard title={t('settings.storage.title')}>
+        <SettingRow label={t('settings.storage.dbPath')} description={t('settings.storage.dbPathDesc')}>
           <div className="flex items-center gap-1.5">
             <TextInput value={dbPath} onChange={(v) => updateConfig({ storage: { ...storage, dbPath: v } })} className="w-52" mono />
             <button
               onClick={() => void handleBrowseDbPath()}
-              title="在文件管理器中显示数据库文件"
+              title={t('settings.storage.dbShowInFolder')}
               className="h-7 px-2.5 text-xs font-medium rounded-md border border-border bg-card hover:bg-muted transition-colors text-foreground flex items-center gap-1.5"
             >
-              <FolderOpen size={12} />浏览
+              <FolderOpen size={12} />{t('common.manage')}
             </button>
           </div>
         </SettingRow>
-        <SettingRow label="缓存大小" description="应用临时缓存占用的磁盘空间">
+        <SettingRow label={t('settings.storage.cacheSize')} description={t('settings.storage.cacheSizeDesc')}>
           <div className="flex items-center gap-2">
             <span className="text-sm font-mono text-muted-foreground">{clearState === 'done' ? '0 B' : '12.4 MB'}</span>
             <button
@@ -4872,21 +4883,21 @@ function StorageSection() {
               className="h-7 px-2.5 text-xs font-medium rounded-md border border-border bg-card hover:border-destructive hover:text-destructive transition-colors text-foreground flex items-center gap-1.5 disabled:opacity-50"
             >
               {clearState === 'clearing' ? <Loader2 size={11} className="animate-spin" /> : clearState === 'done' ? <Check size={11} className="text-green-500" /> : <Trash2 size={11} />}
-              {clearState === 'clearing' ? '清空中...' : clearState === 'done' ? '已清空' : '清空缓存'}
+              {clearState === 'clearing' ? t('common.loading') : clearState === 'done' ? t('common.saved') : t('settings.storage.clearCache')}
             </button>
           </div>
         </SettingRow>
       </GroupCard>
 
-      <GroupCard title="导出">
+      <GroupCard title={t('storage.export.title')}>
         {[
-          { key: 'chat', label: '导出聊天历史', description: '将所有会话导出为 JSON 或 Markdown' },
-          { key: 'logs', label: '导出日志', description: '导出应用运行日志' },
-          { key: 'config', label: '导出配置', description: '导出全部设置为配置文件' },
+          { key: 'chat', label: t('storage.export.db'), description: t('storage.export.dbDesc') },
+          { key: 'logs', label: t('storage.export.logs'), description: t('storage.export.logsDesc') },
+          { key: 'config', label: t('storage.export.config'), description: t('storage.export.configDesc') },
         ].map((item) => (
           <SettingRow key={item.key} label={item.label} description={item.description}>
             <button onClick={() => void handleExport(item.key as 'chat' | 'config' | 'logs')} className="h-7 px-2.5 text-xs font-medium rounded-md border border-border bg-card hover:bg-muted transition-colors text-foreground flex items-center gap-1.5">
-              <Download size={12} />导出
+              <Download size={12} />{t('common.save')}
             </button>
           </SettingRow>
         ))}
@@ -4912,8 +4923,9 @@ type AppUpdateEvent = {
 }
 
 function UpdateSection() {
+  const { t } = useTranslation()
   const [status, setStatus] = useState<'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'>('idle')
-  const [message, setMessage] = useState('应用启动后会在 10 秒后自动检查更新，并每 6 小时轮询一次。')
+  const [message, setMessage] = useState(t('updates.autoCheckHint'))
   const [version, setVersion] = useState('')
   const [currentVersion, setCurrentVersion] = useState('')
   const [progress, setProgress] = useState<number | null>(null)
@@ -4945,58 +4957,58 @@ function UpdateSection() {
           setStatus('checking')
           setIsChecking(true)
           setProgress(null)
-          setMessage('正在检查更新源...')
+          setMessage(t('updates.checkingSource'))
           break
         case 'available':
           setStatus('available')
           setIsChecking(false)
           setVersion(updateEvent.version || '')
-          setMessage(updateEvent.version ? `发现新版本 ${updateEvent.version}。系统弹窗会提示是否下载。` : '发现新版本。')
+          setMessage(updateEvent.version ? t('updates.foundNew', { version: updateEvent.version }) : t('updates.foundNewGeneric'))
           break
         case 'not-available':
           setStatus('not-available')
           setIsChecking(false)
           setVersion(updateEvent.version || '')
-          setMessage(updateEvent.version ? `当前已经是最新版本 (${updateEvent.version})。` : '当前已经是最新版本。')
+          setMessage(updateEvent.version ? t('updates.latest', { version: updateEvent.version }) : t('updates.latestGeneric'))
           break
         case 'download-started':
           setStatus('downloading')
           setIsChecking(false)
           setVersion(updateEvent.version || '')
           setProgress(0)
-          setMessage(updateEvent.version ? `开始下载版本 ${updateEvent.version}。` : '开始下载更新。')
+          setMessage(updateEvent.version ? t('updates.downloadStarted', { version: updateEvent.version }) : t('updates.downloadStartedGeneric'))
           break
         case 'download-progress':
           setStatus('downloading')
           setIsChecking(false)
           setProgress(typeof updateEvent.percent === 'number' ? updateEvent.percent : null)
           setMessage(typeof updateEvent.percent === 'number'
-            ? `正在下载更新，进度 ${updateEvent.percent.toFixed(1)}%。`
-            : '正在下载更新。')
+            ? t('updates.downloadProgress', { percent: updateEvent.percent.toFixed(1) })
+            : t('updates.downloadProgressGeneric'))
           break
         case 'downloaded':
           setStatus('downloaded')
           setIsChecking(false)
           setVersion(updateEvent.version || '')
           setProgress(100)
-          setMessage(updateEvent.version ? `版本 ${updateEvent.version} 已下载完成，系统弹窗会提示重启安装。` : '更新已下载完成。')
+          setMessage(updateEvent.version ? t('updates.downloadDone', { version: updateEvent.version }) : t('updates.downloadDoneGeneric'))
           break
         case 'download-deferred':
           setStatus('available')
           setIsChecking(false)
           setVersion(updateEvent.version || '')
           setProgress(null)
-          setMessage(updateEvent.version ? `已暂缓下载版本 ${updateEvent.version}。你可以稍后再次检查。` : '已暂缓下载更新。')
+          setMessage(updateEvent.version ? t('updates.downloadDeferred', { version: updateEvent.version }) : t('updates.downloadDeferredGeneric'))
           break
         case 'error':
           setStatus('error')
           setIsChecking(false)
           setProgress(null)
-          setMessage(updateEvent.message || '检查更新失败。')
+          setMessage(updateEvent.message || t('updates.checkFailed'))
           break
       }
     })
-  }, [])
+  }, [t])
 
   const handleCheck = async () => {
     setIsChecking(true)
@@ -5005,51 +5017,51 @@ function UpdateSection() {
       setStatus('error')
       setIsChecking(false)
       setProgress(null)
-      setMessage(result.error || '检查更新失败。')
+      setMessage(result.error || t('updates.checkFailed'))
     }
   }
 
   return (
     <div>
-      <SectionHeader icon={RotateCcw} title="应用更新" subtitle="检查新版本、下载进度与安装状态。" />
+      <SectionHeader icon={RotateCcw} title={t('updates.title')} subtitle={t('updates.subtitle')} />
 
-      <GroupCard title="更新">
-        <SettingRow label="检查更新" description="正式构建会自动检查，也可以手动触发一次。">
+      <GroupCard title={t('updates.title')}>
+        <SettingRow label={t('updates.check')} description={t('updates.checkDesc')}>
           <button
             onClick={() => void handleCheck()}
             disabled={isChecking}
             className="h-7 px-2.5 text-xs font-medium rounded-md border border-border bg-card hover:bg-muted transition-colors text-foreground flex items-center gap-1.5 disabled:opacity-50"
           >
             {isChecking ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
-            {isChecking ? '检查中...' : '检查更新'}
+            {isChecking ? t('updates.checking') : t('updates.check')}
           </button>
         </SettingRow>
 
-        <SettingRow label="当前版本" description="当前安装在本机上的应用版本。">
+        <SettingRow label={t('updates.currentVersion')} description={t('updates.currentVersionDesc')}>
           <div className="text-right">
             <p className="text-sm font-medium text-foreground">{currentVersion || '--'}</p>
           </div>
         </SettingRow>
 
-        <SettingRow label="当前状态" description="这里展示最近一次更新检查或下载结果。">
+        <SettingRow label={t('updates.status')} description={t('updates.statusDesc')}>
           <div className="text-right">
             <p className="text-sm font-medium text-foreground">
-              {status === 'idle' && '尚未手动检查'}
-              {status === 'checking' && '正在检查'}
-              {status === 'available' && '发现新版本'}
-              {status === 'not-available' && '已是最新'}
-              {status === 'downloading' && '下载中'}
-              {status === 'downloaded' && '已下载'}
-              {status === 'error' && '检查失败'}
+              {status === 'idle' && t('updates.idle')}
+              {status === 'checking' && t('updates.checkingStatus')}
+              {status === 'available' && t('updates.available')}
+              {status === 'not-available' && t('updates.notAvailable')}
+              {status === 'downloading' && t('updates.downloading')}
+              {status === 'downloaded' && t('updates.downloaded')}
+              {status === 'error' && t('updates.error')}
             </p>
-            {version && <p className="mt-0.5 text-xs text-muted-foreground">版本：{version}</p>}
+            {version && <p className="mt-0.5 text-xs text-muted-foreground">{t('updates.version', { version })}</p>}
           </div>
         </SettingRow>
 
         {status === 'downloading' && (
           <div className="py-4 border-b border-border last:border-0">
             <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
-              <span>下载进度</span>
+              <span>{t('updates.progress')}</span>
               <span>{progress != null ? `${progress.toFixed(1)}%` : '--'}</span>
             </div>
             <div className="h-2 overflow-hidden rounded-full bg-muted">
@@ -5125,6 +5137,7 @@ function mergeLogEntries(current: LogEntry[], incoming: LogEntry[]): LogEntry[] 
 }
 
 function LogsSection() {
+  const { t } = useTranslation()
   const { loading } = useAppConfig()
 
   const [selectedLevel, setSelectedLevel] = useState<LogViewerLevel>('info')
@@ -5248,15 +5261,15 @@ function LogsSection() {
   const handleOpenLogsDirectory = async () => {
     const result = await window.appRuntime.openLogsDirectory()
     setNotice(result.ok
-      ? { ok: true, text: `已打开日志目录：${result.path}` }
-      : { ok: false, text: result.error || '打开日志目录失败。' })
+      ? { ok: true, text: t('logs.notices.openDirSuccess', { path: result.path }) }
+      : { ok: false, text: result.error || t('logs.notices.openDirFailed') })
   }
 
   const handleExportLogs = async () => {
     const result = await window.appRuntime.exportData('logs')
     setNotice(result.ok && result.path
-      ? { ok: true, text: `日志已导出到：${result.path}` }
-      : { ok: false, text: result.error || '导出日志失败。' })
+      ? { ok: true, text: t('logs.notices.exportSuccess', { path: result.path }) }
+      : { ok: false, text: result.error || t('logs.notices.exportFailed') })
   }
 
   if (loading) {
@@ -5266,7 +5279,7 @@ function LogsSection() {
   return (
     <div className="h-full overflow-hidden">
       <div className="h-full max-w-5xl mx-auto px-8 py-8 flex flex-col">
-        <SectionHeader icon={FileText} title="日志" subtitle="统一查看 latest.log，等级仅用于筛选当前展示，不会更改日志记录等级（请前往「软件设置」调整）。" />
+        <SectionHeader icon={FileText} title={t('logs.title')} subtitle={t('logs.subtitle')} />
 
         <div className="rounded-2xl border border-border bg-card shadow-sm p-4 mb-5">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
@@ -5277,7 +5290,7 @@ function LogsSection() {
                   type="text"
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
-                  placeholder="搜索消息、模块或元数据"
+                  placeholder={t('logs.searchPlaceholder')}
                   className="w-full h-10 pl-9 pr-3 rounded-xl border border-border bg-background text-sm text-foreground outline-none focus:ring-1 focus:ring-ring"
                 />
               </div>
@@ -5286,20 +5299,20 @@ function LogsSection() {
             <div className="flex flex-wrap items-center gap-2">
               <Segment
                 options={[
-                  { label: '致命', value: 'fatal' },
-                  { label: '错误', value: 'error' },
-                  { label: '警告', value: 'warn' },
-                  { label: '标准', value: 'info' },
-                  { label: '调试', value: 'debug' },
-                  { label: '追踪', value: 'trace' },
+                  { label: t('logs.levels.fatal'), value: 'fatal' },
+                  { label: t('logs.levels.error'), value: 'error' },
+                  { label: t('logs.levels.warn'), value: 'warn' },
+                  { label: t('logs.levels.info'), value: 'info' },
+                  { label: t('logs.levels.debug'), value: 'debug' },
+                  { label: t('logs.levels.trace'), value: 'trace' },
                 ]}
                 value={selectedLevel}
                 onChange={handleLevelChange}
               />
               <Segment
                 options={[
-                  { label: '解析', value: 'parsed' },
-                  { label: 'Raw', value: 'raw' },
+                  { label: t('logs.viewModes.parsed'), value: 'parsed' },
+                  { label: t('logs.viewModes.raw'), value: 'raw' },
                 ]}
                 value={viewMode}
                 onChange={(value) => setViewMode(value as LogViewerMode)}
@@ -5314,9 +5327,9 @@ function LogsSection() {
                 followMode ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'
               )}>
                 <span className={cn('w-2 h-2 rounded-full', followMode ? 'bg-emerald-500' : 'bg-amber-500')} />
-                {followMode ? '跟随中' : '已暂停'}
+                {followMode ? t('logs.followModeOn') : t('logs.followModeOff')}
               </span>
-              <span>日志目录：{defaultLogsDisplayPath}</span>
+              <span>{t('logs.directoryLabel', { path: defaultLogsDisplayPath })}</span>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -5325,28 +5338,28 @@ function LogsSection() {
                 className="h-9 px-3 rounded-lg border border-border bg-card hover:bg-muted transition-colors text-sm text-foreground flex items-center gap-1.5"
               >
                 {followMode ? <Pause size={14} /> : <Play size={14} />}
-                {followMode ? '暂停刷新' : '恢复刷新'}
+                {followMode ? t('logs.followModeOff') : t('logs.followModeOn')}
               </button>
               <button
                 onClick={handleReset}
                 className="h-9 px-3 rounded-lg border border-border bg-card hover:bg-muted transition-colors text-sm text-foreground flex items-center gap-1.5"
               >
                 <RotateCcw size={14} />
-                重置筛选
+                {t('logs.reset')}
               </button>
               <button
                 onClick={() => void handleOpenLogsDirectory()}
                 className="h-9 px-3 rounded-lg border border-border bg-card hover:bg-muted transition-colors text-sm text-foreground flex items-center gap-1.5"
               >
                 <FolderOpen size={14} />
-                打开日志目录
+                {t('logs.openDirectory')}
               </button>
               <button
                 onClick={() => void handleExportLogs()}
                 className="h-9 px-3 rounded-lg bg-foreground text-background hover:bg-foreground/90 transition-colors text-sm font-medium flex items-center gap-1.5"
               >
                 <Download size={14} />
-                导出日志
+                {t('logs.exportLogs')}
               </button>
             </div>
           </div>
@@ -5364,12 +5377,12 @@ function LogsSection() {
         {loadError && (
           <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600 flex items-center gap-2">
             <AlertTriangle size={15} />
-            <span className="flex-1">读取日志失败：{loadError}</span>
+            <span className="flex-1">{t('common.loadFailed')}: {loadError}</span>
             <button
               onClick={() => setReloadKey((current) => current + 1)}
               className="h-7 px-2.5 rounded-md border border-red-200 bg-white text-red-600 hover:bg-red-50 transition-colors"
             >
-              重试
+              {t('common.refresh')}
             </button>
           </div>
         )}
@@ -5377,12 +5390,12 @@ function LogsSection() {
         <div className="flex-1 min-h-0 rounded-2xl border border-border bg-card shadow-sm overflow-hidden flex flex-col">
           <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
             <div>
-              <p className="text-sm font-semibold text-foreground">日志列表</p>
+              <p className="text-sm font-semibold text-foreground">{t('logs.title')}</p>
             </div>
             {(loadingLogs || (followMode && entries.length === 0)) && (
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Loader2 size={14} className="animate-spin" />
-                加载中
+                {t('common.loading')}
               </div>
             )}
           </div>
@@ -5392,10 +5405,7 @@ function LogsSection() {
               <div className="flex flex-col items-center justify-center py-16 text-center px-6">
                 <FileText size={28} className="text-muted-foreground mb-3" />
                 <p className="text-sm font-medium text-foreground">
-                  {query.trim() ? '当前筛选条件下没有匹配日志。' : '暂时还没有可显示的日志。'}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {query.trim() ? '可以尝试放宽关键词或切换日志等级。' : '新的日志会在这里自动追加显示。'}
+                  {query.trim() ? t('logs.searchPlaceholder') : t('logs.title')}
                 </p>
               </div>
             ) : viewMode === 'raw' ? (
@@ -5470,6 +5480,7 @@ function LogsSection() {
 // ─── Software Section ──────────────────────────────────────────────────────
 
 function SoftwareSection() {
+  const { t } = useTranslation()
   const { config, loading, updateConfig } = useAppConfig()
   const logging = (config?.logging || {}) as { level?: LogViewerLevel }
   const persistedLevel = logging.level || 'info'
@@ -5495,34 +5506,34 @@ function SoftwareSection() {
 
   return (
     <div>
-      <SectionHeader icon={SlidersHorizontal} title="软件设置" subtitle="应用级别的运行选项" />
-      <GroupCard title="对话行为">
+      <SectionHeader icon={SlidersHorizontal} title={t('settings.software.title')} subtitle={t('settings.software.subtitle')} />
+      <GroupCard title={t('settings.software.chatBehavior.title')}>
         <SettingRow
-          label="链接打开方式"
-          description="点击对话消息中的链接时，使用内置抽屉预览还是用系统默认浏览器打开"
+          label={t('settings.software.chatBehavior.linkOpen')}
+          description={t('settings.software.chatBehavior.linkOpenDesc')}
         >
           <Segment
             options={[
-              { label: '内置抽屉', value: 'drawer' },
-              { label: '系统浏览器', value: 'external' },
+              { label: t('settings.software.chatBehavior.drawer'), value: 'drawer' },
+              { label: t('settings.software.chatBehavior.external'), value: 'external' },
             ]}
             value={linkOpenBehavior}
             onChange={handleLinkOpenBehaviorChange}
           />
         </SettingRow>
       </GroupCard>
-      <GroupCard title="日志">
-        <SettingRow label="日志等级" description="控制写入日志文件的最低等级。等级越低，记录的内容越详细（fatal 最少，trace 最多）。">
+      <GroupCard title={t('settings.software.logging.title')}>
+        <SettingRow label={t('settings.software.logging.level')} description={t('settings.software.logging.levelDesc')}>
           <SelectInput
             value={persistedLevel}
             onChange={handleLevelChange}
             options={[
-              { label: '致命 (fatal)', value: 'fatal' },
-              { label: '错误 (error)', value: 'error' },
-              { label: '警告 (warn)', value: 'warn' },
-              { label: '标准 (info)', value: 'info' },
-              { label: '调试 (debug)', value: 'debug' },
-              { label: '追踪 (trace)', value: 'trace' },
+              { label: t('settings.software.logging.fatal'), value: 'fatal' },
+              { label: t('settings.software.logging.error'), value: 'error' },
+              { label: t('settings.software.logging.warn'), value: 'warn' },
+              { label: t('settings.software.logging.info'), value: 'info' },
+              { label: t('settings.software.logging.debug'), value: 'debug' },
+              { label: t('settings.software.logging.trace'), value: 'trace' },
             ]}
           />
         </SettingRow>
@@ -5535,33 +5546,10 @@ function SoftwareSection() {
 
 type SectionKey = 'connection' | 'auth' | 'models' | 'agents' | 'channels' | 'tools' | 'ui' | 'storage' | 'logs' | 'updates' | 'software'
 
-const navGroups: { title: string; items: { key: SectionKey; icon: React.ElementType; label: string }[] }[] = [
-  {
-    title: '',
-    items: [
-      { key: 'connection', icon: Wifi, label: '连接设置' },
-      { key: 'models', icon: Cpu, label: '模型配置' },
-      { key: 'agents', icon: Bot, label: 'Agent 设置' },
-      { key: 'tools', icon: Wrench, label: '工具配置' },
-    ],
-  },
-  {
-    title: '应用配置',
-    items: [
-      { key: 'software', icon: SlidersHorizontal, label: '软件设置' },
-      { key: 'logs', icon: FileText, label: '日志' },
-      { key: 'ui', icon: Palette, label: 'UI 设置' },
-      { key: 'storage', icon: HardDrive, label: '数据与存储' },
-      { key: 'updates', icon: RotateCcw, label: '应用更新' },
-    ],
-  },
-]
-
 const FULL_WIDTH_SECTIONS = new Set<SectionKey>(['models', 'logs'])
 
-// ─── Page ──────────────────────────────────────────────────────────────────
-
 export function SettingsPage() {
+  const { t } = useTranslation()
   const location = useLocation()
   const initialSection = location.state?.initialSection as SectionKey | undefined
   const [active, setActive] = useState<SectionKey>(
@@ -5571,6 +5559,28 @@ export function SettingsPage() {
   // on the 模型配置 page. Forwarded into AgentSection → ProviderStrategyRow
   // so the 主 Provider dropdown briefly pulses after navigation.
   const [agentBlinkSignal, setAgentBlinkSignal] = useState(0)
+
+  const navGroups: { title: string; items: { key: SectionKey; icon: React.ElementType; label: string }[] }[] = useMemo(() => [
+    {
+      title: '',
+      items: [
+        { key: 'connection', icon: Wifi, label: t('settings.nav.connection') },
+        { key: 'models', icon: Cpu, label: t('settings.nav.models') },
+        { key: 'agents', icon: Bot, label: t('settings.nav.agents') },
+        { key: 'tools', icon: Wrench, label: t('settings.nav.tools') },
+      ],
+    },
+    {
+      title: t('settings.nav.appConfig'),
+      items: [
+        { key: 'software', icon: SlidersHorizontal, label: t('settings.nav.software') },
+        { key: 'logs', icon: FileText, label: t('settings.nav.logs') },
+        { key: 'ui', icon: Palette, label: t('settings.nav.ui') },
+        { key: 'storage', icon: HardDrive, label: t('settings.nav.storage') },
+        { key: 'updates', icon: RotateCcw, label: t('settings.nav.updates') },
+      ],
+    },
+  ], [t])
 
   useEffect(() => {
     if (initialSection) {
@@ -5588,7 +5598,7 @@ export function SettingsPage() {
       {/* Left nav */}
       <nav className="w-48 flex-shrink-0 border-r border-border bg-card flex flex-col py-4 gap-0.5 px-2">
         <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest px-2 mb-1">
-          设置
+          {t('settings.nav.settings')}
         </p>
         {navGroups.map((group, groupIndex) => (
           <div key={group.title} className={cn(groupIndex > 0 && 'mt-2 pt-3 border-t border-border')}>

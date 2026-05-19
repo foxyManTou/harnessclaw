@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
+  ArrowRight,
   RefreshCw,
   Trash2,
   Plus,
-  ArrowRight,
   GripVertical,
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
@@ -61,6 +62,7 @@ export function PlanDraftCard({
   onCancel,
   onRegenerate,
 }: PlanDraftCardProps) {
+  const { t } = useTranslation()
   const [steps, setSteps] = useState<PlanDraftStep[]>(plan.steps)
   const [draggedIdx, setDraggedIdx] = useState<number | null>(null)
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
@@ -95,7 +97,7 @@ export function PlanDraftCard({
       ...curr,
       {
         id: `s${curr.length + 1}_${Date.now().toString(36)}`,
-        description: '新步骤',
+        description: t('plan.draft.newStep'),
       },
     ])
   }
@@ -176,7 +178,7 @@ export function PlanDraftCard({
       <div className="flex items-center justify-between border-b border-border bg-muted/40 px-5 py-4">
         <div className="flex flex-col gap-0.5">
           <span className="whitespace-nowrap text-[10px] font-black uppercase tracking-[0.1em] text-muted-foreground">
-            Task Draft
+            {t('plan.draft.title')}
           </span>
         </div>
         {plan.rationale && (
@@ -191,7 +193,7 @@ export function PlanDraftCard({
           card, pushing the steps below the fold. */}
       {plan.goal && (
         <div className="flex items-center gap-2 border-b border-border bg-background px-5 py-2.5 text-[12px] text-muted-foreground">
-          <span className="shrink-0 font-medium text-foreground">目标：</span>
+          <span className="shrink-0 font-medium text-foreground">{t('plan.draft.goalLabel')}</span>
           <span className="truncate" title={plan.goal}>{plan.goal}</span>
         </div>
       )}
@@ -200,7 +202,7 @@ export function PlanDraftCard({
       <div className="space-y-1 p-3" onDragLeave={handleListDragLeave}>
         {steps.length === 0 && (
           <div className="px-2.5 py-4 text-center text-[12px] text-muted-foreground">
-            没有步骤,可以点击下方「+ 添加步骤」补充。
+            {t('plan.draft.noSteps')}
           </div>
         )}
         {steps.map((step, idx) => (
@@ -269,7 +271,7 @@ export function PlanDraftCard({
                 <input
                   value={step.description || ''}
                   readOnly={readonly}
-                  placeholder="步骤描述"
+                  placeholder={t('plan.draft.stepPlaceholder')}
                   onChange={(e) => updateStepField(step.id, 'description', e.target.value)}
                   className={cn(
                     'w-full bg-transparent px-1 text-[13.5px] font-medium outline-none transition-colors',
@@ -286,7 +288,7 @@ export function PlanDraftCard({
                 <button
                   onClick={() => removeStep(step.id)}
                   className="opacity-0 transition-all hover:text-red-500 group-hover:opacity-100"
-                  aria-label="删除步骤"
+                  aria-label={t('plan.draft.deleteStepAria')}
                 >
                   <Trash2 size={14} className="text-muted-foreground" />
                 </button>
@@ -304,7 +306,7 @@ export function PlanDraftCard({
             onClick={addStep}
             className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-bold text-primary transition-all hover:bg-primary/10 active:scale-95"
           >
-            <Plus size={14} strokeWidth={2.5} /> 添加步骤
+            <Plus size={14} strokeWidth={2.5} /> {t('plan.draft.addStep')}
           </button>
           {onRegenerate && (
             <button
@@ -317,7 +319,7 @@ export function PlanDraftCard({
                 strokeWidth={2}
                 className="transition-transform duration-700 group-hover:rotate-180"
               />
-              重新生成
+              {t('plan.draft.regenerate')}
             </button>
           )}
         </div>
@@ -331,7 +333,7 @@ export function PlanDraftCard({
               onClick={onCancel}
               className="rounded-xl bg-transparent px-5 py-2.5 text-[13px] font-bold text-muted-foreground transition-all hover:bg-muted"
             >
-              拒绝
+              {t('plan.draft.reject')}
             </button>
           )}
           {onConfirm && (
@@ -352,7 +354,7 @@ export function PlanDraftCard({
               }}
               className="inline-flex items-center gap-2 rounded-xl bg-foreground px-6 py-2.5 text-[13px] font-bold text-background shadow-lg transition-all hover:opacity-90 active:scale-[0.98] dark:bg-primary dark:text-primary-foreground"
             >
-              开始执行 <ArrowRight size={16} strokeWidth={2.5} />
+              {t('plan.draft.execute')} <ArrowRight size={16} strokeWidth={2.5} />
             </button>
           )}
         </div>

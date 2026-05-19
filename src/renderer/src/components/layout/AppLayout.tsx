@@ -1,4 +1,5 @@
 import { useLocation } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { Sidebar } from './Sidebar'
 import { WelcomeModal } from '../WelcomeModal'
 
@@ -8,6 +9,7 @@ interface AppLayoutProps {
 
 export function AppLayout({ children }: AppLayoutProps) {
   const location = useLocation()
+  const { t } = useTranslation()
 
   return (
     <div className="relative flex h-screen overflow-hidden bg-background">
@@ -15,7 +17,7 @@ export function AppLayout({ children }: AppLayoutProps) {
       <div className="flex min-h-0 flex-1">
         <Sidebar />
         <div className="flex flex-1 flex-col min-w-0">
-          <main className="flex-1 overflow-auto" aria-label="主内容区域">
+          <main className="flex-1 overflow-auto" aria-label={t('sidebar.mainContentAria')}>
             {children}
           </main>
         </div>

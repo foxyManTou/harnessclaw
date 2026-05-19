@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Plus, Search, MoreHorizontal, Bot, Trash2, Pencil, Archive } from 'lucide-react'
 
 interface Agent {
@@ -31,6 +32,7 @@ const mockAgents: Agent[] = [
 ]
 
 export function AgentsPage() {
+  const { t } = useTranslation()
   const [agents] = useState<Agent[]>(mockAgents)
   const [search, setSearch] = useState('')
   const [showCreate, setShowCreate] = useState(false)
@@ -41,7 +43,7 @@ export function AgentsPage() {
     <div className="flex flex-col h-full px-6 py-6">
       {/* Top action bar */}
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-lg font-semibold text-foreground">Agents</h2>
+        <h2 className="text-lg font-semibold text-foreground">{t('agents.title')}</h2>
         <div className="flex items-center gap-2">
           {/* Search */}
           <div className="relative">
@@ -52,7 +54,7 @@ export function AgentsPage() {
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="搜索 Agent..."
+              placeholder={t('agents.searchPlaceholder')}
               className="pl-8 pr-3 py-1.5 text-sm rounded-lg border border-border bg-white outline-none focus:ring-1 focus:ring-ring w-48"
             />
           </div>
@@ -62,7 +64,7 @@ export function AgentsPage() {
             className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg bg-foreground text-background hover:bg-foreground/90 transition-colors"
           >
             <Plus size={14} />
-            创建 Agent
+            {t('agents.newAgent')}
           </button>
         </div>
       </div>
@@ -72,12 +74,12 @@ export function AgentsPage() {
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
             <Bot size={40} className="mx-auto text-muted-foreground/40 mb-3" />
-            <p className="text-sm text-muted-foreground">还没有 Agent</p>
+            <p className="text-sm text-muted-foreground">{t('agents.empty')}</p>
             <button
               onClick={() => setShowCreate(true)}
               className="mt-3 text-sm text-foreground underline"
             >
-              创建第一个 Agent
+              {t('agents.emptyDesc')}
             </button>
           </div>
         </div>
@@ -96,6 +98,7 @@ export function AgentsPage() {
 }
 
 function AgentCard({ agent }: { agent: Agent }) {
+  const { t, i18n } = useTranslation()
   const [menuOpen, setMenuOpen] = useState(false)
 
   return (
@@ -125,13 +128,13 @@ function AgentCard({ agent }: { agent: Agent }) {
           {menuOpen && (
             <div className="absolute right-0 top-6 bg-white border border-border rounded-lg shadow-lg py-1 z-10 w-32">
               <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted flex items-center gap-2">
-                <Pencil size={12} /> 编辑
+                <Pencil size={12} /> {t('agents.actions.edit')}
               </button>
               <button className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted flex items-center gap-2">
-                <Archive size={12} /> 归档
+                <Archive size={12} /> {t('agents.actions.archive')}
               </button>
               <button className="w-full text-left px-3 py-1.5 text-sm text-destructive hover:bg-destructive/10 flex items-center gap-2">
-                <Trash2 size={12} /> 删除
+                <Trash2 size={12} /> {t('agents.actions.delete')}
               </button>
             </div>
           )}
@@ -147,13 +150,14 @@ function AgentCard({ agent }: { agent: Agent }) {
 
       {/* Created time */}
       <p className="text-xs text-muted-foreground mt-2">
-        {new Date(agent.createdAt).toLocaleDateString('zh-CN')}
+        {new Date(agent.createdAt).toLocaleDateString(i18n.language.startsWith('zh') ? 'zh-CN' : 'en-US')}
       </p>
     </div>
   )
 }
 
 function CreateAgentDialog({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation()
   const [form, setForm] = useState({ name: '', emoji: '🤖', workspace: 'main', model: 'qwen3-max' })
 
   return (
@@ -165,20 +169,20 @@ function CreateAgentDialog({ onClose }: { onClose: () => void }) {
         className="bg-white rounded-2xl border border-border p-6 w-full max-w-md shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="text-base font-semibold mb-4">创建 Agent</h3>
+        <h3 className="text-base font-semibold mb-4">{t('agents.dialog.title')}</h3>
 
         <div className="space-y-3">
           <div>
-            <label className="text-xs text-muted-foreground mb-1 block">名称</label>
+            <label className="text-xs text-muted-foreground mb-1 block">{t('agents.dialog.name')}</label>
             <input
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
-              placeholder="Agent 名称"
+              placeholder={t('agents.dialog.namePlaceholder')}
               className="w-full px-3 py-2 text-sm rounded-lg border border-border outline-none focus:ring-1 focus:ring-ring"
             />
           </div>
           <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Emoji</label>
+            <label className="text-xs text-muted-foreground mb-1 block">{t('agents.dialog.emoji')}</label>
             <input
               value={form.emoji}
               onChange={(e) => setForm({ ...form, emoji: e.target.value })}
@@ -186,7 +190,7 @@ function CreateAgentDialog({ onClose }: { onClose: () => void }) {
             />
           </div>
           <div>
-            <label className="text-xs text-muted-foreground mb-1 block">工作区</label>
+            <label className="text-xs text-muted-foreground mb-1 block">{t('agents.dialog.workspace')}</label>
             <input
               value={form.workspace}
               onChange={(e) => setForm({ ...form, workspace: e.target.value })}
@@ -200,10 +204,10 @@ function CreateAgentDialog({ onClose }: { onClose: () => void }) {
             onClick={onClose}
             className="px-4 py-2 text-sm rounded-lg border border-border hover:bg-muted"
           >
-            取消
+            {t('agents.dialog.cancel')}
           </button>
           <button className="px-4 py-2 text-sm rounded-lg bg-foreground text-background hover:bg-foreground/90">
-            创建
+            {t('agents.dialog.create')}
           </button>
         </div>
       </div>

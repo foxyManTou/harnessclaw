@@ -22,37 +22,37 @@ type ConfigRecord = Record<string, unknown>
 const WORKSPACE_ROOT = '~/.harnessclaw/workspace'
 const FIRST_RUN_DONE_STORAGE_KEY = 'harnessclaw-first-run-complete'
 
-const emmaPrompts: Array<{ category: string; prompt: string }> = [
+const emmaPrompts = (t: any): Array<{ category: string; prompt: string }> => [
   // 研发
-  { category: '研发', prompt: '帮我把这段函数重构得更易读，并补充单元测试。' },
-  { category: '研发', prompt: '排查这段报错日志，定位最可能的根因并给出修复方案。' },
-  { category: '研发', prompt: '审视这个 PR 的设计与边界，列出潜在风险点。' },
-  { category: '研发', prompt: '给这个接口加上限流 and 重试，并写好对应的单测。' },
+  { category: t('welcome.prompts.categories.dev'), prompt: t('welcome.prompts.items.dev1') },
+  { category: t('welcome.prompts.categories.dev'), prompt: t('welcome.prompts.items.dev2') },
+  { category: t('welcome.prompts.categories.dev'), prompt: t('welcome.prompts.items.dev3') },
+  { category: t('welcome.prompts.categories.dev'), prompt: t('welcome.prompts.items.dev4') },
   // 研究
-  { category: '研究', prompt: '搜索最近一周关于 RAG 的新论文，做一份要点摘要。' },
-  { category: '研究', prompt: '对比 3 家头部向量数据库的架构与适用场景。' },
-  { category: '研究', prompt: '梳理 Agent 评测领域的主流 benchmark 和它们的差异。' },
-  { category: '研究', prompt: '帮我跟踪这位作者最近半年发表的所有论文。' },
+  { category: t('welcome.prompts.categories.research'), prompt: t('welcome.prompts.items.res1') },
+  { category: t('welcome.prompts.categories.research'), prompt: t('welcome.prompts.items.res2') },
+  { category: t('welcome.prompts.categories.research'), prompt: t('welcome.prompts.items.res3') },
+  { category: t('welcome.prompts.categories.research'), prompt: t('welcome.prompts.items.res4') },
   // 写作
-  { category: '写作', prompt: '为下周产品发布会写一份 300 字的预热推文。' },
-  { category: '写作', prompt: '把这份技术文档改写成给非技术同事的版本。' },
-  { category: '写作', prompt: '给这个开源项目写一份简洁有力的 README 介绍。' },
-  { category: '写作', prompt: '把这次复盘整理成一份对外可发的故事化稿件。' },
+  { category: t('welcome.prompts.categories.writing'), prompt: t('welcome.prompts.items.wri1') },
+  { category: t('welcome.prompts.categories.writing'), prompt: t('welcome.prompts.items.wri2') },
+  { category: t('welcome.prompts.categories.writing'), prompt: t('welcome.prompts.items.wri3') },
+  { category: t('welcome.prompts.categories.writing'), prompt: t('welcome.prompts.items.wri4') },
   // 数据
-  { category: '数据', prompt: '分析这份 CSV 中的订单数据，给出复购率和异常值。' },
-  { category: '数据', prompt: '帮我把这份日志拆字段，做出每小时调用量的趋势图。' },
-  { category: '数据', prompt: '看一下这份 A/B 实验结果，给出统计显著性结论。' },
-  { category: '数据', prompt: '从这堆用户反馈里聚类出 5 个最值得关注的话题。' },
+  { category: t('welcome.prompts.categories.data'), prompt: t('welcome.prompts.items.dat1') },
+  { category: t('welcome.prompts.categories.data'), prompt: t('welcome.prompts.items.dat2') },
+  { category: t('welcome.prompts.categories.data'), prompt: t('welcome.prompts.items.dat3') },
+  { category: t('welcome.prompts.categories.data'), prompt: t('welcome.prompts.items.dat4') },
   // 生活
-  { category: '生活', prompt: '帮我规划这个周末两天的杭州周边亲子游行程。' },
-  { category: '生活', prompt: '根据这周的运动和饮食记录，给我下周的调整建议。' },
-  { category: '生活', prompt: '帮我比一下这两个航班加酒店的总性价比。' },
-  { category: '生活', prompt: '给我列一份适合一个人安静度过的周末晚上活动清单。' },
+  { category: t('welcome.prompts.categories.life'), prompt: t('welcome.prompts.items.lif1') },
+  { category: t('welcome.prompts.categories.life'), prompt: t('welcome.prompts.items.lif2') },
+  { category: t('welcome.prompts.categories.life'), prompt: t('welcome.prompts.items.lif3') },
+  { category: t('welcome.prompts.categories.life'), prompt: t('welcome.prompts.items.lif4') },
   // 日常
-  { category: '日常', prompt: '把今天的会议纪要整理成 To-do，并安排到下周日历。' },
-  { category: '日常', prompt: '总结今天 Slack 里被 @ 的所有消息，标出需要回复的。' },
-  { category: '日常', prompt: '把这一周的工作整理成对外可发的周报草稿。' },
-  { category: '日常', prompt: '帮我从邮件里挑出真正需要今天处理的 3 件事。' },
+  { category: t('welcome.prompts.categories.daily'), prompt: t('welcome.prompts.items.dai1') },
+  { category: t('welcome.prompts.categories.daily'), prompt: t('welcome.prompts.items.dai2') },
+  { category: t('welcome.prompts.categories.daily'), prompt: t('welcome.prompts.items.dai3') },
+  { category: t('welcome.prompts.categories.daily'), prompt: t('welcome.prompts.items.dai4') },
 ]
 
 function asRecord(value: unknown): ConfigRecord {
@@ -363,7 +363,7 @@ export function WelcomeModal() {
                 emma
               </h3>
 
-              <TypedQuotes prompts={emmaPrompts} />
+              <TypedQuotes prompts={emmaPrompts(t)} />
             </div>
           )}
 
@@ -420,7 +420,7 @@ export function WelcomeModal() {
               />
               <FormField
                 label="Model ID"
-                hint="例如 gpt-4o-mini、claude-sonnet-4 等。"
+                hint={t('welcome.modelIdHint')}
                 value={draft.modelId}
                 placeholder="model-id"
                 required

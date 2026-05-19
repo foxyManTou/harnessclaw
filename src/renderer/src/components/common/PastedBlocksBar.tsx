@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
 import { FileText, X, Clipboard } from 'lucide-react'
 
@@ -46,6 +47,7 @@ export function usePastedBlocks() {
 }
 
 export function PastedBlocksBar({ blocks, onRemove, removable = true }: PastedBlocksBarProps) {
+  const { t } = useTranslation()
   const [preview, setPreview] = useState<{ content: string; lines: number } | null>(null)
 
   useEffect(() => {
@@ -73,14 +75,14 @@ export function PastedBlocksBar({ blocks, onRemove, removable = true }: PastedBl
               className="flex min-w-0 items-center gap-1.5"
             >
               <Clipboard size={13} className="flex-shrink-0 text-primary/70" />
-              <span className="text-xs font-medium text-foreground">粘贴</span>
-              <span className="text-[11px] text-muted-foreground">{block.lines} 行</span>
+              <span className="text-xs font-medium text-foreground">{t('pasted.label')}</span>
+              <span className="text-[11px] text-muted-foreground">{t('pasted.lines', { n: block.lines })}</span>
             </button>
             {removable && (
               <button
                 type="button"
                 onClick={() => onRemove(block.id)}
-                aria-label="移除粘贴内容"
+                aria-label={t('pasted.removeAria')}
                 className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-primary/10 hover:text-foreground"
               >
                 <X size={11} />
@@ -100,15 +102,15 @@ export function PastedBlocksBar({ blocks, onRemove, removable = true }: PastedBl
             <div className="flex items-center justify-between border-b border-border px-5 py-3">
               <div className="flex items-center gap-2">
                 <FileText size={16} className="text-primary" />
-                <span className="text-sm font-semibold text-foreground">粘贴内容预览</span>
+                <span className="text-sm font-semibold text-foreground">{t('pasted.previewTitle')}</span>
                 <span className="rounded-full border border-border bg-accent/70 px-2 py-0.5 text-[10px] text-muted-foreground">
-                  {preview.lines} 行
+                  {t('pasted.lines', { n: preview.lines })}
                 </span>
               </div>
               <button
                 onClick={() => setPreview(null)}
                 className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-card transition-colors hover:bg-muted"
-                aria-label="关闭预览"
+                aria-label={t('pasted.closeAria')}
               >
                 <X size={14} className="text-muted-foreground" />
               </button>

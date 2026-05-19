@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { ArrowLeft, FilePlus2, FolderKanban, MoreHorizontal, Plus, SendHorizontal } from 'lucide-react'
 import { DangerConfirmMenu } from '../common/DangerConfirmMenu'
 import { cn } from '../../lib/utils'
+import { getProjectDisplayDescription, getProjectDisplayName } from '../../lib/projectDisplay'
 
 const usageChartData = [
   { label: '04/09', value: 40.2 },
@@ -47,13 +49,14 @@ const projectAgents = [
   },
 ] as const
 
-function getProjectSessionLabel(session: DbSessionRow): string {
+function getProjectSessionLabel(t: any, session: DbSessionRow): string {
   const trimmed = session.title.trim()
   if (trimmed) return trimmed
-  return `未命名对话 ${session.session_id.slice(-6)}`
+  return t('projects.workspace.unnamedSession', { id: session.session_id.slice(-6) })
 }
 
 export function ProjectWorkspacePage() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const location = useLocation()
   const { projectId = '' } = useParams()
@@ -135,8 +138,8 @@ export function ProjectWorkspacePage() {
         initialMessage: message,
         projectContext: {
           projectId: project.project_id,
-          name: project.name,
-          description: project.description,
+          name: displayProjectName,
+          description: displayProjectDescription,
           createdAt: project.created_at,
         },
       },
@@ -153,6 +156,8 @@ export function ProjectWorkspacePage() {
 
   const canCreateProjectSession = Boolean(input.trim() && project)
   const confirmingSession = projectSessions.find((session) => session.session_id === confirmDeleteSessionId) ?? null
+  const displayProjectName = project ? getProjectDisplayName(project, t) : ''
+  const displayProjectDescription = project ? getProjectDisplayDescription(project, t) : ''
 
   const handleDeleteProjectSession = async (sessionId: string) => {
     setSessionActionError('')
@@ -160,7 +165,7 @@ export function ProjectWorkspacePage() {
     try {
       const result = await window.db.deleteSession(sessionId)
       if (!result.ok) {
-        setSessionActionError(result.error || '对话删除失败，请稍后再试。')
+        setSessionActionError(result.error || t('projects.workspace.deleteSessionError'))
         return
       }
 
@@ -182,13 +187,13 @@ export function ProjectWorkspacePage() {
             className="inline-flex items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
             <ArrowLeft size={16} />
-            <span>返回项目</span>
+            <span>{t('projects.workspace.back')}</span>
           </button>
 
           <div className="mt-6 rounded-[24px] border border-dashed border-border bg-card px-6 py-10 text-center">
-            <h1 className="text-lg font-semibold text-foreground">项目不存在</h1>
+            <h1 className="text-lg font-semibold text-foreground">{t('projects.workspace.notExist')}</h1>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              当前项目可能已经被移除，或者这个链接还没有对应的数据。
+              {t('projects.workspace.notExistDesc')}
             </p>
           </div>
         </div>
@@ -208,14 +213,14 @@ export function ProjectWorkspacePage() {
                 className="-ml-2 inline-flex min-h-10 items-center gap-2 rounded-xl px-2.5 py-2 transition-colors hover:bg-muted hover:text-foreground"
               >
                 <ArrowLeft size={16} />
-                <span>All projects</span>
+                <span>{t('projects.workspace.allProjects')}</span>
               </button>
             </div>
 
             <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
               <div className="min-w-0">
                 <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-                  {loading ? '加载中...' : project?.name}
+                  {loading ? t('common.loading') : displayProjectName}
                 </h1>
               </div>
 
@@ -223,7 +228,7 @@ export function ProjectWorkspacePage() {
                 <button
                   type="button"
                   className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-card transition-colors hover:bg-muted"
-                  aria-label="更多操作"
+                  aria-label={t('common.actions.more')}
                 >
                   <span className="text-xl leading-none">⋮</span>
                 </button>
@@ -244,7 +249,7 @@ export function ProjectWorkspacePage() {
                 onChange={(event) => setInput(event.target.value)}
                 onKeyDown={handleKeyDown}
                 rows={3}
-                placeholder="+ 输入问题、目标或下一步，我来接手。"
+                placeholder={t('projects.workspace.inputPlaceholder')}
                 className="min-h-[56px] max-h-[112px] w-full resize-none border-0 bg-transparent p-0 text-base leading-7 text-foreground outline-none placeholder:text-muted-foreground/90"
               />
 
@@ -253,10 +258,10 @@ export function ProjectWorkspacePage() {
                     type="button"
                     onClick={() => inputRef.current?.focus()}
                     className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-2 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-foreground"
-                    aria-label="添加文件"
+                    aria-label={t('projects.workspace.addFile')}
                   >
                     <Plus size={12} />
-                    <span>添加文件</span>
+                    <span>{t('projects.workspace.addFile')}</span>
                   </button>
 
                   <button
@@ -270,7 +275,7 @@ export function ProjectWorkspacePage() {
                     )}
                     disabled={!canCreateProjectSession}
                   >
-                    <span>发送</span>
+                    <span>{t('projects.workspace.send')}</span>
                     <SendHorizontal size={14} />
                   </button>
                 </div>
@@ -295,9 +300,9 @@ export function ProjectWorkspacePage() {
                     className="min-w-0 flex-1 text-left"
                     onClick={() => navigate('/chat', { state: { sessionId: session.session_id } })}
                   >
-                    <p className="text-[0.98rem] font-medium text-foreground">{getProjectSessionLabel(session)}</p>
+                    <p className="text-[0.98rem] font-medium text-foreground">{getProjectSessionLabel(t, session)}</p>
                     <p className="mt-0.5 text-[13px] text-muted-foreground">
-                      {new Date(session.updated_at).toLocaleString('zh-CN', {
+                      {new Date(session.updated_at).toLocaleString(t('common.locale'), {
                         month: '2-digit',
                         day: '2-digit',
                         hour: '2-digit',
@@ -314,7 +319,7 @@ export function ProjectWorkspacePage() {
                         setMenuSessionId((current) => current === session.session_id ? null : session.session_id)
                       }}
                       className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                      aria-label={`打开${getProjectSessionLabel(session)}的对话操作`}
+                      aria-label={t('common.actions.more')}
                       aria-expanded={menuSessionId === session.session_id}
                     >
                       <MoreHorizontal size={15} />
@@ -326,7 +331,7 @@ export function ProjectWorkspacePage() {
                         confirming={false}
                         disabled={deletingSessionId === session.session_id}
                         pending={deletingSessionId === session.session_id}
-                        pendingLabel="删除中"
+                        pendingLabel={t('common.processing')}
                         onRequestConfirm={() => {
                           setMenuSessionId(null)
                           setConfirmDeleteSessionId(session.session_id)
@@ -340,7 +345,7 @@ export function ProjectWorkspacePage() {
               ))}
               {!loading && projectSessions.length === 0 ? (
                 <div className="rounded-[20px] border border-dashed border-border bg-muted/12 px-4 py-5 text-sm text-muted-foreground">
-                  当前项目还没有关联对话，从上方输入框发起第一条对话后会出现在这里。
+                  {t('projects.workspace.noSessions')}
                 </div>
               ) : null}
             </div>
@@ -350,12 +355,12 @@ export function ProjectWorkspacePage() {
             <div className="space-y-1">
               <div className="overflow-hidden rounded-[28px] border border-border bg-card shadow-[0_14px_38px_rgba(15,23,42,0.05)]">
                 <PanelBlock
-                  title="项目约束"
+                  title={t('projects.workspace.panels.constraints')}
                   icon={<Plus size={18} />}
-                  actionLabel="添加说明"
+                  actionLabel={t('projects.workspace.panels.addConstraint')}
                   body={(
                     <div className="rounded-[20px] border border-dashed border-border bg-muted/20 px-4 py-5 text-sm leading-6 text-muted-foreground">
-                      {project?.description?.trim() || '暂无说明'}
+                      {displayProjectDescription.trim() || t('projects.workspace.panels.noDescription')}
                     </div>
                   )}
                 />
@@ -363,16 +368,16 @@ export function ProjectWorkspacePage() {
 
               <div className="overflow-hidden rounded-[28px] border border-border bg-card shadow-[0_14px_38px_rgba(15,23,42,0.05)]">
                 <PanelBlock
-                  title="Files"
+                  title={t('projects.workspace.panels.files')}
                   icon={<FilePlus2 size={18} />}
-                  actionLabel="添加文件"
+                  actionLabel={t('projects.workspace.panels.addFile')}
                   body={(
                     <div className="rounded-[20px] bg-muted/20 px-5 py-5 text-center">
                       <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-dashed border-border bg-background text-muted-foreground">
                         <FolderKanban size={20} />
                       </div>
                       <p className="mx-auto mt-3 max-w-[220px] text-sm leading-6 text-muted-foreground">
-                        添加项目文件
+                        {t('projects.workspace.panels.addFile')}
                       </p>
                     </div>
                   )}
@@ -381,9 +386,9 @@ export function ProjectWorkspacePage() {
 
               <div className="overflow-hidden rounded-[28px] border border-border bg-card shadow-[0_14px_38px_rgba(15,23,42,0.05)]">
                 <PanelBlock
-                  title="LLM 使用量"
+                  title={t('projects.workspace.panels.usage')}
                   icon={<Plus size={22} strokeWidth={2.2} />}
-                  actionLabel="查看用量详情"
+                  actionLabel={t('projects.workspace.panels.usageDetail')}
                   actionButtonClassName="h-10 w-10"
                   sectionClassName="flex flex-col"
                   bodyClassName="mt-4"
@@ -395,9 +400,9 @@ export function ProjectWorkspacePage() {
 
               <div className="overflow-hidden rounded-[28px] border border-border bg-card shadow-[0_14px_38px_rgba(15,23,42,0.05)]">
                 <PanelBlock
-                  title="Agents"
+                  title={t('projects.workspace.panels.agents')}
                   icon={<Plus size={18} />}
-                  actionLabel="添加 Agent"
+                  actionLabel={t('projects.workspace.panels.addAgent')}
                   bodyClassName="mt-[2px]"
                   body={(
                     <ProjectAgentsCard />
@@ -412,10 +417,10 @@ export function ProjectWorkspacePage() {
       {confirmingSession ? (
         <DangerConfirmMenu
           confirming
-          title="确认删除对话？"
+          title={t('sessions.delete.title')}
           disabled={deletingSessionId === confirmingSession.session_id}
           pending={deletingSessionId === confirmingSession.session_id}
-          pendingLabel="删除中"
+          pendingLabel={t('common.processing')}
           onRequestConfirm={() => undefined}
           onCancel={() => setConfirmDeleteSessionId(null)}
           onConfirm={() => void handleDeleteProjectSession(confirmingSession.session_id)}
@@ -457,11 +462,11 @@ function UsageChartCard() {
       <div className="flex flex-col">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="text-sm font-semibold text-foreground">用量统计</p>
-            <p className="mt-1 text-[11px] text-muted-foreground">近 14 天 token 趋势</p>
+            <p className="text-sm font-semibold text-foreground">{t('projects.workspace.panels.usage')}</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">{t('projects.workspace.panels.usageTrend')}</p>
           </div>
           <div className="text-right">
-            <p className="text-[11px] font-medium text-muted-foreground">今日用量</p>
+            <p className="text-[11px] font-medium text-muted-foreground">{t('projects.workspace.panels.todayUsage')}</p>
             <p className="text-[1.55rem] font-semibold tracking-tight text-foreground">
               {todayValue.toFixed(1)}M
             </p>

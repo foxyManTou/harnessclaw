@@ -1,4 +1,5 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   Check,
   ChevronDown,
@@ -158,9 +159,10 @@ function toPlainTextPreview(markdown: string): string {
     .trim()
 }
 
-function formatTimestamp(value?: number): string {
-  if (!value) return '尚未刷新'
-  return new Date(value).toLocaleString('zh-CN', {
+function formatTimestamp(value?: number, t?: (key: string) => string, i18n?: any): string {
+  if (!value) return t ? t('skills.repo.neverUpdated') : ''
+  const locale = i18n?.language === 'en' ? 'en-US' : 'zh-CN'
+  return new Date(value).toLocaleString(locale, {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -169,6 +171,7 @@ function formatTimestamp(value?: number): string {
 }
 
 export function SkillsPage() {
+  const { t, i18n } = useTranslation()
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [skillMarkdownMap, setSkillMarkdownMap] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
@@ -296,7 +299,7 @@ export function SkillsPage() {
     <div className="flex h-full flex-col overflow-hidden">
       <div className="titlebar-drag px-4 py-3 border-b border-border flex items-center gap-2 flex-shrink-0">
         <Puzzle size={16} className="text-foreground" aria-hidden="true" />
-        <span className="text-sm font-semibold text-foreground">技能</span>
+        <span className="text-sm font-semibold text-foreground">{t('skills.title')}</span>
         <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full">{skills.length}</span>
         <div className="flex-1" />
         <div className="titlebar-no-drag flex items-center gap-2">
@@ -305,7 +308,7 @@ export function SkillsPage() {
             className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
           >
             <PackagePlus size={13} />
-            Skill 市场
+            {t('skills.market')}
           </button>
           <div className="relative">
             <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
@@ -313,8 +316,8 @@ export function SkillsPage() {
               type="text"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="搜索..."
-              aria-label="搜索技能"
+              placeholder={t('skills.searchPlaceholder')}
+              aria-label={t('skills.searchAriaLabel')}
               className="pl-7 pr-2 py-1 text-xs rounded-md border border-border bg-card text-foreground placeholder:text-muted-foreground outline-none focus:ring-1 focus:ring-primary/40 w-32"
             />
           </div>
@@ -327,16 +330,16 @@ export function SkillsPage() {
             search ? (
               <div className="rounded-xl border border-dashed border-border p-8 text-center">
                 <Puzzle size={24} className="mx-auto mb-2 text-muted-foreground/30" aria-hidden="true" />
-                <p className="text-xs text-muted-foreground">没有匹配的技能</p>
+                <p className="text-xs text-muted-foreground">{t('skills.noMatch')}</p>
               </div>
             ) : (
               <div className="rounded-2xl border border-dashed border-border bg-card/80 px-6 py-10 text-center shadow-sm">
                 <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-border bg-muted/65">
                   <PackagePlus size={20} className="text-primary" aria-hidden="true" />
                 </div>
-                <h2 className="text-sm font-semibold text-foreground">这里还没有安装任何 Skill</h2>
+                <h2 className="text-sm font-semibold text-foreground">{t('skills.empty')}</h2>
                 <p className="mx-auto mt-2 max-w-md text-xs leading-6 text-muted-foreground">
-                  去 Skill 市场挑选需要的能力，安装后会立即出现在这里。第一次安装一个 Skill，就能开始扩展 HarnessClaw 的工作方式。
+                  {t('skills.emptyDesc')}
                 </p>
                 <div className="mt-5 flex items-center justify-center gap-2">
                   <button
@@ -344,9 +347,9 @@ export function SkillsPage() {
                     className="inline-flex items-center gap-1.5 rounded-xl bg-[#4B6BFB] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
                   >
                     <PackagePlus size={14} />
-                    前往 Skill 市场
+                    {t('skills.goToMarket')}
                   </button>
-                  <span className="text-[11px] text-muted-foreground">挑选并安装后，这里会自动出现</span>
+                  <span className="text-[11px] text-muted-foreground">{t('skills.autoAppear')}</span>
                 </div>
               </div>
             )
@@ -381,20 +384,20 @@ export function SkillsPage() {
                             disabled={deleting}
                             className="px-2 py-0.5 rounded-md text-[10px] font-medium bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors disabled:opacity-50"
                           >
-                            {deleting ? '...' : '确认'}
+                            {deleting ? '...' : t('skills.confirm')}
                           </button>
                           <button
                             onClick={() => setConfirmDeleteId(null)}
                             className="px-2 py-0.5 rounded-md text-[10px] font-medium text-muted-foreground hover:bg-muted transition-colors"
                           >
-                            取消
+                            {t('skills.cancel')}
                           </button>
                         </div>
                       ) : (
                         <button
                           onClick={() => setConfirmDeleteId(skill.id)}
-                          title="删除技能"
-                          aria-label={`删除技能 ${skill.name}`}
+                          title={t('skills.delete')}
+                          aria-label={`${t('skills.deleteAriaLabel')} ${skill.name}`}
                           className="p-1 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
                         >
                           <Trash2 size={12} aria-hidden="true" />
@@ -415,12 +418,12 @@ export function SkillsPage() {
                             <h3 className="truncate text-sm font-semibold text-foreground">{skill.name}</h3>
                             {skill.hasReferences && (
                               <span className="flex items-center gap-0.5 text-[10px] text-muted-foreground">
-                                <FolderOpen size={9} aria-hidden="true" /> refs
+                                <FolderOpen size={9} aria-hidden="true" /> {t('skills.refs')}
                               </span>
                             )}
                             {skill.hasTemplates && (
                               <span className="flex items-center gap-0.5 text-[10px] text-muted-foreground">
-                                <FileText size={9} aria-hidden="true" /> templates
+                                <FileText size={9} aria-hidden="true" /> {t('skills.templates')}
                               </span>
                             )}
                           </div>
@@ -437,7 +440,7 @@ export function SkillsPage() {
                           {plainTextPreview}
                         </p>
                       ) : (
-                        <p className="text-xs leading-5 text-muted-foreground">暂无内容</p>
+                        <p className="text-xs leading-5 text-muted-foreground">{t('skills.noContent')}</p>
                       )}
                     </div>
                   </div>
@@ -451,7 +454,7 @@ export function SkillsPage() {
           <>
             <button
               type="button"
-              aria-label="关闭技能详情"
+              aria-label={t('skills.closeDetail')}
               onClick={closeSelected}
               className="absolute inset-0 z-10 bg-background/42 transition-opacity"
             />
@@ -474,20 +477,20 @@ export function SkillsPage() {
                           disabled={deleting}
                           className="px-2.5 py-1 rounded-lg text-xs font-medium bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors disabled:opacity-50"
                         >
-                          {deleting ? '删除中...' : '确认删除'}
+                          {deleting ? t('skills.deleting') : t('skills.confirmDelete')}
                         </button>
                         <button
                           onClick={() => setConfirmDeleteId(null)}
                           className="px-2.5 py-1 rounded-lg text-xs font-medium text-muted-foreground hover:bg-muted transition-colors"
                         >
-                          取消
+                          {t('skills.cancel')}
                         </button>
                       </>
                     ) : (
                       <button
                         onClick={() => setConfirmDeleteId(selectedId)}
-                        title="删除技能"
-                        aria-label="删除技能"
+                        title={t('skills.delete')}
+                        aria-label={t('skills.delete')}
                         className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
                       >
                         <Trash2 size={14} aria-hidden="true" />
@@ -496,8 +499,8 @@ export function SkillsPage() {
 
                     <button
                       onClick={closeSelected}
-                      title="关闭"
-                      aria-label="关闭详情"
+                      title={t('skills.closeDetail')}
+                      aria-label={t('skills.closeDetail')}
                       className="p-1.5 rounded-lg hover:bg-muted transition-colors"
                     >
                       <X size={14} className="text-muted-foreground" aria-hidden="true" />
@@ -585,13 +588,13 @@ function SkillMarketOverlay({
   const refreshDiscovery = useCallback(async (repositoryId?: string) => {
     const result = await window.skills.discover(repositoryId)
     if (!result.ok || !result.started) {
-      pushNotice('error', result.error || '刷新任务启动失败')
+      pushNotice('error', result.error || t('skills.market.refreshStartFailed'))
       return result
     }
     setRefreshing(true)
     setRefreshingRepositoryId(repositoryId || 'all')
     return result
-  }, [pushNotice])
+  }, [pushNotice, t])
 
   useEffect(() => {
     return window.skills.onDiscoveryEvent((event) => {
@@ -611,23 +614,30 @@ function SkillMarketOverlay({
         if ((typedEvent.errorCount || 0) > 0) {
           pushNotice(
             'error',
-            `刷新完成：${typedEvent.successCount || 0}/${typedEvent.repositoryCount || 0} 个仓库成功，${typedEvent.errorCount || 0} 个失败`
+            t('skills.market.refreshProgress', {
+              success: typedEvent.successCount || 0,
+              total: typedEvent.repositoryCount || 0,
+              error: typedEvent.errorCount || 0
+            })
           )
           return
         }
 
         pushNotice(
           'success',
-          `发现结果已刷新：${typedEvent.repositoryCount || 0} 个仓库，${typedEvent.skillCount || 0} 个 skill`
+          t('skills.market.refreshSuccess', {
+            repos: typedEvent.repositoryCount || 0,
+            skills: typedEvent.skillCount || 0
+          })
         )
         return
       }
 
       setRefreshing(false)
       setRefreshingRepositoryId(null)
-      pushNotice('error', typedEvent.error || '后台刷新失败')
+      pushNotice('error', typedEvent.error || t('skills.market.refreshFailed'))
     })
-  }, [pushNotice, reloadCachedMarketData])
+  }, [pushNotice, reloadCachedMarketData, t])
 
   useEffect(() => {
     let active = true
@@ -720,7 +730,7 @@ function SkillMarketOverlay({
 
   const handleSaveRepository = useCallback(async () => {
     if (!repoForm.repoUrl.trim()) {
-      pushNotice('error', '先填写 GitHub 仓库地址')
+      pushNotice('error', t('skills.market.enterUrlFirst'))
       return
     }
 
@@ -742,7 +752,7 @@ function SkillMarketOverlay({
       })
 
       if (!result.ok || !result.repo) {
-        pushNotice('error', result.error || '保存仓库失败')
+        pushNotice('error', result.error || t('skills.market.saveRepoFailed'))
         return
       }
 
@@ -751,11 +761,11 @@ function SkillMarketOverlay({
       setSelectedRepoId(result.repo.id)
       setExpandedRepoIds((current) => Array.from(new Set([...current, result.repo!.id])))
       await reloadCachedMarketData()
-      pushNotice('success', '仓库已保存，发现结果保持当前缓存')
+      pushNotice('success', t('skills.market.repoSaved'))
     } finally {
       setSavingRepo(false)
     }
-  }, [pushNotice, reloadCachedMarketData, repoForm])
+  }, [pushNotice, reloadCachedMarketData, repoForm, t])
 
   const handleRefresh = useCallback(async () => {
     await refreshDiscovery()
@@ -768,27 +778,30 @@ function SkillMarketOverlay({
   const handleDeleteInstalledSkill = useCallback(async (skillId: string, skillName: string) => {
     const result = await window.skills.delete(skillId)
     if (!result.ok) {
-      pushNotice('error', result.error || '删除失败')
+      pushNotice('error', result.error || t('skills.market.deleteFailed'))
       return
     }
     await onInstalledChange()
-    pushNotice('success', `${skillName} 已删除`)
-  }, [onInstalledChange, pushNotice])
+    pushNotice('success', t('skills.market.skillDeleted', { name: skillName }))
+  }, [onInstalledChange, pushNotice, t])
 
   const handleInstallSkill = useCallback(async (skill: DiscoveredSkill) => {
     setInstallingKey(skill.key)
     try {
       const result = await window.skills.installDiscovered(skill.repoId, skill.skillPath)
       if (!result.ok) {
-        pushNotice('error', result.error || '安装失败')
+        pushNotice('error', result.error || t('skills.market.installFailed'))
         return
       }
       await onInstalledChange()
-      pushNotice('success', installedBySourceKey.has(skill.key) ? `${skill.name} 已重新安装` : `${skill.name} 已安装`)
+      pushNotice('success', installedBySourceKey.has(skill.key)
+        ? t('skills.market.skillReinstalled', { name: skill.name })
+        : t('skills.market.skillInstalled', { name: skill.name })
+      )
     } finally {
       setInstallingKey(null)
     }
-  }, [installedBySourceKey, onInstalledChange, pushNotice])
+  }, [installedBySourceKey, onInstalledChange, pushNotice, t])
 
   const handleEditRepository = useCallback((repository: SkillRepository) => {
     setManageOpen(true)
@@ -816,7 +829,7 @@ function SkillMarketOverlay({
         enabled: !repository.enabled,
       })
       if (!result.ok) {
-        pushNotice('error', result.error || '更新仓库失败')
+        pushNotice('error', result.error || t('skills.failed'))
         return
       }
       await reloadCachedMarketData()
@@ -830,15 +843,15 @@ function SkillMarketOverlay({
     try {
       const result = await window.skills.removeRepository(repositoryId)
       if (!result.ok) {
-        pushNotice('error', result.error || '删除仓库失败')
+        pushNotice('error', result.error || t('skills.market.deleteFailed'))
         return
       }
       await reloadCachedMarketData()
-      pushNotice('success', '仓库已移除，发现结果保持当前缓存')
+      pushNotice('success', t('skills.market.repoRemoved'))
     } finally {
       setBusyRepositoryId(null)
     }
-  }, [pushNotice, reloadCachedMarketData])
+  }, [pushNotice, reloadCachedMarketData, t])
 
   const toggleRepositoryExpand = useCallback((repositoryId: string) => {
     setExpandedRepoIds((current) => (
@@ -858,18 +871,18 @@ function SkillMarketOverlay({
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h1 className="text-[18px] font-semibold text-foreground">Skill 市场</h1>
+                  <h1 className="text-[18px] font-semibold text-foreground">{t('skills.market.title')}</h1>
                   <button
                     onClick={onClose}
                     className="titlebar-no-drag inline-flex items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs text-foreground transition-colors hover:bg-muted"
                   >
-                    返回 Skill
+                    {t('skills.market.back')}
                   </button>
                   <button
                     onClick={() => setManageOpen((value) => !value)}
                     className="titlebar-no-drag inline-flex items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs text-foreground transition-colors hover:bg-muted"
                   >
-                    管理仓库
+                    {t('skills.repo.manage')}
                   </button>
                   <button
                     onClick={handleRefresh}
@@ -877,14 +890,14 @@ function SkillMarketOverlay({
                     className="titlebar-no-drag inline-flex items-center gap-1 rounded-lg bg-[#4B6BFB] px-2.5 py-1.5 text-xs text-white transition-opacity hover:opacity-90 disabled:opacity-60"
                   >
                     <RefreshCcw size={12} className={cn(refreshing && 'animate-spin')} />
-                    刷新发现
+                    {t('skills.repo.refreshDiscovery')}
                   </button>
                 </div>
               </div>
               <button
                 onClick={onClose}
                 className="titlebar-no-drag rounded-lg border border-border bg-card p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                aria-label="关闭 skill 市场"
+                aria-label={t('skills.market.closeMarket')}
               >
                 <X size={15} />
               </button>
@@ -893,20 +906,20 @@ function SkillMarketOverlay({
             <div className="mt-4 rounded-2xl border border-border/80 bg-card px-4 py-4 shadow-sm">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-foreground">按仓库浏览，默认直接安装到当前 CLI</p>
+                  <p className="text-sm font-medium text-foreground">{t('skills.repo.browseByRepo')}</p>
                   <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                    现在市场页默认将技能安装到本机 `~/.harnessclaw/workspace/skills`。若需要限定扫描范围，在“管理仓库”中填写路径。
+                    {t('skills.repo.browseByRepoDesc')}
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <span className="rounded-full border border-border bg-background px-3 py-1 text-[11px] text-muted-foreground">
-                    已启用仓库 {repositories.filter((item) => item.enabled).length} / {repositories.length}
+                    {t('skills.enabledRepos')} {repositories.filter((item) => item.enabled).length} / {repositories.length}
                   </span>
                   <span className="rounded-full border border-border bg-background px-3 py-1 text-[11px] text-muted-foreground">
-                    已安装 {installedSkills.length}
+                    {t('skills.installed')} {installedSkills.length}
                   </span>
                   <span className="rounded-full border border-border bg-background px-3 py-1 text-[11px] text-muted-foreground">
-                    发现技能 {discoveredSkills.length}
+                    {t('skills.discoveredCount')} {discoveredSkills.length}
                   </span>
                 </div>
               </div>
@@ -930,7 +943,7 @@ function SkillMarketOverlay({
                           <input
                             value={search}
                             onChange={(event) => setSearch(event.target.value)}
-                            placeholder="搜索技能、仓库、目录"
+                            placeholder={t('skills.searchMarketPlaceholder')}
                             className="w-full rounded-xl border border-border bg-background py-2 pl-9 pr-3 text-sm text-foreground outline-none transition-colors focus:border-foreground/25"
                           />
                         </div>
@@ -941,7 +954,7 @@ function SkillMarketOverlay({
                             onChange={(event) => setSelectedRepoId(event.target.value)}
                             className="w-full appearance-none rounded-xl border border-border bg-background px-3 py-2 pr-9 text-sm text-foreground outline-none transition-colors focus:border-foreground/25"
                           >
-                            <option value="all">全部仓库</option>
+                            <option value="all">{t('skills.allRepos')}</option>
                             {enabledRepositories.map((repository) => (
                               <option key={repository.id} value={repository.id}>{repository.name}</option>
                             ))}
@@ -958,7 +971,7 @@ function SkillMarketOverlay({
                               : 'border-border bg-background text-muted-foreground hover:text-foreground'
                           )}
                         >
-                          <span>仅显示可安装</span>
+                          <span>{t('skills.onlyInstallable')}</span>
                           <span className={cn(
                             'relative inline-flex h-5 w-9 items-center rounded-full transition-colors',
                             onlyInstallable ? 'bg-[#4B6BFB]' : 'bg-muted'
@@ -979,11 +992,11 @@ function SkillMarketOverlay({
                             <div className="mb-3 inline-flex rounded-md border border-border bg-card p-3">
                               <Puzzle size={18} className="text-muted-foreground" />
                             </div>
-                            <p className="text-sm font-medium text-foreground">还没有可发现的 skill</p>
+                            <p className="text-sm font-medium text-foreground">{t('skills.noDiscovered')}</p>
                             <p className="mt-2 text-sm text-muted-foreground">
                               {repositories.length === 0
-                                ? '先添加 GitHub 仓库，再进行刷新发现。'
-                                : '可以检查仓库地址、分支和扫描路径后重新刷新。'}
+                                ? t('skills.noReposDesc')
+                                : t('skills.checkRepoDesc')}
                             </p>
                           </div>
                         </div>
@@ -1011,15 +1024,15 @@ function SkillMarketOverlay({
                                         {repository.owner}/{repository.repo}
                                       </button>
                                       <span className="rounded-full bg-foreground px-2.5 py-1 text-[10px] text-background">
-                                        {skills.length} 个技能
+                                        {skills.length} {t('skills.skillUnit')}
                                       </span>
                                       <span className="text-[11px] text-[#3552D6]">
-                                        可安装 {skills.length - installedCount}
+                                        {t('skills.canInstallUnit')} {skills.length - installedCount}
                                       </span>
                                     </div>
                                     <p className="mt-1 text-xs text-muted-foreground">
                                       {repository.repoUrl}
-                                      <span className="ml-2">branch: {repository.branch}</span>
+                                      <span className="ml-2">{t('skills.repo.branchLabel')} {repository.branch}</span>
                                     </p>
                                   </div>
                                 </div>
@@ -1028,9 +1041,9 @@ function SkillMarketOverlay({
                                   <div className="mt-3 space-y-2">
                                     {skills.length === 0 ? (
                                       <div className="rounded-2xl border border-dashed border-border bg-card px-4 py-6 text-center">
-                                        <p className="text-sm font-medium text-foreground">仓库已配置</p>
+                                        <p className="text-sm font-medium text-foreground">{t('skills.repoConfigured')}</p>
                                         <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                                          当前还没有发现到 skill。可以检查分支、扫描路径，或点击“刷新发现”拉取该仓库最新内容。
+                                          {t('skills.noSkillFoundDesc')}
                                         </p>
                                       </div>
                                     ) : (
@@ -1045,7 +1058,7 @@ function SkillMarketOverlay({
                                               <div className="min-w-0 flex-1">
                                                 <div className="flex flex-wrap items-center gap-2">
                                                   <span className="text-[15px] font-semibold text-foreground">{skill.name}</span>
-                                                  <span className="text-[10px] text-muted-foreground">{installed ? '已安装' : '未安装'}</span>
+                                                  <span className="text-[10px] text-muted-foreground">{installed ? t('skills.installed') : t('skills.notInstalled')}</span>
                                                 </div>
                                                 <p className="mt-2 text-[11px] text-muted-foreground">{skill.skillPath}</p>
                                               </div>
@@ -1057,7 +1070,7 @@ function SkillMarketOverlay({
                                                     className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-background px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-muted"
                                                   >
                                                     <Trash2 size={12} />
-                                                    删除
+                                                    {t('skills.delete')}
                                                   </button>
                                                 )}
                                                 <button
@@ -1066,7 +1079,7 @@ function SkillMarketOverlay({
                                                   className="inline-flex items-center gap-1.5 rounded-xl bg-[#4B6BFB] px-3 py-2 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-60"
                                                 >
                                                   {installingKey === skill.key ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
-                                                  {installed ? '重新安装' : '安装到本机'}
+                                                  {installed ? t('skills.reinstall') : t('skills.installToLocal')}
                                                 </button>
                                               </div>
                                             </div>
@@ -1179,16 +1192,16 @@ function RepositorySettingsModal({
         >
           <div className="flex items-start justify-between gap-4 border-b border-border/80 px-5 py-4">
             <div className="min-w-0">
-              <h2 className="text-[18px] font-semibold text-foreground">Skill 仓库</h2>
+              <h2 className="text-[18px] font-semibold text-foreground">{t('skills.repo.title')}</h2>
               <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                启用后的仓库会参与发现。刷新发现只会更新远端仓库索引，不会动你的原始仓库；需要限制扫描范围时，可填写扫描路径。代理仅作用于 skill 仓库的拉取与刷新。
+                {t('skills.repo.desc')}
               </p>
             </div>
             <button
               onClick={onClose}
               className="titlebar-no-drag rounded-xl border border-border bg-card px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-muted"
             >
-              关闭
+              {t('skills.repo.close')}
             </button>
           </div>
 
@@ -1196,21 +1209,21 @@ function RepositorySettingsModal({
             <div className="rounded-2xl border border-border/80 bg-card/95 p-4 shadow-sm">
               <div className="mb-4 flex items-start justify-between gap-4">
                 <div>
-                  <div className="text-sm font-medium text-foreground">添加仓库</div>
+                  <div className="text-sm font-medium text-foreground">{t('skills.repo.add')}</div>
                   <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
-                    保留一个主输入即可开始添加；分支、显示名称、扫描路径和代理放在高级设置里，避免表单过挤。
+                    {t('skills.repo.addDesc')}
                   </p>
                 </div>
               </div>
 
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                  <span>Git URL</span>
+                  <span>{t('skills.repo.url')}</span>
                   <button
                     onClick={() => setAdvancedOpen((value) => !value)}
                     className="inline-flex items-center gap-1 rounded-full border border-border bg-card px-3 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                   >
-                    高级设置
+                    {t('skills.repo.advanced')}
                     <ChevronDown size={12} className={cn('transition-transform', advancedOpen && 'rotate-180')} />
                   </button>
                 </div>
@@ -1227,7 +1240,7 @@ function RepositorySettingsModal({
                     className="inline-flex flex-shrink-0 items-center gap-2 rounded-xl bg-[#4B6BFB] px-4 py-2.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-60"
                   >
                     {savingRepo ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
-                    {repoForm.id ? '更新仓库' : '添加仓库'}
+                    {repoForm.id ? t('skills.repo.update') : t('skills.repo.add')}
                   </button>
                 </div>
               </div>
@@ -1236,30 +1249,30 @@ function RepositorySettingsModal({
                 <div className="mt-3 rounded-2xl border border-border/80 bg-background/72 p-3">
                   <div className="grid gap-3 lg:grid-cols-3">
                     <label className="space-y-1.5 text-xs text-muted-foreground">
-                      <span>Branch</span>
+                      <span>{t('skills.repo.branch')}</span>
                       <input
                         value={repoForm.branch}
                         onChange={(event) => onChangeRepoForm((value) => ({ ...value, branch: event.target.value }))}
                         placeholder="main"
                         className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm text-foreground outline-none transition-colors focus:border-foreground/25"
                       />
-                      <p className="text-[11px] text-muted-foreground">默认 `main`，也支持自定义分支。</p>
+                      <p className="text-[11px] text-muted-foreground">{t('skills.repo.branchDesc')}</p>
                     </label>
                     <label className="space-y-1.5 text-xs text-muted-foreground">
-                      <span>显示名称</span>
+                      <span>{t('skills.repo.name')}</span>
                       <input
                         value={repoForm.name}
                         onChange={(event) => onChangeRepoForm((value) => ({ ...value, name: event.target.value }))}
-                        placeholder="可选"
+                        placeholder={t('skills.repo.namePlaceholder')}
                         className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm text-foreground outline-none transition-colors focus:border-foreground/25"
                       />
                     </label>
                     <label className="space-y-1.5 text-xs text-muted-foreground">
-                      <span>扫描路径</span>
+                      <span>{t('skills.repo.path')}</span>
                       <input
                         value={repoForm.basePath}
                         onChange={(event) => onChangeRepoForm((value) => ({ ...value, basePath: event.target.value }))}
-                        placeholder="可选，例如 skills"
+                        placeholder={t('skills.repo.pathPlaceholder')}
                         className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm text-foreground outline-none transition-colors focus:border-foreground/25"
                       />
                     </label>
@@ -1268,9 +1281,9 @@ function RepositorySettingsModal({
                   <div className="mt-3 rounded-2xl border border-border/80 bg-card/85 p-3">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div>
-                        <div className="text-xs font-medium text-foreground">代理下载</div>
+                        <div className="text-xs font-medium text-foreground">{t('skills.repo.proxy')}</div>
                         <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
-                          开启后，Skill 仓库的 clone、fetch、ls-remote 都会通过这里的代理地址访问。
+                          {t('skills.repo.proxyDesc')}
                         </p>
                       </div>
                       <button
@@ -1282,7 +1295,7 @@ function RepositorySettingsModal({
                           'relative inline-flex h-7 w-11 items-center rounded-full transition-colors',
                           repoForm.proxy.enabled ? 'bg-[#3552D6]' : 'bg-muted'
                         )}
-                        aria-label={repoForm.proxy.enabled ? '关闭代理' : '开启代理'}
+                        aria-label={repoForm.proxy.enabled ? t('skills.repo.proxyLabel') : t('skills.repo.proxyLabel')}
                       >
                         <span
                           className={cn(
@@ -1296,7 +1309,7 @@ function RepositorySettingsModal({
                     {repoForm.proxy.enabled && (
                       <div className="mt-3 grid gap-3 lg:grid-cols-4">
                         <label className="space-y-1.5 text-xs text-muted-foreground">
-                          <span>协议</span>
+                          <span>{t('skills.repo.proxyProtocol')}</span>
                           <select
                             value={repoForm.proxy.protocol}
                             onChange={(event) => onChangeRepoForm((value) => ({
@@ -1311,7 +1324,7 @@ function RepositorySettingsModal({
                           </select>
                         </label>
                         <label className="space-y-1.5 text-xs text-muted-foreground lg:col-span-2">
-                          <span>主机</span>
+                          <span>{t('skills.repo.proxyHost')}</span>
                           <input
                             value={repoForm.proxy.host}
                             onChange={(event) => onChangeRepoForm((value) => ({
@@ -1323,7 +1336,7 @@ function RepositorySettingsModal({
                           />
                         </label>
                         <label className="space-y-1.5 text-xs text-muted-foreground">
-                          <span>端口</span>
+                          <span>{t('skills.repo.proxyPort')}</span>
                           <input
                             value={repoForm.proxy.port}
                             onChange={(event) => onChangeRepoForm((value) => ({
@@ -1343,14 +1356,14 @@ function RepositorySettingsModal({
 
             <div>
               <div className="mb-2 flex items-center justify-between gap-3">
-                <h3 className="text-sm font-medium text-foreground">仓库列表</h3>
-                <span className="text-[11px] text-muted-foreground">{repositories.length} 个</span>
+                <h3 className="text-sm font-medium text-foreground">{t('skills.repo.list')}</h3>
+                <span className="text-[11px] text-muted-foreground">{repositories.length} {t('skills.repo.unit')}</span>
               </div>
 
               <div className="space-y-2">
                 {repositories.length === 0 ? (
                   <div className="rounded-2xl border border-dashed border-border bg-card/70 px-4 py-8 text-center text-sm text-muted-foreground">
-                    还没有配置任何 skill 仓库。
+                    {t('skills.repo.noRepos')}
                   </div>
                 ) : (
                   repositories.map((repository) => (
@@ -1367,10 +1380,10 @@ function RepositorySettingsModal({
                             <Github size={13} className="text-muted-foreground" />
                           </div>
                           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-                            <span>branch: {repository.branch}</span>
-                            <span>更新 {formatTimestamp(repository.lastDiscoveredAt)}</span>
-                            {repository.basePath ? <span>扫描路径 {repository.basePath}</span> : null}
-                            {formatRepositoryProxy(repository.proxy) ? <span>代理 {formatRepositoryProxy(repository.proxy)}</span> : null}
+                            <span>{t('skills.repo.branchLabel')} {repository.branch}</span>
+                            <span>{t('skills.repo.lastUpdate')} {formatTimestamp(repository.lastDiscoveredAt, t, i18n)}</span>
+                            {repository.basePath ? <span>{t('skills.repo.pathLabel')} {repository.basePath}</span> : null}
+                            {formatRepositoryProxy(repository.proxy) ? <span>{t('skills.repo.proxyLabel')} {formatRepositoryProxy(repository.proxy)}</span> : null}
                           </div>
                           {repository.lastError && (
                             <p className="mt-1 text-[11px] text-destructive">{repository.lastError}</p>
@@ -1384,10 +1397,10 @@ function RepositorySettingsModal({
                             className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-background px-3 py-2 text-xs text-foreground transition-colors hover:bg-muted disabled:opacity-60"
                           >
                             <RefreshCcw size={12} className={cn(isRefreshingThisRepository && 'animate-spin')} />
-                            刷新仓库
+                            {t('skills.repo.refresh')}
                           </button>
                           <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                            <span>启用</span>
+                            <span>{t('skills.repo.enabled')}</span>
                             <button
                               onClick={() => onToggleRepository(repository)}
                               disabled={busyRepositoryId === repository.id}
@@ -1395,7 +1408,7 @@ function RepositorySettingsModal({
                                 'relative inline-flex h-7 w-10 items-center rounded-full transition-colors disabled:opacity-60',
                                 repository.enabled ? 'bg-[#3552D6]' : 'bg-muted'
                               )}
-                              aria-label={`${repository.enabled ? '停用' : '启用'}仓库 ${repository.name}`}
+                              aria-label={`${repository.enabled ? t('skills.repo.enabled') : t('skills.repo.disabled')} ${repository.name}`}
                             >
                               <span
                                 className={cn(
@@ -1410,7 +1423,7 @@ function RepositorySettingsModal({
                             disabled={busyRepositoryId === repository.id}
                             className="rounded-xl border border-border bg-background px-3 py-2 text-xs text-foreground transition-colors hover:bg-muted disabled:opacity-60"
                           >
-                            删除
+                            {t('skills.delete')}
                           </button>
                         </div>
                       </div>

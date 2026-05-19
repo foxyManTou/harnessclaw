@@ -1,5 +1,6 @@
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
+import { useTranslation } from 'react-i18next'
 import { cn } from '../../lib/utils'
 
 interface AvatarLightboxProps {
@@ -29,6 +30,7 @@ export function AvatarLightbox({
   imgClassName,
   nested = false,
 }: AvatarLightboxProps) {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
 
   useEffect(() => {
@@ -65,7 +67,7 @@ export function AvatarLightbox({
         <span
           role="button"
           tabIndex={0}
-          aria-label={`查看头像：${alt}`}
+          aria-label={t('ui.viewAvatar', { name: alt })}
           onClick={handleOpen}
           onKeyDown={(event) => {
             if (event.key === 'Enter' || event.key === ' ') {
@@ -79,7 +81,7 @@ export function AvatarLightbox({
       ) : (
         <button
           type="button"
-          aria-label={`查看头像：${alt}`}
+          aria-label={t('ui.viewAvatar', { name: alt })}
           onClick={handleOpen}
           className={triggerCls}
         >

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { CheckSquare, Copy, FolderMinus, FolderPlus, MessageSquare, MoreHorizontal, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { getProjectDisplayDescription, getProjectDisplayName } from '@/lib/projectDisplay'
 import { ConfirmDeleteSessionDialog } from '../common/ConfirmDeleteSessionDialog'
 
 interface SessionRow extends DbSessionRow {
@@ -34,13 +36,14 @@ const FLOATING_MENU_HEIGHT = 120
 const FLOATING_MENU_GAP = 6
 const VIEWPORT_PADDING = 12
 
-function getSessionLabel(title: string, sessionId: string): string {
+function getSessionLabel(title: string, sessionId: string, t: (key: string) => string): string {
   const trimmed = title.trim()
   if (trimmed) return trimmed
-  return `对话 ${sessionId.slice(0, 8)}`
+  return `${t('sessions.sessionLabel')} ${sessionId.slice(0, 8)}`
 }
 
 export function SessionsPage() {
+  const { t, i18n } = useTranslation()
   const navigate = useNavigate()
   const [sessions, setSessions] = useState<SessionRow[]>([])
   const [search, setSearch] = useState('')
@@ -152,10 +155,10 @@ export function SessionsPage() {
     const keyword = search.trim().toLowerCase()
     if (!keyword) return sessions
     return sessions.filter((session) => {
-      const label = getSessionLabel(session.title, session.session_id).toLowerCase()
+      const label = getSessionLabel(session.title, session.session_id, t).toLowerCase()
       return label.includes(keyword) || session.session_id.toLowerCase().includes(keyword)
     })
-  }, [search, sessions])
+  }, [search, sessions, t])
 
   const projectMap = useMemo(() => {
     const map = new Map<string, string>()
@@ -310,7 +313,7 @@ export function SessionsPage() {
     if (selectedSessions.length === 0) return
 
     const text = selectedSessions.map((session, index) => (
-      `${index + 1}. ${getSessionLabel(session.title, session.session_id)}\nID: ${session.session_id}\n消息: ${session.messageCount} 条`
+      `${index + 1}. ${getSessionLabel(session.title, session.session_id, t)}\nID: ${session.session_id}\n${t('sessions.header.session')}: ${session.messageCount} ${t('sessions.messageCount', { n: '' }).trim()}`
     )).join('\n\n')
 
     try {
@@ -354,64 +357,74 @@ export function SessionsPage() {
     <>
       <div className="flex h-full min-h-0 flex-col px-6 pt-6 pb-6">
         <div className="mb-6 flex items-center justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-semibold text-foreground">对话</h2>
-            <p className="mt-1 text-sm text-muted-foreground">查看历史会话，或继续最近的上下文。</p>
+          <div className="flex flex-col gap-1">
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">
+              {t('sessions.title')}
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              {t('sessions.subtitle')}
+            </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <Search
-                size={14}
-                className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
-              />
+          <div className="flex items-center gap-3">
+            <div className="relative group">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground group-focus-within:text-primary transition-colors" />
               <input
+                type="text"
+                placeholder={t('sessions.searchPlaceholder')}
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="搜索对话..."
-                className="w-52 rounded-lg border border-border bg-background py-1.5 pl-8 pr-3 text-sm outline-none transition-colors focus:border-primary"
+                className="pl-10 pr-4 py-2 w-64 bg-background/50 border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
               />
             </div>
             <button
               onClick={multiSelectMode ? exitMultiSelectMode : handleEnterMultiSelectMode}
               disabled={sessions.length === 0}
               className={cn(
-                'inline-flex h-9 w-9 items-center justify-center rounded-lg border text-sm font-medium transition-colors',
+                "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all",
                 multiSelectMode
-                  ? 'border-foreground/10 bg-accent text-foreground hover:bg-accent/80'
-                  : 'border-border bg-background text-foreground hover:bg-accent',
-                sessions.length === 0 && 'cursor-not-allowed opacity-50'
+                  ? "bg-primary/10 text-primary border border-primary/20"
+                  : "bg-background/50 border border-border text-muted-foreground hover:text-foreground hover:border-foreground/20",
+                sessions.length === 0 && "cursor-not-allowed opacity-50"
               )}
-              aria-label={multiSelectMode ? '退出多选' : '选择多个'}
-              title={multiSelectMode ? '退出多选' : '选择多个'}
             >
-              <CheckSquare size={14} />
+              {multiSelectMode ? (
+                <>
+                  <X className="h-4 w-4" />
+                  {t('sessions.exitMultiSelect')}
+                </>
+              ) : (
+                <>
+                  <CheckSquare className="h-4 w-4" />
+                  {t('sessions.enterMultiSelect')}
+                </>
+              )}
             </button>
             <button
               onClick={handleStartChat}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-foreground px-3 py-1.5 text-sm font-medium text-background transition-opacity hover:opacity-90 dark:bg-primary dark:text-primary-foreground"
+              className="flex items-center gap-2 bg-foreground text-background px-4 py-2 rounded-xl text-sm font-medium hover:opacity-90 transition-all active:scale-95 shadow-sm dark:bg-primary dark:text-primary-foreground"
             >
-              <Plus size={14} />
-              新建对话
+              <Plus className="h-4 w-4" />
+              {t('sessions.newSession')}
             </button>
           </div>
         </div>
 
         {loading ? (
           <div className="flex flex-1 items-center justify-center">
-            <p className="text-sm text-muted-foreground">加载中...</p>
+            <p className="text-sm text-muted-foreground">{t('sessions.loading')}</p>
           </div>
         ) : filteredSessions.length === 0 ? (
           <div className="flex flex-1 items-center justify-center">
-            <div className="text-center">
-              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-accent">
-                <MessageSquare size={20} className="text-muted-foreground" />
+            <div className="flex h-full flex-col items-center justify-center p-8 text-center">
+              <div className="mb-4 rounded-full bg-accent/50 p-4">
+                <MessageSquare className="h-8 w-8 text-muted-foreground" />
               </div>
-              <p className="text-sm text-foreground">
-                {sessions.length === 0 ? '还没有对话记录' : '没有匹配的对话'}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {sessions.length === 0 ? '开始一次新的对话后，这里会出现历史记录。' : '换个关键词再试试。'}
+              <h3 className="mb-2 text-lg font-semibold text-foreground">
+                {search ? t('sessions.noMatch') : t('sessions.noHistory')}
+              </h3>
+              <p className="max-w-[280px] text-sm text-muted-foreground">
+                {search ? t('sessions.noMatchDesc') : t('sessions.noHistoryDesc')}
               </p>
             </div>
           </div>
@@ -425,11 +438,11 @@ export function SessionsPage() {
                   : 'grid-cols-[minmax(0,1.6fr)_minmax(0,0.8fr)_140px_56px]'
               )}
             >
-              {multiSelectMode && <span className="text-center">选择</span>}
-              <span>{multiSelectMode ? '已选对话' : '对话'}</span>
-              <span>项目</span>
-              <span>最近更新</span>
-              <span className="text-right">操作</span>
+              {multiSelectMode && <span className="text-center">{t('sessions.header.select')}</span>}
+              <span>{multiSelectMode ? t('sessions.header.selectedSession') : t('sessions.header.session')}</span>
+              <span>{t('sessions.header.project')}</span>
+              <span>{t('sessions.header.lastUpdated')}</span>
+              <span className="text-right">{t('sessions.header.actions')}</span>
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto divide-y divide-border">
@@ -455,7 +468,7 @@ export function SessionsPage() {
                         type="button"
                         onClick={() => toggleSessionSelection(session.session_id)}
                         className="absolute inset-y-0 left-0 z-10 w-[68px] rounded-l-lg"
-                        aria-label={`选择 ${getSessionLabel(session.title, session.session_id)}`}
+                        aria-label={`${t('sessions.header.select')} ${getSessionLabel(session.title, session.session_id, t)}`}
                       />
                     )}
 
@@ -504,10 +517,10 @@ export function SessionsPage() {
                       ) : (
                         <>
                           <p className="truncate text-sm font-medium text-foreground">
-                            {getSessionLabel(session.title, session.session_id)}
+                            {getSessionLabel(session.title, session.session_id, t)}
                           </p>
                           <div className="mt-0.5 flex items-center text-xs text-muted-foreground">
-                            <span>{session.messageCount} 条消息</span>
+                            <span>{t('sessions.messageCount', { n: session.messageCount })}</span>
                           </div>
                         </>
                       )}
@@ -528,9 +541,9 @@ export function SessionsPage() {
                         type="button"
                         onClick={() => toggleSessionSelection(session.session_id)}
                         className="flex h-full w-full items-center rounded-lg text-left text-xs text-muted-foreground transition-colors hover:bg-accent/60"
-                        aria-label={`选择 ${getSessionLabel(session.title, session.session_id)} 的时间区域`}
+                        aria-label={t('sessions.multiSelect.ariaTimeRegion', { name: getSessionLabel(session.title, session.session_id, t) })}
                       >
-                        {new Date(session.updated_at).toLocaleString('zh-CN', {
+                        {new Date(session.updated_at).toLocaleString(i18n.language === 'en' ? 'en-US' : 'zh-CN', {
                           month: 'numeric',
                           day: 'numeric',
                           hour: '2-digit',
@@ -539,7 +552,7 @@ export function SessionsPage() {
                       </button>
                     ) : (
                       <div className="flex items-center text-xs text-muted-foreground">
-                        {new Date(session.updated_at).toLocaleString('zh-CN', {
+                        {new Date(session.updated_at).toLocaleString(i18n.language === 'en' ? 'en-US' : 'zh-CN', {
                           month: 'numeric',
                           day: 'numeric',
                           hour: '2-digit',
@@ -568,7 +581,7 @@ export function SessionsPage() {
                             ? 'cursor-not-allowed opacity-35'
                             : 'hover:bg-accent hover:text-foreground'
                         )}
-                        aria-label="更多操作"
+                        aria-label={t('sessions.actions.more')}
                       >
                         <MoreHorizontal size={15} />
                       </button>
@@ -582,7 +595,7 @@ export function SessionsPage() {
               <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-4 pb-4">
                 <div className="pointer-events-auto flex items-center justify-between gap-4 rounded-2xl border border-border bg-card px-4 py-3 shadow-[0_16px_40px_rgba(15,23,42,0.14)]">
                   <div className="text-sm text-foreground">
-                    <span className="font-medium">已选择 {selectedCount} 个对话</span>
+                    <span className="font-medium">{t('sessions.multiSelect.selectedCount', { n: selectedCount })}</span>
                   </div>
 
                   <div className="flex items-center gap-2">
@@ -595,11 +608,11 @@ export function SessionsPage() {
                         ? 'cursor-not-allowed border-border text-muted-foreground opacity-50'
                         : 'border-border bg-background text-foreground hover:bg-accent'
                     )}
-                    aria-label="复制所选对话"
-                    title="复制"
+                    aria-label={t('sessions.multiSelect.copyTooltip')}
+                    title={t('sessions.multiSelect.copy')}
                   >
-                    <Copy size={14} />
-                    复制
+                    <CircleCheck size={14} />
+                    {t('sessions.multiSelect.copy')}
                   </button>
                   <button
                     onClick={() => {
@@ -613,17 +626,17 @@ export function SessionsPage() {
                         ? 'cursor-not-allowed border-border text-muted-foreground opacity-50'
                         : 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300 dark:hover:bg-red-950/30'
                     )}
-                    aria-label="删除所选对话"
-                    title="删除"
+                    aria-label={t('sessions.multiSelect.deleteTooltip')}
+                    title={t('sessions.multiSelect.delete')}
                   >
                     <Trash2 size={14} />
-                    删除
+                    {t('sessions.multiSelect.delete')}
                   </button>
                   <button
                     onClick={exitMultiSelectMode}
                     className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                    aria-label="关闭多选模式"
-                    title="关闭"
+                    aria-label={t('sessions.multiSelect.closeTooltip')}
+                    title={t('sessions.multiSelect.close')}
                   >
                     <X size={16} />
                   </button>
@@ -644,13 +657,13 @@ export function SessionsPage() {
           <button
             onClick={() => {
               setRenamingSessionId(activeMenuSession.session_id)
-              setRenameValue(getSessionLabel(activeMenuSession.title, activeMenuSession.session_id))
+              setRenameValue(getSessionLabel(activeMenuSession.title, activeMenuSession.session_id, t))
               setMenuState(null)
             }}
             className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
           >
             <Pencil size={14} />
-            重命名
+            {t('sessions.actions.rename')}
           </button>
           {activeMenuSession.project_id ? (
             <button
@@ -661,7 +674,7 @@ export function SessionsPage() {
               className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
             >
               <FolderMinus size={14} />
-              退出项目
+              {t('sessions.actions.exitProject')}
             </button>
           ) : (
             <button
@@ -672,7 +685,7 @@ export function SessionsPage() {
               className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
             >
               <FolderPlus size={14} />
-              加入项目
+              {t('sessions.actions.joinProject')}
             </button>
           )}
           <button
@@ -680,14 +693,14 @@ export function SessionsPage() {
               setDeleteConfirm({
                 kind: 'single',
                 sessionId: activeMenuSession.session_id,
-                title: getSessionLabel(activeMenuSession.title, activeMenuSession.session_id),
+                title: getSessionLabel(activeMenuSession.title, activeMenuSession.session_id, t),
               })
               setMenuState(null)
             }}
             className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-600 transition-colors hover:bg-red-50 dark:hover:bg-red-950/20"
           >
             <Trash2 size={14} />
-            删除
+            {t('sessions.actions.delete')}
           </button>
         </div>,
         document.body
@@ -702,15 +715,17 @@ export function SessionsPage() {
           />
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-4">
             <div className="pointer-events-auto w-full max-w-sm rounded-2xl border border-border bg-card p-5 shadow-2xl">
-              <h3 className="mb-1 text-base font-semibold text-foreground">加入项目</h3>
-              <p className="mb-3 text-xs text-muted-foreground">选择要将此对话归入的项目</p>
+              <h3 className="mb-1 text-base font-semibold text-foreground">{t('sessions.assignProject.title')}</h3>
+              <p className="mb-3 text-xs text-muted-foreground">{t('sessions.assignProject.subtitle')}</p>
 
               {projects.length === 0 ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">暂无可用项目</p>
+                <p className="py-6 text-center text-sm text-muted-foreground">{t('sessions.assignProject.noProjects')}</p>
               ) : (
                 <div className="max-h-60 overflow-y-auto rounded-xl border border-border">
                   {projects.map((project) => {
                     const isCurrentProject = sessions.find((s) => s.session_id === assignDialog.sessionId)?.project_id === project.project_id
+                    const displayName = getProjectDisplayName(project, t)
+                    const displayDescription = getProjectDisplayDescription(project, t)
                     return (
                       <button
                         key={project.project_id}
@@ -724,13 +739,13 @@ export function SessionsPage() {
                         )}
                       >
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium text-foreground">{project.name}</p>
-                          {project.description && (
-                            <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{project.description}</p>
+                          <p className="truncate text-sm font-medium text-foreground">{displayName}</p>
+                          {displayDescription && (
+                            <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{displayDescription}</p>
                           )}
                         </div>
                         {isCurrentProject && (
-                          <span className="mt-0.5 shrink-0 text-xs text-primary">当前</span>
+                          <span className="mt-0.5 shrink-0 text-xs text-primary">{t('sessions.assignProject.current')}</span>
                         )}
                       </button>
                     )
@@ -748,7 +763,7 @@ export function SessionsPage() {
         title={deleteConfirm?.kind === 'single' ? deleteConfirm.title : undefined}
         description={
           deleteConfirm?.kind === 'batch'
-            ? `所选的 ${deleteConfirm.count} 条对话的所有消息与历史将被永久删除，且无法恢复。`
+            ? t('sessions.multiSelect.deleteConfirm', { n: deleteConfirm.count })
             : undefined
         }
         onCancel={() => setDeleteConfirm(null)}

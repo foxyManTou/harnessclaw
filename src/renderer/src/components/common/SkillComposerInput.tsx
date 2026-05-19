@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
+import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
 import * as Tooltip from '@radix-ui/react-tooltip'
 import { Command, Sparkles, X } from 'lucide-react'
@@ -149,6 +150,7 @@ function SkillTooltip({
   children: ReactNode
   open?: boolean
 }) {
+  const { t } = useTranslation()
   return (
     <Tooltip.Root delayDuration={120} open={open}>
       <Tooltip.Trigger asChild>{children}</Tooltip.Trigger>
@@ -158,7 +160,7 @@ function SkillTooltip({
           collisionPadding={12}
           className="z-[220] max-w-[280px] rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs leading-5 text-slate-700 shadow-[0_16px_40px_rgba(15,23,42,0.14)]"
         >
-          {description || '暂无描述'}
+          {description || t('skills.composer.noDescription')}
         </Tooltip.Content>
       </Tooltip.Portal>
     </Tooltip.Root>
@@ -179,6 +181,7 @@ export function SkillComposerInput({
   onKeyDown,
   onPaste,
 }: SkillComposerInputProps) {
+  const { t } = useTranslation()
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [hasFocus, setHasFocus] = useState(false)
   const [caretPosition, setCaretPosition] = useState(0)
@@ -429,15 +432,15 @@ export function SkillComposerInput({
                     })}
                   </div>
                   <div className="flex flex-wrap items-center gap-2 border-t border-slate-200 px-3 py-2 text-[11px] text-slate-500">
-                    <span className="rounded-full bg-slate-100 px-2 py-0.5">↑↓ 选择</span>
-                    <span className="rounded-full bg-slate-100 px-2 py-0.5">Enter 确认</span>
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5">{t('skills.composer.selectionHint')}</span>
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5">{t('skills.composer.confirmHint')}</span>
                     <span className="rounded-full bg-slate-100 px-2 py-0.5">
-                      {isMac ? 'Cmd' : 'Win'} + 1-9 快速选择
+                      {t('skills.composer.shortcutHint', { key: isMac ? 'Cmd' : 'Win' })}
                     </span>
                   </div>
                 </div>
               ) : (
-                <div className="px-4 py-3 text-sm text-slate-500">没有匹配的技能</div>
+                <div className="px-4 py-3 text-sm text-slate-500">{t('skills.composer.noMatching')}</div>
               )}
             </div>
           </div>,
@@ -467,7 +470,7 @@ export function SkillComposerInput({
                       type="button"
                       onClick={() => handleRemoveSkill(skill.id)}
                       className="inline-flex h-4 w-4 items-center justify-center rounded-full text-sky-500 transition-colors hover:bg-sky-100 hover:text-sky-700"
-                      aria-label={`移除技能 ${skill.name}`}
+                      aria-label={t('skills.composer.removeAria', { name: skill.name })}
                     >
                       <X size={12} />
                     </button>

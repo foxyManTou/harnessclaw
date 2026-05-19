@@ -8,6 +8,7 @@ import {
   Video,
   X,
 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 
 export interface LocalAttachmentItem {
@@ -82,6 +83,7 @@ export function AttachmentPreviewPanel({
   onRemove,
   removable = true,
 }: AttachmentPreviewPanelProps) {
+  const { t } = useTranslation()
   if (attachments.length === 0) return null
 
   return (
@@ -114,7 +116,7 @@ export function AttachmentPreviewPanel({
                   type="button"
                   onClick={() => onRemove(attachment.id)}
                   disabled={!removable}
-                  aria-label={`删除文件 ${attachment.name}`}
+                  aria-label={t('attachments.removeAria', { name: attachment.name })}
                   className={cn(
                     'flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors',
                     removable ? 'hover:bg-background hover:text-foreground' : 'cursor-not-allowed opacity-40'

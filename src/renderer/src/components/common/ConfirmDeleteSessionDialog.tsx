@@ -1,4 +1,5 @@
 import { createPortal } from 'react-dom'
+import { useTranslation } from 'react-i18next'
 import { Trash2 } from 'lucide-react'
 
 /**
@@ -31,9 +32,10 @@ export function ConfirmDeleteSessionDialog({
   onCancel: () => void
   onConfirm: () => void
 }) {
+  const { t } = useTranslation()
   if (!open) return null
 
-  const descriptionText = description ?? `「${title ?? ''}」的所有消息与历史将被永久删除，且无法恢复。`
+  const descriptionText = description ?? t('sessions.delete.desc', { title: title ?? '' })
 
   return createPortal(
     <div
@@ -48,7 +50,7 @@ export function ConfirmDeleteSessionDialog({
             <Trash2 size={18} />
           </div>
           <div className="min-w-0 flex-1">
-            <h3 className="text-base font-semibold text-foreground">确认删除对话？</h3>
+            <h3 className="text-base font-semibold text-foreground">{t('sessions.delete.title')}</h3>
             <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">
               {descriptionText}
             </p>
@@ -60,14 +62,14 @@ export function ConfirmDeleteSessionDialog({
             onClick={onCancel}
             className="inline-flex min-h-10 items-center justify-center rounded-xl bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground transition-opacity hover:opacity-90"
           >
-            取消
+            {t('sessions.delete.cancel')}
           </button>
           <button
             type="button"
             onClick={onConfirm}
             className="inline-flex min-h-10 items-center justify-center rounded-xl border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
           >
-            删除
+            {t('sessions.delete.confirm')}
           </button>
         </div>
       </div>

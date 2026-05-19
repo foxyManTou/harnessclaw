@@ -1,5 +1,6 @@
 import { memo, useState, useRef, useEffect, useCallback, useMemo, useId, useSyncExternalStore, useContext, createContext, type ReactNode, type RefObject, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
+import { useTranslation } from 'react-i18next'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
   Send, Plus, Copy, Check, Trash2,
@@ -21,6 +22,7 @@ import {
   type SelectedSkillChip,
 } from '../common/SkillComposerInput'
 import { useAppConfig } from '@/hooks/useEngineConfig'
+import { getProjectDisplayDescription, getProjectDisplayName } from '@/lib/projectDisplay'
 import { PastedBlocksBar, usePastedBlocks } from '../common/PastedBlocksBar'
 import { PlanDraftCard, type PlanDraftStep } from '../common/PlanDraftCard'
 import { PlanStatusButton } from '../common/PlanStatusButton'
@@ -38,11 +40,11 @@ const TEAM_AVATARS = [analystAvatar, developerAvatar, lifestyleAvatar, researche
 
 function resolveTeamAvatar(name?: string): string {
   const key = (name || '').toLowerCase()
-  if (/analy|分析|数据/.test(key)) return analystAvatar
+  if (/analy|analyst|data|分析|数据/.test(key)) return analystAvatar
   if (/dev|develop|engineer|coder|code|程序|开发|工程/.test(key)) return developerAvatar
-  if (/life|生活|日常/.test(key)) return lifestyleAvatar
+  if (/life|lifestyle|生活|日常/.test(key)) return lifestyleAvatar
   if (/research|search|explore|调研|研究|搜索/.test(key)) return researcherAvatar
-  if (/writ|copy|edit|文案|写作|编辑/.test(key)) return writerAvatar
+  if (/writ|writer|copy|edit|文案|写作|编辑/.test(key)) return writerAvatar
   let hash = 0
   for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) | 0
   return TEAM_AVATARS[Math.abs(hash) % TEAM_AVATARS.length]
@@ -678,33 +680,33 @@ function useSharedNowTicker(enabled: boolean, intervalMs = 250): number {
   return useSyncExternalStore(subscribe, getSnapshot, () => 0)
 }
 
-function getChatGreeting(now = new Date()): ChatGreeting {
+function getChatGreeting(t: (key: string) => string, now = new Date()): ChatGreeting {
   const hour = now.getHours()
   if (hour < 6) {
     return {
-      tone: '夜深了',
-      title: '把零散想法收进一条对话里',
-      detail: '直接提问、附加文件，或把复杂任务拆给 HarnessClaw。',
+      tone: t('chat.greetings.night.tone'),
+      title: t('chat.greetings.night.title'),
+      detail: t('chat.greetings.night.detail'),
     }
   }
   if (hour < 12) {
     return {
-      tone: '上午好',
-      title: '从一个清晰的问题开始今天的推进',
-      detail: '新对话会保留上下文、文件与关键审批，适合直接进入任务。',
+      tone: t('chat.greetings.morning.tone'),
+      title: t('chat.greetings.morning.title'),
+      detail: t('chat.greetings.morning.detail'),
     }
   }
   if (hour < 18) {
     return {
-      tone: '下午好',
-      title: '把正在推进的工作继续交给这次对话',
-      detail: '你可以补充背景、附上文件，让 Agent 接着往下处理。',
+      tone: t('chat.greetings.afternoon.tone'),
+      title: t('chat.greetings.afternoon.title'),
+      detail: t('chat.greetings.afternoon.detail'),
     }
   }
   return {
-    tone: '晚上好',
-    title: '用一条安静的对话把今天的收尾做好',
-    detail: '问题、附件和过程都会留在这里，方便你稍后回来继续。',
+    tone: t('chat.greetings.evening.tone'),
+    title: t('chat.greetings.evening.title'),
+    detail: t('chat.greetings.evening.detail'),
   }
 }
 
@@ -1025,7 +1027,7 @@ const ConversationQuickNav = memo(function ConversationQuickNav({
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
         role="navigation"
-        aria-label="对话快速切换"
+        aria-label={t('chat.chatQuickSwitch')}
       >
         <div className="flex max-h-[60vh] flex-col items-center gap-2 overflow-y-auto px-1 py-2">
           {userMessages.map((msg, idx) => (
@@ -1033,8 +1035,8 @@ const ConversationQuickNav = memo(function ConversationQuickNav({
               key={msg.id}
               type="button"
               onClick={() => scrollToIndex(idx)}
-              title={(msg.content || '').slice(0, 60) || `第 ${idx + 1} 条对话`}
-              aria-label={`跳转至第 ${idx + 1} 条对话`}
+              title={(msg.content || '').slice(0, 60) || t('chat.header.chatIndex', { n: idx + 1 })}
+              aria-label={t('chat.header.jumpToIndex', { n: idx + 1 })}
               aria-current={activeIndex === idx ? 'true' : undefined}
               className={cn(
                 'h-1.5 rounded-full transition-all',
@@ -1051,6 +1053,7 @@ const ConversationQuickNav = memo(function ConversationQuickNav({
 })
 
 function TeamStackDeck({ teams }: { teams: TeamState[] }) {
+  const { t } = useTranslation()
   const [activeIndex, setActiveIndex] = useState(0)
   const [detailOpen, setDetailOpen] = useState(false)
   const dialogId = useId()
@@ -1117,7 +1120,7 @@ function TeamStackDeck({ teams }: { teams: TeamState[] }) {
       <div className="multi-agent-panel rounded-2xl border border-border/70 bg-background/70 p-3 xl:col-span-2" style={{ animationDelay: '280ms' }}>
         <div className="mb-3 flex items-center gap-2">
           <Users size={14} className="text-primary" />
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">团队</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t('chat.team.title')}</p>
         </div>
 
         <div className="team-stack-shell">
@@ -1126,7 +1129,7 @@ function TeamStackDeck({ teams }: { teams: TeamState[] }) {
               type="button"
               onClick={handlePrev}
               className="team-stack-nav team-stack-nav-left"
-              aria-label="查看上一个团队"
+              aria-label={t('chat.team.prevTeamAria')}
             >
               <ChevronLeft size={16} />
             </button>
@@ -1137,7 +1140,7 @@ function TeamStackDeck({ teams }: { teams: TeamState[] }) {
               <div className="team-stack-card team-stack-card-left" aria-hidden="true">
                 <div className="team-stack-card-top">
                   <span className="team-stack-card-name">{previousTeam.teamName}</span>
-                  <span className="team-stack-card-meta">{previousTeam.members.length} 成员</span>
+                  <span className="team-stack-card-meta">{t('chat.team.memberCount', { n: previousTeam.members.length })}</span>
                 </div>
               </div>
             )}
@@ -1163,11 +1166,11 @@ function TeamStackDeck({ teams }: { teams: TeamState[] }) {
             >
               <div className="team-stack-card-top">
                 <span className="team-stack-card-name">{activeTeam.teamName}</span>
-                <span className="team-stack-card-meta">{activeTeam.members.length} 成员</span>
+                <span className="team-stack-card-meta">{t('chat.team.memberCount', { n: activeTeam.members.length })}</span>
               </div>
               <div className="team-stack-card-body">
-                <div className="team-stack-card-badge">{getTeamEventLabel(activeTeam)}</div>
-                <p className="team-stack-card-summary">{getTeamEventSummary(activeTeam)}</p>
+                <div className="team-stack-card-badge">{getTeamEventLabel(t, activeTeam)}</div>
+                <p className="team-stack-card-summary">{getTeamEventSummary(t, activeTeam)}</p>
                 <div className="team-stack-card-members">
                   {activeTeam.members.slice(0, 4).map((member) => (
                     <span key={`${activeTeam.teamId}-${member}`} className="team-stack-chip">
@@ -1180,9 +1183,9 @@ function TeamStackDeck({ teams }: { teams: TeamState[] }) {
                 </div>
               </div>
               <div className="team-stack-card-foot">
-                <span>最近更新 {formatTeamUpdateTime(activeTeam.updatedAt)}</span>
+                <span>{t('chat.team.lastUpdate', { time: formatTeamUpdateTime(activeTeam.updatedAt) })}</span>
                 <span className="inline-flex items-center gap-2">
-                  <span>查看详情</span>
+                  <span>{t('chat.team.details')}</span>
                   <span className="team-stack-card-dot" />
                 </span>
               </div>
@@ -1192,7 +1195,7 @@ function TeamStackDeck({ teams }: { teams: TeamState[] }) {
               <div className="team-stack-card team-stack-card-right" aria-hidden="true">
                 <div className="team-stack-card-top">
                   <span className="team-stack-card-name">{nextTeam.teamName}</span>
-                  <span className="team-stack-card-meta">{nextTeam.members.length} 成员</span>
+                  <span className="team-stack-card-meta">{t('chat.team.memberCount', { n: nextTeam.members.length })}</span>
                 </div>
               </div>
             )}
@@ -1203,7 +1206,7 @@ function TeamStackDeck({ teams }: { teams: TeamState[] }) {
               type="button"
               onClick={handleNext}
               className="team-stack-nav team-stack-nav-right"
-              aria-label="查看下一个团队"
+              aria-label={t('chat.team.nextTeamAria')}
             >
               <ChevronRight size={16} />
             </button>
@@ -1211,7 +1214,7 @@ function TeamStackDeck({ teams }: { teams: TeamState[] }) {
         </div>
 
         {hasMultipleTeams && (
-          <div className="team-stack-dots" aria-label="团队切换进度">
+          <div className="team-stack-dots" aria-label={t('chat.team.switchProgress')}>
             {teams.map((team, index) => (
               <button
                 key={team.teamId}
@@ -1219,7 +1222,7 @@ function TeamStackDeck({ teams }: { teams: TeamState[] }) {
                 onClick={() => setActiveIndex(index)}
                 className="team-stack-dot"
                 data-active={index === activeIndex ? 'true' : undefined}
-                aria-label={`切换到 ${team.teamName}`}
+                aria-label={t('chat.team.switchTeamAria', { name: team.teamName })}
                 aria-pressed={index === activeIndex}
               />
             ))}
@@ -1248,7 +1251,7 @@ function TeamStackDeck({ teams }: { teams: TeamState[] }) {
                 ref={closeButtonRef}
                 onClick={() => setDetailOpen(false)}
                 className="team-stack-dialog-close"
-                aria-label="关闭团队详情"
+                aria-label={t('chat.team.closeDetails')}
               >
                 <X size={15} />
               </button>
@@ -1256,19 +1259,19 @@ function TeamStackDeck({ teams }: { teams: TeamState[] }) {
 
             <div className="team-stack-dialog-grid">
               <div className="team-stack-dialog-panel">
-                <p className="team-stack-dialog-label">当前状态</p>
-                <div className="team-stack-dialog-badge">{getTeamEventLabel(activeTeam)}</div>
-                <p id={descriptionId} className="team-stack-dialog-copy">{getTeamEventSummary(activeTeam)}</p>
+                <p className="team-stack-dialog-label">{t('chat.team.status')}</p>
+                <div className="team-stack-dialog-badge">{getTeamEventLabel(t, activeTeam)}</div>
+                <p id={descriptionId} className="team-stack-dialog-copy">{getTeamEventSummary(t, activeTeam)}</p>
               </div>
               <div className="team-stack-dialog-panel">
-                <p className="team-stack-dialog-label">团队规模</p>
+                <p className="team-stack-dialog-label">{t('chat.team.size')}</p>
                 <p className="team-stack-dialog-stat">{activeTeam.members.length}</p>
-                <p className="team-stack-dialog-copy">最近更新 {formatTeamUpdateTime(activeTeam.updatedAt)}</p>
+                <p className="team-stack-dialog-copy">{t('chat.team.lastUpdate', { time: formatTeamUpdateTime(activeTeam.updatedAt) })}</p>
               </div>
             </div>
 
             <div className="team-stack-dialog-panel">
-              <p className="team-stack-dialog-label">成员列表</p>
+              <p className="team-stack-dialog-label">{t('chat.team.membersLabel')}</p>
               <div className="team-stack-dialog-members">
                 {activeTeam.members.map((member) => (
                   <span key={`${activeTeam.teamId}-detail-${member}`} className="team-stack-chip">
@@ -1301,11 +1304,11 @@ function createEmptyCollaborationState(): CollaborationState {
   }
 }
 
-function createSyncAgentState(agentId: string, now: number): SyncAgentState {
+function createSyncAgentState(t: (key: string) => string, agentId: string, now: number): SyncAgentState {
   return {
     agentId,
     agentName: 'subagent',
-    description: '正在执行子 Agent 任务',
+    description: t('chat.status.subagentTask'),
     agentType: 'sync',
     parentAgentId: 'main',
     status: 'running',
@@ -1676,7 +1679,7 @@ function createSubagentInfo(agentId: string, agentName: string, status = 'runnin
   }
 }
 
-function createTaskStatusPayload(task: {
+function createTaskStatusPayload(t: any, task: {
   taskId: string
   subject: string
   status: CollaborationTask['status']
@@ -1694,16 +1697,16 @@ function createTaskStatusPayload(task: {
     scopeId: task.scopeId,
     summary:
       task.status === 'in_progress'
-        ? `任务进行中 · ${task.activeForm || task.subject}${task.owner ? ` · ${task.owner}` : ''}`
+        ? t('chat.status.taskInProgress', { subject: task.activeForm || task.subject }) + (task.owner ? ` · ${task.owner}` : '')
         : task.status === 'completed'
-          ? `任务已完成 · ${task.subject}${task.owner ? ` · ${task.owner}` : ''}`
+          ? t('chat.status.taskDone', { subject: task.subject }) + (task.owner ? ` · ${task.owner}` : '')
           : task.status === 'deleted'
-            ? `任务已移除 · ${task.subject}`
-            : `任务已创建 · ${task.subject}`,
+            ? t('chat.status.taskRemoved', { subject: task.subject })
+            : t('chat.status.taskCreated', { subject: task.subject }),
   }
 }
 
-function createRoutedAgentStatusPayload(agent: {
+function createRoutedAgentStatusPayload(t: any, agent: {
   agentId: string
   agentName: string
   description?: string
@@ -1715,11 +1718,11 @@ function createRoutedAgentStatusPayload(agent: {
     agentName: agent.agentName || 'agent',
     description: agent.description,
     agentType: agent.agentType,
-    summary: `已路由到 @${agent.agentName || 'agent'}`,
+    summary: t('chat.status.routedTo', { name: agent.agentName || 'agent' }),
   }
 }
 
-function createAgentMessageStatusPayload(message: {
+function createAgentMessageStatusPayload(t: any, message: {
   id: string
   from: string
   to: string
@@ -1731,12 +1734,12 @@ function createAgentMessageStatusPayload(message: {
     id: message.id,
     from: message.from || 'unknown',
     to: message.to || '*',
-    summary: message.summary || `${message.from || 'Agent'} 发来协作消息`,
+    summary: message.summary || t('chat.status.collabMessage', { name: message.from || 'Agent' }),
     teamId: message.teamId,
   }
 }
 
-function createAsyncAgentStatusPayload(agent: {
+function createAsyncAgentStatusPayload(t: any, agent: {
   agentId: string
   agentName: string
   description: string
@@ -1748,12 +1751,12 @@ function createAsyncAgentStatusPayload(agent: {
   errorMessage?: string
 }): PersistedAsyncAgentStatusPayload {
   const summary = agent.status === 'running'
-    ? `${agent.agentName || 'agent'} 已启动`
+    ? t('chat.status.agentStarted', { name: agent.agentName || 'agent' })
     : agent.status === 'idle'
-      ? `${agent.agentName || 'agent'} 进入等待`
+      ? t('chat.status.agentWaiting', { name: agent.agentName || 'agent' })
       : agent.status === 'completed'
-        ? `${agent.agentName || 'agent'} 已完成`
-        : `${agent.agentName || 'agent'} 执行失败`
+        ? t('chat.status.agentDone', { name: agent.agentName || 'agent' })
+        : t('chat.status.agentFailed', { name: agent.agentName || 'agent' })
 
   return {
     kind: 'async_agent_event',
@@ -1770,7 +1773,7 @@ function createAsyncAgentStatusPayload(agent: {
   }
 }
 
-function createTeamStatusPayload(team: {
+function createTeamStatusPayload(t: any, team: {
   teamId: string
   teamName?: string
   members: string[]
@@ -1780,12 +1783,12 @@ function createTeamStatusPayload(team: {
 }): PersistedTeamStatusPayload {
   const resolvedName = team.teamName || team.teamId
   const summary = team.lastEvent === 'member_join'
-    ? `${team.memberName || '新成员'} 加入了 ${resolvedName}`
+    ? t('chat.status.memberJoined', { name: team.memberName || t('chat.status.newMember'), team: resolvedName })
     : team.lastEvent === 'member_left'
-      ? `${team.memberName || '成员'} 离开了 ${resolvedName}`
+      ? t('chat.status.memberLeft', { name: team.memberName || t('chat.status.member'), team: resolvedName })
       : team.lastEvent === 'deleted'
-        ? `${resolvedName} 已归档`
-        : `${resolvedName} 已建立`
+        ? t('chat.status.teamArchived', { team: resolvedName })
+        : t('chat.status.teamCreated', { team: resolvedName })
 
   return {
     kind: 'team_event',
@@ -2118,17 +2121,17 @@ function inferCollaborationFromMessages(messages: Message[]): CollaborationState
   return collaboration
 }
 
-function buildErrorHint(reason: string, message: string): string | undefined {
+function buildErrorHint(t: (key: string) => string, reason: string, message: string): string | undefined {
   if (reason === 'model_error' && message.toLowerCase().includes('not supported')) {
-    return '请切换到当前账号可用的模型，或检查 Codex 使用的账号类型。'
+    return t('chat.errors.accountIssue')
   }
   if (message.toLowerCase().includes('websocket')) {
-    return '请检查本地服务是否已启动，以及连接配置是否正确。'
+    return t('chat.errors.serviceIssue')
   }
   return undefined
 }
 
-function buildSystemErrorNotice(raw: unknown): SystemNoticeData {
+function buildSystemErrorNotice(t: (key: string) => string, raw: unknown): SystemNoticeData {
   const root = typeof raw === 'string'
     ? (parseJsonObject(raw) || raw)
     : raw
@@ -2137,7 +2140,7 @@ function buildSystemErrorNotice(raw: unknown): SystemNoticeData {
   const fallbackContent = isRecord(root) && typeof root.content === 'string' ? root.content : ''
   const message = typeof record.message === 'string'
     ? record.message
-    : fallbackContent || (typeof root === 'string' ? root : '请求失败，请稍后重试。')
+    : fallbackContent || (typeof root === 'string' ? root : t('chat.errors.requestFailed'))
   const reason = typeof record.reason === 'string'
     ? record.reason
     : isRecord(root) && typeof root.reason === 'string'
@@ -2151,11 +2154,11 @@ function buildSystemErrorNotice(raw: unknown): SystemNoticeData {
 
   return {
     kind: 'error',
-    title: '请求失败',
-    message: message.trim() || '请求失败，请稍后重试。',
+    title: t('chat.errors.requestFailedTitle'),
+    message: message.trim() || t('chat.errors.requestFailed'),
     reason,
     sessionId,
-    hint: buildErrorHint(reason || '', message),
+    hint: buildErrorHint(t, reason || '', message),
   }
 }
 
@@ -2197,8 +2200,8 @@ function getFileLanguage(ext: string): string {
   return map[ext] || ''
 }
 
-function formatMessageTime(timestamp: number): string {
-  return new Date(timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+function formatMessageTime(lang: string, timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en-US', { hour: '2-digit', minute: '2-digit' })
 }
 
 function formatTeamUpdateTime(timestamp: number): string {
@@ -2382,54 +2385,45 @@ function parseStepDecisionResultData(raw: string): StepDecisionResultData | null
   }
 }
 
-function getConversationLabel(title = '', firstMessage = ''): string {
-  const raw = title.trim() || firstMessage.trim() || '新对话'
+function getConversationLabel(t: (key: string) => string, title = '', firstMessage = ''): string {
+  const raw = title.trim() || firstMessage.trim() || t('chat.newChat')
   return raw.length > 24 ? `${raw.slice(0, 24)}...` : raw
 }
 
-function getToolDisplayName(name?: string): string {
+function getToolDisplayName(t: (key: string) => string, name?: string): string {
   const toolLabels: Record<string, string> = {
-    Bash: '命令执行',
-    Read: '读取文件',
-    Edit: '编辑文件',
-    Write: '写入文件',
-    Grep: '内容搜索',
-    Glob: '文件匹配',
-    WebFetch: '网页抓取',
-    WebSearch: '在线搜索',
-    TavilySearch: 'Tavily 搜索',
-    Agent: '子 Agent',
-    Skill: '技能执行',
-    TaskCreate: '创建任务',
-    TaskGet: '查询任务',
-    TaskUpdate: '更新任务',
-    TaskList: '任务列表',
-    SendMessage: '发送消息',
-    TeamCreate: '创建团队',
-    TeamDelete: '删除团队',
-    read_file: '读取文件',
-    write_file: '写入文件',
-    search_query: '在线搜索',
-    open: '打开页面',
-    click: '点击页面元素',
-    find: '查找页面内容',
-    screenshot: '查看 PDF 页面',
-    image_query: '查找图片',
-    weather: '查询天气',
-    sports: '查询赛事',
-    finance: '查询价格',
-    time: '查询时间',
+    Bash: t('chat.tools.Bash'),
+    Read: t('chat.tools.Read'),
+    Edit: t('chat.tools.Edit'),
+    Write: t('chat.tools.Write'),
+    Grep: t('chat.tools.Grep'),
+    Glob: t('chat.tools.Glob'),
+    WebFetch: t('chat.tools.WebFetch'),
+    WebSearch: t('chat.tools.WebSearch'),
+    TavilySearch: t('chat.tools.TavilySearch'),
+    Agent: t('chat.tools.Agent'),
+    Skill: t('chat.tools.Skill'),
+    TaskCreate: t('chat.tools.TaskCreate'),
+    TaskGet: t('chat.tools.TaskGet'),
+    TaskUpdate: t('chat.tools.TaskUpdate'),
+    TaskList: t('chat.tools.TaskList'),
+    SendMessage: t('chat.tools.SendMessage'),
+    TeamCreate: t('chat.tools.TeamCreate'),
+    TeamDelete: t('chat.tools.TeamDelete'),
+    read_file: t('chat.tools.Read'),
+    write_file: t('chat.tools.Write'),
+    search_query: t('chat.tools.WebSearch'),
   }
 
-  if (!name) return '工具操作'
+  if (!name) return t('chat.defaultToolName')
   return toolLabels[name] || name.replace(/_/g, ' ')
 }
 
-function getPermissionOptionLabel(label: string): string {
+function getPermissionOptionLabel(t: (key: string) => string, label: string): string {
   const normalized = label.trim().toLowerCase()
-  if (normalized === 'allow once') return '允许这一次'
-  if (normalized === 'always allow in this session') return '本次会话都允许'
-  if (normalized === 'deny') return '拒绝'
+  if (normalized === 'allow once') return t('chat.permissions.allowOnce')
+  if (normalized === 'always allow in this session') return t('chat.permissions.alwaysAllow')
+  if (normalized === 'deny') return t('chat.permissions.deny')
   return label
 }
 
@@ -2442,48 +2436,48 @@ function formatDurationMs(durationMs?: number): string {
   return `${minutes}m ${seconds}s`
 }
 
-function getToolRenderHintLabel(renderHint?: string): string {
+function getToolRenderHintLabel(t: (key: string) => string, renderHint?: string): string {
   const labels: Record<string, string> = {
-    terminal: '终端输出',
-    code: '代码内容',
-    diff: '变更对比',
-    file_info: '文件结果',
-    search: '搜索结果',
-    markdown: 'Markdown',
-    agent: 'Agent 输出',
-    skill: '技能结果',
-    task: '任务结果',
-    message: '消息结果',
-    team: '团队结果',
-    plain: '文本结果',
+    terminal: t('chat.toolRenderHint.terminal'),
+    code: t('chat.toolRenderHint.code'),
+    diff: t('chat.toolRenderHint.diff'),
+    file_info: t('chat.toolRenderHint.fileInfo'),
+    search: t('chat.toolRenderHint.search'),
+    markdown: t('chat.toolRenderHint.markdown'),
+    agent: t('chat.toolRenderHint.agent'),
+    skill: t('chat.toolRenderHint.skill'),
+    task: t('chat.toolRenderHint.task'),
+    message: t('chat.toolRenderHint.message'),
+    team: t('chat.toolRenderHint.team'),
+    plain: t('chat.toolRenderHint.plain'),
   }
-  if (!renderHint) return '文本结果'
+  if (!renderHint) return t('chat.toolRenderHint.default')
   return labels[renderHint] || renderHint
 }
 
-function getToolResultSummary(call: ToolActivity, result?: ToolActivity, filePreview?: FilePreviewData | null): string {
-  if (!result) return 'Agent 正在执行这个步骤。'
+function getToolResultSummary(t: (key: string) => string, call: ToolActivity, result?: ToolActivity, filePreview?: FilePreviewData | null): string {
+  if (!result) return t('chat.toolResult.executing')
   // v2 §6.5 — status routing. `cancelled` / `skipped` are NOT errors;
   // surface a neutral message instead of the red error string. For
   // `failed` we always prefer the engine's user-facing message
   // (sourced from error.user_message via the main-process tool_result
   // event) over any heuristic hint, so categorized errors like rate
   // limits or contract failures get accurate copy.
-  if (result.status === 'cancelled') return '已取消。'
-  if (result.status === 'skipped') return '已跳过。'
+  if (result.status === 'cancelled') return t('chat.toolResult.cancelled')
+  if (result.status === 'skipped') return t('chat.toolResult.skipped')
   if (result.status === 'failed' || result.isError) {
     if (result.content) return result.content
-    return '这个步骤没有顺利完成。'
+    return t('chat.toolResult.failed')
   }
-  if (filePreview) return `涉及文件 ${filePreview.fileName}`
-  if (result.filePath) return `关联文件 ${getFileName(result.filePath)}`
-  if (result.renderHint === 'search') return '已返回搜索结果摘要。'
-  if (result.renderHint === 'markdown') return '已抓取并整理为 Markdown 内容。'
-  if (result.renderHint === 'terminal') return '命令执行已完成。'
-  if (result.renderHint === 'agent') return '子 Agent 已返回摘要。'
-  if (call.name === 'Write' || call.name === 'write_file') return '文件写入已完成。'
-  if (call.name === 'Edit') return '文件变更已生成。'
-  return '这个步骤已执行完成。'
+  if (filePreview) return t('chat.toolResult.fileInvolved', { name: filePreview.fileName })
+  if (result.filePath) return t('chat.toolResult.fileAssociated', { name: getFileName(result.filePath) })
+  if (result.renderHint === 'search') return t('chat.toolResult.searchSummary')
+  if (result.renderHint === 'markdown') return t('chat.toolResult.markdownSummary')
+  if (result.renderHint === 'terminal') return t('chat.toolResult.terminalSummary')
+  if (result.renderHint === 'agent') return t('chat.toolResult.agentSummary')
+  if (call.name === 'Write' || call.name === 'write_file') return t('chat.toolResult.writeSummary')
+  if (call.name === 'Edit') return t('chat.toolResult.editSummary')
+  return t('chat.toolResult.stepCompleted')
 }
 
 /**
@@ -2497,24 +2491,24 @@ function getToolResultSummary(call: ToolActivity, result?: ToolActivity, filePre
  * via `getToolErrorPresentation`. The renderer must never throw on an
  * unknown type and must never render the raw enum string to the user.
  */
-const TOOL_ERROR_PRESENTATION: Record<string, { icon: string; label: string; color: 'amber' | 'orange' | 'red' | 'gray' }> = {
-  invalid_input:     { icon: '📋', label: '输入错误',  color: 'amber'  },
-  permission_denied: { icon: '🔒', label: '权限不足',  color: 'amber'  },
-  tool_timeout:      { icon: '⏱', label: '超时',      color: 'orange' },
-  user_aborted:      { icon: '✋', label: '已取消',    color: 'gray'   },
-  rate_limit:        { icon: '🌐', label: '上游限流',  color: 'orange' },
-  overloaded:        { icon: '🌐', label: '上游繁忙',  color: 'orange' },
-  model_error:       { icon: '🤖', label: '上游错误',  color: 'orange' },
-  contract_fail:     { icon: '📋', label: '契约未达',  color: 'amber'  },
-  dependency_fail:   { icon: '🔗', label: '子任务失败', color: 'orange' },
-  internal:          { icon: '⚠️', label: '内部错误',  color: 'red'    },
-}
-
-function getToolErrorPresentation(errorType?: string): { icon: string; label: string; color: 'amber' | 'orange' | 'red' | 'gray' } {
-  if (errorType && Object.prototype.hasOwnProperty.call(TOOL_ERROR_PRESENTATION, errorType)) {
-    return TOOL_ERROR_PRESENTATION[errorType]
+function getToolErrorPresentation(t: (key: string) => string, errorType?: string): { icon: string; label: string; color: 'amber' | 'orange' | 'red' | 'gray' } {
+  const presentations: Record<string, { icon: string; label: string; color: 'amber' | 'orange' | 'red' | 'gray' }> = {
+    invalid_input:     { icon: '📋', label: t('chat.toolError.invalidInput'),  color: 'amber'  },
+    permission_denied: { icon: '🔒', label: t('chat.toolError.permissionDenied'), color: 'amber'  },
+    tool_timeout:      { icon: '⏱', label: t('chat.toolError.timeout'),      color: 'orange' },
+    user_aborted:      { icon: '✋', label: t('chat.toolError.aborted'),    color: 'gray'   },
+    rate_limit:        { icon: '🌐', label: t('chat.toolError.rateLimit'),  color: 'orange' },
+    overloaded:        { icon: '🌐', label: t('chat.toolError.overloaded'),  color: 'orange' },
+    model_error:       { icon: '🤖', label: t('chat.toolError.modelError'),  color: 'orange' },
+    contract_fail:     { icon: '📋', label: t('chat.toolError.contractFail'),  color: 'amber'  },
+    dependency_fail:   { icon: '🔗', label: t('chat.toolError.dependencyFail'), color: 'orange' },
+    internal:          { icon: '⚠️', label: t('chat.toolError.internal'),  color: 'red'    },
   }
-  return TOOL_ERROR_PRESENTATION.internal
+
+  if (errorType && Object.prototype.hasOwnProperty.call(presentations, errorType)) {
+    return presentations[errorType]
+  }
+  return presentations.internal
 }
 
 function getToolErrorColorClasses(color: 'amber' | 'orange' | 'red' | 'gray'): { badge: string; icon: string; text: string } {
@@ -2593,11 +2587,11 @@ function extractErrorInfoFromMetadata(metadata?: Record<string, unknown>): {
   }
 }
 
-function getTaskStatusLabel(status: CollaborationTask['status']): string {
-  if (status === 'in_progress') return '进行中'
-  if (status === 'completed') return '已完成'
-  if (status === 'deleted') return '已移除'
-  return '待处理'
+function getTaskStatusLabel(t: (key: string) => string, status: CollaborationTask['status']): string {
+  if (status === 'in_progress') return t('chat.taskStatus.inProgress')
+  if (status === 'completed') return t('chat.taskStatus.completed')
+  if (status === 'deleted') return t('chat.taskStatus.deleted')
+  return t('chat.taskStatus.pending')
 }
 
 function getTaskStatusClasses(status: CollaborationTask['status']): string {
@@ -2607,14 +2601,14 @@ function getTaskStatusClasses(status: CollaborationTask['status']): string {
   return 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
 }
 
-function getSyncAgentStatusLabel(status: SyncAgentState['status']): string {
-  if (status === 'running') return '运行中'
-  if (status === 'completed') return '已完成'
-  if (status === 'max_turns') return '达到轮次上限'
-  if (status === 'model_error') return '模型错误'
-  if (status === 'aborted') return '已中止'
-  if (status === 'timeout') return '已超时'
-  return '失败'
+function getSyncAgentStatusLabel(t: (key: string) => string, status: SyncAgentState['status']): string {
+  if (status === 'running') return t('chat.syncAgentStatus.running')
+  if (status === 'completed') return t('chat.syncAgentStatus.completed')
+  if (status === 'max_turns') return t('chat.syncAgentStatus.maxTurns')
+  if (status === 'model_error') return t('chat.syncAgentStatus.modelError')
+  if (status === 'aborted') return t('chat.syncAgentStatus.aborted')
+  if (status === 'timeout') return t('chat.syncAgentStatus.timeout')
+  return t('chat.syncAgentStatus.failed')
 }
 
 function getSyncAgentStatusClasses(status: SyncAgentState['status']): string {
@@ -2630,11 +2624,11 @@ function getSyncAgentToolStatusClasses(status?: SyncAgentState['activeToolStatus
   return 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
 }
 
-function getAsyncAgentStatusLabel(status: AsyncAgentState['status']): string {
-  if (status === 'running') return '运行中'
-  if (status === 'idle') return '等待中'
-  if (status === 'completed') return '已完成'
-  return '失败'
+function getAsyncAgentStatusLabel(t: (key: string) => string, status: AsyncAgentState['status']): string {
+  if (status === 'running') return t('chat.asyncAgentStatus.running')
+  if (status === 'idle') return t('chat.asyncAgentStatus.idle')
+  if (status === 'completed') return t('chat.asyncAgentStatus.completed')
+  return t('chat.asyncAgentStatus.failed')
 }
 
 function getAsyncAgentStatusClasses(status: AsyncAgentState['status']): string {
@@ -2650,19 +2644,23 @@ function getSubagentVisualStatus(status?: string): 'running' | 'completed' | 'fa
   return 'failed'
 }
 
-function getTeamEventLabel(team: TeamState): string {
-  if (team.lastEvent === 'member_join') return '成员加入'
-  if (team.lastEvent === 'member_left') return '成员离开'
-  if (team.lastEvent === 'deleted') return '团队已归档'
-  return '团队已建立'
+function getTeamEventLabel(t: (key: string) => string, team: TeamState): string {
+  if (team.lastEvent === 'member_join') return t('chat.teamEvent.memberJoin')
+  if (team.lastEvent === 'member_left') return t('chat.teamEvent.memberLeft')
+  if (team.lastEvent === 'deleted') return t('chat.teamEvent.deleted')
+  return t('chat.teamEvent.created')
 }
 
-function getTeamEventSummary(team: TeamState): string {
+function getTeamEventSummary(t: (key: string) => string, team: TeamState): string {
   if (team.memberName) {
-    return `${team.memberName}${team.lastEvent === 'member_left' ? ' 已离开' : team.lastEvent === 'member_join' ? ' 已加入' : ' 发生变更'}`
+    return team.lastEvent === 'member_left'
+      ? t('chat.teamEvent.memberLeftDesc', { name: team.memberName })
+      : team.lastEvent === 'member_join'
+        ? t('chat.teamEvent.memberJoined', { name: team.memberName })
+        : t('chat.teamEvent.memberChange', { name: team.memberName })
   }
-  if (team.lastEvent === 'deleted') return '这个团队当前不再接收新的协作消息。'
-  return '团队成员保持在当前编组中。'
+  if (team.lastEvent === 'deleted') return t('chat.teamEvent.archivedDesc')
+  return t('chat.teamEvent.defaultDesc')
 }
 
 // ─── v1.13 Artifact helpers ────────────────────────────────────────────────
@@ -2716,6 +2714,7 @@ function SessionArtifactsButton({
   artifacts: ArtifactRef[]
   onOpenFilePreview: (preview: FilePreviewData) => void
 }) {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -2755,8 +2754,8 @@ function SessionArtifactsButton({
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-haspopup="menu"
-        aria-label={`本对话产出文件 (${artifacts.length})`}
-        title="本对话产出文件"
+        aria-label={t('chat.header.artifactsCount', { n: artifacts.length })}
+        title={t('chat.header.artifacts')}
         className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-border px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
       >
         <FolderOpen size={14} />
@@ -2771,7 +2770,7 @@ function SessionArtifactsButton({
           className="absolute right-0 top-[calc(100%+6px)] z-50 w-80 max-w-[80vw] overflow-hidden rounded-xl border border-border bg-card shadow-lg"
         >
           <div className="flex items-center justify-between border-b border-border px-3 py-2">
-            <span className="text-xs font-semibold text-foreground">本对话产出文件</span>
+            <span className="text-xs font-semibold text-foreground">{t('chat.header.artifacts')}</span>
             <span className="text-[11px] text-muted-foreground">{artifacts.length}</span>
           </div>
           <div className="max-h-80 overflow-y-auto py-1">
@@ -2833,6 +2832,7 @@ function SessionTitleMenu({
   currentProjectId: string | null
   onDelete: () => void
 }) {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const [isRenaming, setIsRenaming] = useState(false)
   const [renameValue, setRenameValue] = useState('')
@@ -2918,7 +2918,7 @@ function SessionTitleMenu({
             }
           }}
           className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-0.5 text-lg font-semibold tracking-tight text-foreground outline-none focus:border-primary"
-          aria-label="重命名对话"
+          aria-label={t('sessions.actions.rename')}
         />
         <AssignProjectDialog
           open={assignOpen}
@@ -2962,7 +2962,7 @@ function SessionTitleMenu({
             className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
           >
             <Pencil size={14} />
-            <span>重命名</span>
+            <span>{t('sessions.actions.rename')}</span>
           </button>
           {currentProjectId ? (
             <button
@@ -2972,7 +2972,7 @@ function SessionTitleMenu({
               className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
             >
               <FolderMinus size={14} />
-              <span>退出项目</span>
+              <span>{t('sessions.actions.exitProject')}</span>
             </button>
           ) : (
             <button
@@ -2985,7 +2985,7 @@ function SessionTitleMenu({
               className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
             >
               <FolderPlus size={14} />
-              <span>加入项目</span>
+              <span>{t('sessions.actions.joinProject')}</span>
             </button>
           )}
           <button
@@ -2998,7 +2998,7 @@ function SessionTitleMenu({
             className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-600 transition-colors hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30"
           >
             <Trash2 size={14} />
-            <span>删除</span>
+            <span>{t('sessions.actions.delete')}</span>
           </button>
         </div>
       )}
@@ -3038,6 +3038,7 @@ function AssignProjectDialog({
   currentProjectId: string | null
   onClose: () => void
 }) {
+  const { t } = useTranslation()
   const [projects, setProjects] = useState<DbProjectRow[]>([])
   const [loading, setLoading] = useState(false)
 
@@ -3072,20 +3073,22 @@ function AssignProjectDialog({
       }}
     >
       <div className="w-full max-w-sm rounded-2xl border border-border/80 bg-card p-5 shadow-[0_24px_80px_rgba(15,23,42,0.28)]">
-        <h3 className="mb-1 text-base font-semibold text-foreground">加入项目</h3>
-        <p className="mb-3 text-xs text-muted-foreground">选择要将此对话归入的项目</p>
+        <h3 className="mb-1 text-base font-semibold text-foreground">{t('sessions.assignProject.title')}</h3>
+        <p className="mb-3 text-xs text-muted-foreground">{t('sessions.assignProject.desc')}</p>
 
           {loading ? (
             <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
               <Loader2 size={14} className="mr-2 animate-spin" />
-              加载中…
+              {t('sessions.loading')}
             </div>
           ) : projects.length === 0 ? (
-            <p className="py-6 text-center text-sm text-muted-foreground">暂无可用项目</p>
+            <p className="py-6 text-center text-sm text-muted-foreground">{t('sessions.assignProject.noProjects')}</p>
           ) : (
             <div className="max-h-60 overflow-y-auto rounded-xl border border-border">
               {projects.map((project) => {
                 const isCurrentProject = currentProjectId === project.project_id
+                const displayName = getProjectDisplayName(project, t)
+                const displayDescription = getProjectDisplayDescription(project, t)
                 return (
                   <button
                     key={project.project_id}
@@ -3096,13 +3099,13 @@ function AssignProjectDialog({
                     )}
                   >
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-foreground">{project.name}</p>
-                      {project.description && (
-                        <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{project.description}</p>
+                      <p className="truncate text-sm font-medium text-foreground">{displayName}</p>
+                      {displayDescription && (
+                        <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{displayDescription}</p>
                       )}
                     </div>
                     {isCurrentProject && (
-                      <span className="mt-0.5 shrink-0 text-xs text-primary">当前</span>
+                      <span className="mt-0.5 shrink-0 text-xs text-primary">{t('sessions.assignProject.current')}</span>
                     )}
                   </button>
                 )
@@ -3118,6 +3121,7 @@ function AssignProjectDialog({
 // ─── Chat Page ──────────────────────────────────────────────────────────────
 
 export function ChatPage() {
+  const { t, i18n } = useTranslation()
   const location = useLocation()
   const navigate = useNavigate()
   const initialMessage = location.state?.initialMessage || ''
@@ -3192,7 +3196,7 @@ export function ChatPage() {
   const maxLength = 4000
 
   const [dbSessions, setDbSessions] = useState<DbSessionRow[]>([])
-  const emptyGreeting = useMemo(() => getChatGreeting(), [])
+  const emptyGreeting = useMemo(() => getChatGreeting(t), [t])
   const composerPayload = useMemo(() => buildSkillComposerPayload(input, selectedSkills), [input, selectedSkills])
   const canSend = !!composerPayload || attachments.length > 0 || pasted.blocks.length > 0
 
@@ -3446,7 +3450,7 @@ export function ChatPage() {
     })
   }, [sessionMap, sessions, dbSessions])
   const activeSessionMeta = displayedSessions.find((session) => session.key === activeSessionId)
-  const activeSessionPromptRaw = activeSessionMeta?.title || activeSessionMeta?.firstMsg || '新对话'
+  const activeSessionPromptRaw = activeSessionMeta?.title || activeSessionMeta?.firstMsg || t('chat.newChat')
   const activeSessionPrompt = (() => {
     const oneLine = activeSessionPromptRaw.replace(/\n/g, ' ').trim()
     return oneLine.length > 20 ? oneLine.slice(0, 20) + '...' : oneLine
@@ -3472,8 +3476,8 @@ export function ChatPage() {
     if (activeSession.isStopping) {
       return {
         tone: 'danger' as const,
-        title: '正在停止当前任务',
-        description: '已经发出停止请求。任务结束后，你就可以继续输入新内容。',
+        title: t('chat.composer.stopping'),
+        description: t('chat.composer.stoppingDesc'),
         actionLabel: null,
       }
     }
@@ -3481,8 +3485,8 @@ export function ChatPage() {
     if (activeSession.isPaused) {
       return {
         tone: 'warning' as const,
-        title: '需要你确认后继续',
-        description: 'Agent 想执行一个可能影响文件或环境的操作。处理下方授权后，会自动继续。',
+        title: t('chat.composer.confirm'),
+        description: t('chat.composer.confirmDesc'),
         actionLabel: null,
       }
     }
@@ -3490,23 +3494,23 @@ export function ChatPage() {
     if (harnessclawStatus === 'connecting') {
       return {
         tone: 'warning' as const,
-        title: '正在连接 HarnessClaw',
-        description: '你可以先整理问题；连接恢复后就能继续发送。',
-        actionLabel: '重新连接',
+        title: t('chat.composer.connecting'),
+        description: t('chat.composer.connectingDesc'),
+        actionLabel: t('chat.composer.reconnect'),
       }
     }
 
     if (harnessclawStatus !== 'connected') {
       return {
         tone: 'warning' as const,
-        title: '当前还没有连接到 HarnessClaw',
-        description: '发送时会自动尝试连接。若想立即恢复，也可以手动重试。',
-        actionLabel: '重新连接',
+        title: t('chat.composer.noConnection'),
+        description: t('chat.composer.noConnectionDesc'),
+        actionLabel: t('chat.composer.reconnect'),
       }
     }
 
     return null
-  }, [activeSession.isPaused, activeSession.isStopping, harnessclawStatus])
+  }, [activeSession.isPaused, activeSession.isStopping, harnessclawStatus, t])
 
   // v0.5.0 §11 — engine_note banner (retry-status from Scheduler etc.). Lives
   // on the session and is cleared on response_end.
@@ -4045,9 +4049,9 @@ export function ChatPage() {
           syncAgents: {
             ...prev.syncAgents,
             [agentId]: {
-              ...(prev.syncAgents[agentId] || createSyncAgentState(agentId, updatedAt)),
+              ...(prev.syncAgents[agentId] || createSyncAgentState(t, agentId, updatedAt)),
               agentName: typeof event.agent_name === 'string' ? event.agent_name : prev.syncAgents[agentId]?.agentName || 'subagent',
-              description: typeof event.description === 'string' ? event.description : prev.syncAgents[agentId]?.description || '正在执行子 Agent 任务',
+              description: typeof event.description === 'string' ? event.description : prev.syncAgents[agentId]?.description || t('chat.status.executingSubAgent'),
               // v1.12: full task prompt from parent agent. Optional; older
               // servers (≤v1.11) won't send it — keep prior value if absent.
               task: typeof event.task === 'string' && event.task
@@ -4094,7 +4098,7 @@ export function ChatPage() {
         let intentForActivity: string | undefined
 
         updateCollaboration(sid, (prev) => {
-          const existing = prev.syncAgents[agentId] || createSyncAgentState(agentId, now)
+          const existing = prev.syncAgents[agentId] || createSyncAgentState(t, agentId, now)
           const nextState: SyncAgentState = {
             ...existing,
             agentName: agentName || existing.agentName,
@@ -4109,7 +4113,7 @@ export function ChatPage() {
           if (eventType === 'tool_start') {
             nextState.activeToolName = getToolEventName(payload) || existing.activeToolName
             nextState.activeToolStatus = 'running'
-            nextState.activeToolSummary = summarizeInlineText(getToolCallEventContent(payload), 90) || '准备执行工具'
+            nextState.activeToolSummary = summarizeInlineText(getToolCallEventContent(payload), 90) || t('chat.status.preparingTool')
             // v1.12: if a matching intent was buffered for this tool_use_id,
             // capture it for the ToolActivity below.
             if (existing.currentIntent && callIdInPayload && existing.currentIntent.toolUseId === callIdInPayload) {
@@ -4122,7 +4126,7 @@ export function ChatPage() {
             // even though earlier code conflated cancelled with is_error.
             const subStatus = typeof payload.status === 'string' ? payload.status : ''
             nextState.activeToolStatus = (subStatus === 'failed' || payload.is_error === true) ? 'error' : 'completed'
-            nextState.activeToolSummary = summarizeInlineText(getToolResultEventContent(payload), 90) || ((subStatus === 'failed' || payload.is_error === true) ? '工具执行失败' : '工具执行完成')
+            nextState.activeToolSummary = summarizeInlineText(getToolResultEventContent(payload), 90) || ((subStatus === 'failed' || payload.is_error === true) ? t('chat.status.toolFailed') : t('chat.status.toolDone'))
             // v1.12: clear sub-agent intent shimmer once its tool finishes.
             if (existing.currentIntent && callIdInPayload && existing.currentIntent.toolUseId === callIdInPayload) {
               nextState.currentIntent = undefined
@@ -4218,7 +4222,7 @@ export function ChatPage() {
           syncAgents: {
             ...prev.syncAgents,
             [agentId]: {
-              ...(prev.syncAgents[agentId] || createSyncAgentState(agentId, updatedAt)),
+              ...(prev.syncAgents[agentId] || createSyncAgentState(t, agentId, updatedAt)),
               agentName: typeof event.agent_name === 'string' ? event.agent_name : prev.syncAgents[agentId]?.agentName || 'subagent',
               description: prev.syncAgents[agentId]?.description || '',
               agentType: prev.syncAgents[agentId]?.agentType || 'sync',
@@ -4248,7 +4252,7 @@ export function ChatPage() {
         const statusActivity: ToolActivity = {
           type: 'status',
           name: 'subagent_end',
-          content: getSubagentVisualStatus(status) === 'failed' ? '子 Agent 执行失败' : '子 Agent 执行完成',
+          content: getSubagentVisualStatus(status) === 'failed' ? t('chat.status.subagentFailed') : t('chat.status.subagentDone'),
           ts: updatedAt,
           subagent: finalSubagentInfo,
         }
@@ -4266,7 +4270,7 @@ export function ChatPage() {
         const agentId = typeof event.agent_id === 'string' ? event.agent_id : ''
         if (!agentId) break
         const now = Date.now()
-        const payload = createRoutedAgentStatusPayload({
+        const payload = createRoutedAgentStatusPayload(t, {
           agentId,
           agentName: typeof event.agent_name === 'string' ? event.agent_name : 'agent',
           description: typeof event.description === 'string' ? event.description : '',
@@ -4309,7 +4313,7 @@ export function ChatPage() {
           } else {
             nextTasks[taskId] = {
               taskId,
-              subject: typeof task.subject === 'string' ? task.subject : '未命名任务',
+              subject: typeof task.subject === 'string' ? task.subject : t('chat.status.unnamedTask'),
               status,
               owner: typeof task.owner === 'string' ? task.owner : undefined,
               activeForm: typeof task.active_form === 'string' ? task.active_form : undefined,
@@ -4325,10 +4329,10 @@ export function ChatPage() {
         })
 
         const now = Date.now()
-        const subject = typeof task.subject === 'string' ? task.subject : '未命名任务'
+        const subject = typeof task.subject === 'string' ? task.subject : t('chat.status.unnamedTask')
         const owner = typeof task.owner === 'string' ? task.owner : ''
         const activeForm = typeof task.active_form === 'string' ? task.active_form : ''
-        const payload = createTaskStatusPayload({
+        const payload = createTaskStatusPayload(t, {
           taskId,
           subject,
           status,
@@ -4351,7 +4355,7 @@ export function ChatPage() {
         const payload = isRecord(event.message) ? event.message : {}
         if (!sid) break
         const now = Date.now()
-        const statusPayload = createAgentMessageStatusPayload({
+        const statusPayload = createAgentMessageStatusPayload(t, {
           id: typeof event.event_id === 'string' ? event.event_id : `agent-message-${now}`,
           from: typeof payload.from === 'string' ? payload.from : 'unknown',
           to: typeof payload.to === 'string' ? payload.to : '*',
@@ -4400,7 +4404,7 @@ export function ChatPage() {
               : 'running'
         const error = isRecord(event.error) ? event.error : {}
         const now = Date.now()
-        const statusPayload = createAsyncAgentStatusPayload({
+        const statusPayload = createAsyncAgentStatusPayload(t, {
           agentId,
           agentName: typeof event.agent_name === 'string' ? event.agent_name : 'agent',
           description: typeof event.description === 'string' ? event.description : '',
@@ -4449,7 +4453,7 @@ export function ChatPage() {
         const teamId = typeof team.team_id === 'string' ? team.team_id : ''
         if (!sid || !teamId) break
         const now = Date.now()
-        const statusPayload = createTeamStatusPayload({
+        const statusPayload = createTeamStatusPayload(t, {
           teamId,
           teamName: typeof team.team_name === 'string' ? team.team_name : undefined,
           members: asStringArray(team.members),
@@ -4503,7 +4507,7 @@ export function ChatPage() {
           const aid = ensureAssistantMessage(sid, now)
           const statusActivity: ToolActivity = {
             type: 'status',
-            content: subagent.status === 'running' ? '子任务启动' : '开始总结',
+            content: subagent.status === 'running' ? t('chat.status.subagentStartedShort') : t('chat.status.subagentSummarizing'),
             ts: now,
             subagent,
           }
@@ -4535,7 +4539,7 @@ export function ChatPage() {
         const activity: ToolActivity = {
           type: 'status',
           name: 'task_start',
-          content: '子任务已创建',
+          content: t('chat.status.subagentCreatedShort'),
           ts: Date.now(),
           subagent,
         }
@@ -4587,7 +4591,7 @@ export function ChatPage() {
             syncAgents: {
               ...prev.syncAgents,
               [agentId]: {
-                ...(prev.syncAgents[agentId] || createSyncAgentState(agentId, updatedAt)),
+                ...(prev.syncAgents[agentId] || createSyncAgentState(t, agentId, updatedAt)),
                 agentName: agentName || prev.syncAgents[agentId]?.agentName || 'subagent',
                 currentIntent: { text: intentText, toolUseId },
                 lastEventAt: updatedAt,
@@ -4651,7 +4655,7 @@ export function ChatPage() {
           ...prev,
           isPaused: true,
           isStopping: false,
-          pauseReason: (event.content as string) || '等待权限授权',
+          pauseReason: (event.content as string) || t('chat.status.waitingPermission'),
           messages: prev.messages.map((m) => m.id === aid ? { ...m, tools: [...(m.tools || []), activity] } : m),
         }))
         break
@@ -5044,7 +5048,7 @@ export function ChatPage() {
         if (subagent && aid) {
           const statusActivity: ToolActivity = {
             type: 'status',
-            content: subagent.status === 'error' ? '子任务失败' : '子任务完成',
+            content: subagent.status === 'error' ? t('chat.status.subagentFailedShort') : t('chat.status.subagentDoneShort'),
             ts: Date.now(),
             subagent,
           }
@@ -5382,7 +5386,7 @@ export function ChatPage() {
         const activity: ToolActivity = {
           type: 'status',
           name: 'task_end',
-          content: subagent.status === 'error' ? '子任务生命周期结束，状态失败' : '子任务生命周期结束',
+          content: subagent.status === 'error' ? t('chat.status.subagentEndFailed') : t('chat.status.subagentEnd'),
           ts: Date.now(),
           subagent,
         }
@@ -5423,7 +5427,7 @@ export function ChatPage() {
           isStopping: false,
           pauseReason: undefined,
           messages: prev.messages.map((m) =>
-            m.id === aid ? { ...m, isStreaming: false, content: m.content || '(已终止)' } : m
+            m.id === aid ? { ...m, isStreaming: false, content: m.content || t('chat.status.terminated') } : m
           ),
         }))
         break
@@ -5433,7 +5437,7 @@ export function ChatPage() {
         const sid = eventSessionId || activeSessionIdRef.current || ''
         if (sid) {
           const pendingAssistantId = pendingAssistantIds.current[sid]
-          const systemNotice = buildSystemErrorNotice(event.error || event.payload || event.content || event)
+          const systemNotice = buildSystemErrorNotice(t, event.error || event.payload || event.content || event)
           const errorAt = Date.now()
           pendingAssistantIds.current[sid] = null
           updateSession(sid, (prev) => ({
@@ -5524,11 +5528,11 @@ export function ChatPage() {
             timestamp: sendAt,
             systemNotice: {
               kind: 'error',
-              title: '后台服务未连接',
+              title: t('chat.errors.serviceNotConnected'),
               message: harnessclawStatus === 'connecting'
-                ? '正在尝试连接 HarnessClaw 服务，请稍后再试。'
-                : '无法连接 HarnessClaw 服务，请确认本地后台已启动后再试。',
-              hint: '请检查本地服务是否已启动，以及连接配置是否正确。',
+                ? t('chat.errors.tryingToConnect')
+                : t('chat.errors.cannotConnect'),
+              hint: t('chat.errors.serviceIssue'),
             },
           },
         ],
@@ -5567,9 +5571,9 @@ export function ChatPage() {
         const attachIndex = findAttachableAssistantMessageIndex(messages, errorAt, pendingAssistantId)
         const notice: SystemNoticeData = {
           kind: 'error',
-          title: '请求失败',
-          message: '消息发送失败：后台服务未连接，请确认本地后台已启动后再试。',
-          hint: '请检查本地服务是否已启动，以及连接配置是否正确。',
+          title: t('chat.status.requestFailed'),
+          message: t('chat.status.serviceNotConnected'),
+          hint: t('chat.status.serviceNotConnectedHint'),
         }
         if (attachIndex >= 0) {
           messages[attachIndex] = {
@@ -5648,7 +5652,7 @@ export function ChatPage() {
       isStopping: true,
       isPaused: false,
       currentThinking: '',
-      pauseReason: '正在请求中止当前会话...',
+      pauseReason: t('chat.status.stoppingSession'),
     }))
     void window.harnessclaw.stop(activeSessionId)
   }
@@ -5765,17 +5769,17 @@ export function ChatPage() {
                 {activeSessionId ? (
                   <SessionTitleMenu
                     sessionId={activeSessionId}
-                    title={activeSessionPrompt || '新对话'}
+                    title={activeSessionPrompt || t('chat.newChat')}
                     currentProjectId={activeProjectContext?.projectId || null}
                     onDelete={handleClearHistory}
                   />
                 ) : (
-                  <h1 className="truncate text-lg font-semibold tracking-tight">新对话</h1>
+                  <h1 className="truncate text-lg font-semibold tracking-tight">{t('chat.newChat')}</h1>
                 )}
               </div>
               {activeProjectContext ? (
                 <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                  项目：{activeProjectContext.name}
+                  {t('chat.header.activeProject', { name: activeProjectContext.name })}
                 </p>
               ) : null}
             </div>
@@ -5822,13 +5826,13 @@ export function ChatPage() {
                 </p>
                 <div className="mt-5 flex flex-wrap gap-2">
                   <span className="inline-flex items-center rounded-full bg-accent px-3 py-1.5 text-[11px] text-foreground/80">
-                    Enter 发送，Shift + Enter 换行
+                    {t('chat.composer.sendHint')}
                   </span>
                   <span className="inline-flex items-center rounded-full bg-accent px-3 py-1.5 text-[11px] text-foreground/80">
-                    支持直接拖入文件
+                    {t('chat.composer.dropFiles')}
                   </span>
                   <span className="inline-flex items-center rounded-full bg-accent px-3 py-1.5 text-[11px] text-foreground/80">
-                    敏感操作会先向你确认
+                    {t('chat.composer.permissionHint')}
                   </span>
                 </div>
                 <div className="mt-7 flex flex-wrap items-center gap-3">
@@ -5837,10 +5841,10 @@ export function ChatPage() {
                     className="chat-empty-cta inline-flex items-center gap-2 rounded-full bg-foreground px-4 py-2.5 text-sm font-medium text-background transition-opacity hover:opacity-90 dark:bg-primary dark:text-primary-foreground"
                   >
                     <Plus size={14} />
-                    开始新对话
+                    {t('chat.welcome.startNew')}
                   </button>
                   <p className="text-xs text-muted-foreground">
-                    让问题、附件和进度留在同一条对话里。
+                    {t('chat.welcome.welcomeDesc')}
                   </p>
                 </div>
               </div>
@@ -5910,8 +5914,8 @@ export function ChatPage() {
               <button
                 onClick={() => scrollToBottom()}
                 className="chat-jump-to-bottom absolute bottom-[calc(100px+1.5rem)] left-1/2 z-20 flex h-11 w-11 -translate-x-1/2 items-center justify-center rounded-full border border-border/80 bg-white text-foreground shadow-[0_14px_30px_rgba(15,23,42,0.14)] transition-[transform,background-color,border-color,box-shadow] hover:scale-[1.03] hover:border-border hover:bg-muted hover:shadow-[0_18px_36px_rgba(15,23,42,0.18)] dark:bg-card dark:hover:bg-muted/60"
-                aria-label="快速回到底部"
-                title="回到底部"
+                aria-label={t('chat.scroll.toBottom')}
+                title={t('chat.scroll.toBottom')}
               >
                 <ArrowDown size={18} className="text-foreground" />
               </button>
@@ -5926,7 +5930,11 @@ export function ChatPage() {
                       <AlertCircle size={14} className="mt-0.5 flex-shrink-0 text-orange-600 dark:text-orange-300" />
                       <div className="min-w-0 flex-1">
                         <p className="text-xs font-semibold text-orange-900 dark:text-orange-100">
-                          需要你来决定：{pendingStepDecision.scope === 'plan' ? '整个计划' : `步骤 ${pendingStepDecision.stepId || ''}`} 已重试 {pendingStepDecision.attempts} 次仍未成功
+                          {t('chat.decision.needsAction', {
+                            target: pendingStepDecision.scope === 'plan'
+                              ? t('chat.decision.targetPlan')
+                              : t('chat.decision.targetStep', { id: pendingStepDecision.stepId || '' })
+                          })} · {t('chat.decision.retryCount', { n: pendingStepDecision.attempts })}
                         </p>
                         {pendingStepDecision.stepDescription && (
                           <p className="mt-0.5 truncate text-[11px] text-orange-800/80 dark:text-orange-200/80">
@@ -5935,7 +5943,7 @@ export function ChatPage() {
                         )}
                         {pendingStepDecision.reason && (
                           <p className="mt-1 line-clamp-2 text-xs leading-5 text-orange-800 dark:text-orange-200">
-                            失败原因：{pendingStepDecision.reason}
+                            {t('chat.decision.failedReason', { reason: pendingStepDecision.reason })}
                           </p>
                         )}
                       </div>
@@ -5947,20 +5955,20 @@ export function ChatPage() {
                           className="inline-flex items-center gap-1.5 rounded-full border border-orange-400 bg-white px-3 py-1 text-xs font-medium text-orange-700 transition hover:bg-orange-100 dark:border-orange-600 dark:bg-orange-900/30 dark:text-orange-200 dark:hover:bg-orange-900/50"
                         >
                           <RefreshCw size={12} />
-                          再试一次
+                          {t('chat.decision.retryOnce')}
                         </button>
                       )}
                       <button
                         onClick={() => respondStepDecision(pendingStepDecision.requestId, 'continue')}
                         className="inline-flex items-center gap-1.5 rounded-full border border-orange-400 bg-white px-3 py-1 text-xs font-medium text-orange-700 transition hover:bg-orange-100 dark:border-orange-600 dark:bg-orange-900/30 dark:text-orange-200 dark:hover:bg-orange-900/50"
                       >
-                        跳过，继续后续步骤
+                        {t('chat.decision.skipStep')}
                       </button>
                       <button
                         onClick={() => respondStepDecision(pendingStepDecision.requestId, 'cancel')}
                         className="inline-flex items-center gap-1.5 rounded-full border border-red-300 bg-white px-3 py-1 text-xs font-medium text-red-700 transition hover:bg-red-50 dark:border-red-700/60 dark:bg-red-950/30 dark:text-red-200 dark:hover:bg-red-950/60"
                       >
-                        放弃任务
+                        {t('chat.decision.abortTask')}
                       </button>
                     </div>
                   </div>
@@ -5995,7 +6003,7 @@ export function ChatPage() {
                       >
                         {engineNoteBanner.text}
                         {engineNoteBanner.stepId && (
-                          <span className="ml-1.5 opacity-60">· 步骤 {engineNoteBanner.stepId}</span>
+                          <span className="ml-1.5 opacity-60">· {t('chat.decision.stepLabel', { id: engineNoteBanner.stepId })}</span>
                         )}
                       </p>
                     </div>
@@ -6071,8 +6079,8 @@ export function ChatPage() {
                   {isDragOver && (
                     <div className="chat-drop-overlay pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-card text-sm text-primary">
                       <div className="text-center">
-                        <p className="text-sm font-medium">松开即可把文件交给这次对话</p>
-                        <p className="mt-1 text-xs text-muted-foreground">附件会和你的问题一起进入当前上下文。</p>
+                        <p className="text-sm font-medium">{t('chat.composer.dropToUpload')}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">{t('chat.composer.dropDesc')}</p>
                       </div>
                     </div>
                   )}
@@ -6093,8 +6101,8 @@ export function ChatPage() {
                       disabled={activeSession.isProcessing}
                       placeholder={
                         harnessclawStatus === 'connected'
-                          ? '+ 想让 HarnessClaw 帮你做什么？'
-                          : '+ 先写下你的问题，发送时会自动尝试连接。'
+                          ? t('chat.composer.placeholderConnected')
+                          : t('chat.composer.placeholderDisconnected')
                       }
                       maxLength={maxLength}
                       className="min-h-[26px] max-h-[120px] leading-6"
@@ -6110,8 +6118,8 @@ export function ChatPage() {
                         onClick={handlePickFiles}
                         disabled={activeSession.isProcessing || harnessclawStatus !== 'connected'}
                         className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-border text-muted-foreground transition-colors hover:border-primary hover:text-foreground disabled:opacity-50"
-                        title="添加文件"
-                        aria-label="添加文件"
+                        title={t('chat.composer.addFilesAria')}
+                        aria-label={t('chat.composer.addFilesAria')}
                       >
                         <Plus size={16} />
                       </button>
@@ -6122,8 +6130,8 @@ export function ChatPage() {
                             onClick={handleStop}
                             disabled={activeSession.isStopping}
                             className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-red-200 bg-red-50 text-red-700 transition-colors hover:bg-red-100 disabled:opacity-60 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300"
-                            title="停止当前任务"
-                            aria-label="停止当前任务"
+                            title={t('chat.composer.stopAria')}
+                            aria-label={t('chat.composer.stopAria')}
                           >
                             <span className="h-2 w-2 rounded-sm bg-current" />
                           </button>
@@ -6132,7 +6140,7 @@ export function ChatPage() {
                             onClick={handleSend}
                             disabled={!canSend}
                             className="chat-send-button inline-flex h-11 w-11 items-center justify-center rounded-full bg-foreground text-background transition-opacity hover:opacity-90 disabled:opacity-50 dark:bg-primary dark:text-primary-foreground"
-                            aria-label="发送消息"
+                            aria-label={t('chat.composer.sendAria')}
                             data-ready={canSend ? 'true' : 'false'}
                             data-burst={sendBurstActive ? 'true' : undefined}
                           >
@@ -6203,6 +6211,7 @@ function AgentAvatar({ agentId, agentName, size = 'md' }: { agentId?: string; ag
 // ─── Sub Components ─────────────────────────────────────────────────────────
 
 function CollaborationOverview({ collaboration }: { collaboration: CollaborationState }) {
+  const { t } = useTranslation()
   const tasks = Object.values(collaboration.tasks)
     .sort((left, right) => right.updatedAt - left.updatedAt)
     .slice(0, 6)
@@ -6234,7 +6243,7 @@ function CollaborationOverview({ collaboration }: { collaboration: Collaboration
           <div className="multi-agent-route-pill inline-flex items-center gap-2 rounded-full border border-border bg-background px-3 py-1.5 text-xs text-muted-foreground">
             <AtSign size={12} className="text-primary" />
             <span>
-              已路由到 <span className="font-medium text-foreground">@{collaboration.routedAgent.agentName}</span>
+              {t('chat.status.routedToPrefix')} <span className="font-medium text-foreground">@{collaboration.routedAgent.agentName}</span>
             </span>
           </div>
         )}
@@ -6246,7 +6255,7 @@ function CollaborationOverview({ collaboration }: { collaboration: Collaboration
           <div className="multi-agent-panel rounded-2xl border border-border/70 bg-background/70 p-3" style={{ animationDelay: '100ms' }}>
             <div className="mb-3 flex items-center gap-2">
               <ListTodo size={14} className="text-primary" />
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">任务</p>
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t('chat.task.detailsLabel')}</p>
             </div>
             <div className="space-y-2">
               {tasks.map((task, index) => (
@@ -6261,15 +6270,15 @@ function CollaborationOverview({ collaboration }: { collaboration: Collaboration
                       <p className="text-sm font-medium text-foreground">{task.subject}</p>
                       {(task.owner || task.activeForm) && (
                         <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
-                          {task.activeForm || '任务状态已更新'}{task.owner ? ` · ${task.owner}` : ''}
+                          {task.activeForm || t('chat.status.taskUpdated')}{task.owner ? ` · ${task.owner}` : ''}
                         </p>
                       )}
                     </div>
                     <span className={cn('rounded-full px-2 py-0.5 text-[10px] font-medium', getTaskStatusClasses(task.status), task.status === 'in_progress' && 'multi-agent-badge-running')}>
                       {task.status === 'in_progress' ? (
-                        <span className="inline-flex items-center gap-1"><Loader2 size={10} className="animate-spin" />进行中</span>
+                        <span className="inline-flex items-center gap-1"><Loader2 size={10} className="animate-spin" />{t('chat.taskStatus.inProgress')}</span>
                       ) : (
-                        getTaskStatusLabel(task.status)
+                        getTaskStatusLabel(t, task.status)
                       )}
                     </span>
                   </div>
@@ -6283,7 +6292,7 @@ function CollaborationOverview({ collaboration }: { collaboration: Collaboration
           <div className="multi-agent-panel rounded-2xl border border-border/70 bg-background/70 p-3" style={{ animationDelay: '160ms' }}>
             <div className="mb-3 flex items-center gap-2">
               <GitBranch size={14} className="text-primary" />
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">异步 Agent</p>
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t('chat.status.asyncAgents')}</p>
             </div>
             <div className="space-y-2">
               {asyncAgents.map((agent, index) => (
@@ -6297,20 +6306,20 @@ function CollaborationOverview({ collaboration }: { collaboration: Collaboration
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium text-foreground">{agent.agentName}</p>
                       <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
-                        {agent.description || '后台协作任务'}
+                        {agent.description || t('chat.status.asyncCollab')}
                       </p>
                     </div>
                     <span className={cn('rounded-full px-2 py-0.5 text-[10px] font-medium', getAsyncAgentStatusClasses(agent.status), agent.status === 'running' && 'multi-agent-badge-running')}>
                       {agent.status === 'running' ? (
-                        <span className="inline-flex items-center gap-1"><Loader2 size={10} className="animate-spin" />运行中</span>
+                        <span className="inline-flex items-center gap-1"><Loader2 size={10} className="animate-spin" />{t('chat.asyncAgentStatus.running')}</span>
                       ) : (
-                        getAsyncAgentStatusLabel(agent.status)
+                        getAsyncAgentStatusLabel(t, agent.status)
                       )}
                     </span>
                   </div>
                   {(agent.durationMs || agent.errorMessage) && (
                     <p className="mt-2 text-[11px] leading-5 text-muted-foreground">
-                      {agent.errorMessage ? agent.errorMessage : `总耗时 ${formatDurationMs(agent.durationMs)}`}
+                      {agent.errorMessage ? agent.errorMessage : t('chat.status.totalDuration', { time: formatDurationMs(agent.durationMs) })}
                     </p>
                   )}
                 </div>
@@ -6323,7 +6332,7 @@ function CollaborationOverview({ collaboration }: { collaboration: Collaboration
           <div className="multi-agent-panel rounded-2xl border border-border/70 bg-background/70 p-3" style={{ animationDelay: '220ms' }}>
             <div className="mb-3 flex items-center gap-2">
               <MessagesSquare size={14} className="text-primary" />
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Agent 通信</p>
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t('chat.team.membersLabel')}</p>
             </div>
             <div className="space-y-2">
               {agentMessages.map((item, index) => (
@@ -6336,7 +6345,7 @@ function CollaborationOverview({ collaboration }: { collaboration: Collaboration
                   <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
                     <span className="font-medium text-foreground">{item.from}</span>
                     <span>→</span>
-                    <span>{item.to === '*' ? '全部成员' : item.to}</span>
+                    <span>{item.to === '*' ? t('chat.status.allMembers') : item.to}</span>
                   </div>
                   <p className="mt-1 text-xs leading-5 text-foreground/85 dark:text-[#dce3ef]">{item.summary}</p>
                 </div>
@@ -6369,6 +6378,7 @@ function CollaborationOverview({ collaboration }: { collaboration: Collaboration
  * style (small chevron + "查看任务详情" trigger, code-style task body).
  */
 function TaskPromptExpander({ prompt }: { prompt: string }) {
+  const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const trimmed = prompt.trim()
   if (!trimmed) return null
@@ -6381,7 +6391,7 @@ function TaskPromptExpander({ prompt }: { prompt: string }) {
         className="inline-flex min-h-7 items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
       >
         {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        <span>{expanded ? '收起任务详情' : '查看任务详情'}</span>
+        <span>{expanded ? t('chat.task.hideDetails') : t('chat.task.viewDetails')}</span>
       </button>
       {expanded && (
         <div className="mt-1.5 max-h-60 overflow-y-auto rounded-lg border border-border/70 bg-muted/40 px-2.5 py-2 text-[11px] leading-5 text-foreground/85">
@@ -6452,7 +6462,7 @@ function MessageBubble({
           <p className="mt-1 text-sm leading-6 text-foreground">{notice.message}</p>
           {notice.hint && (
             <p className="mt-2 text-xs leading-5 text-muted-foreground">
-              建议：{notice.hint}
+              {t('chat.toolResult.failed')}：{notice.hint}
             </p>
           )}
         </div>
@@ -6467,7 +6477,7 @@ function MessageBubble({
           <div className="w-full sm:w-[min(88%,56rem)] xl:w-[min(80%,56rem)]">
             {renderErrorNoticeCard(errorNotice)}
             <p className="mt-1 px-1 text-[10px] text-muted-foreground">
-              {formatMessageTime(message.timestamp)}
+              {formatMessageTime(i18n.language, message.timestamp)}
             </p>
           </div>
         </div>
@@ -6843,7 +6853,7 @@ function MessageBubble({
           'mb-1 flex justify-end gap-1 opacity-100 transition-opacity md:absolute md:top-1 md:z-10 md:mb-0 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100',
           isUser ? 'md:-left-14 md:right-auto' : 'md:-right-14'
         )}>
-          <button onClick={handleCopy} className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-background/90 hover:bg-muted" aria-label="复制消息">
+          <button onClick={handleCopy} className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-background/90 hover:bg-muted" aria-label={t('chat.actions.copyMessage')}>
             {copied ? <Check size={12} className="text-green-500" /> : <Copy size={12} className="text-muted-foreground" />}
           </button>
         </div>
@@ -6952,7 +6962,7 @@ function MessageBubble({
                               ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
                               : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
                         )}>
-                          {visualStatus === 'failed' ? '失败' : visualStatus === 'running' ? '进行中' : '已完成'}
+                          {visualStatus === 'failed' ? t('chat.asyncAgentStatus.failed') : visualStatus === 'running' ? t('chat.asyncAgentStatus.running') : t('chat.asyncAgentStatus.completed')}
                         </span>
                       </div>
 
@@ -6973,7 +6983,7 @@ function MessageBubble({
                       )}
 
                       {visibleItems.length === 0 ? (
-                        <p className="text-[11px] text-muted-foreground">等待更多处理结果…</p>
+                        <p className="text-[11px] text-muted-foreground">{t('chat.status.waitingResults')}</p>
                       ) : (
                         visibleItems.map((item, itemIndex) => {
                           if (item.kind === 'hint') {
@@ -7047,14 +7057,14 @@ function MessageBubble({
 
         {shouldShowBreathingDot && (
           <div className="mb-1.5 flex justify-end pr-1">
-            <span className="streaming-breathing-dot" aria-label="服务仍在继续" />
+            <span className="streaming-breathing-dot" aria-label={t('chat.status.serviceContinuing')} />
           </div>
         )}
 
         {shouldShowTimestamp && (
           <div className="mt-1 px-1">
             <p className="text-[10px] text-muted-foreground">
-              {formatMessageTime(message.timestamp)}
+              {formatMessageTime(i18n.language, message.timestamp)}
             </p>
           </div>
         )}
@@ -7092,6 +7102,7 @@ function AgentTeamPanel({
   renderHint: (text: string, key: string, compact?: boolean) => JSX.Element
   renderTextBlock: (text: string, key: string, compact?: boolean) => JSX.Element
 }) {
+  const { t } = useTranslation()
   const [activeIndex, setActiveIndex] = useState(0)
   const [detailOpen, setDetailOpen] = useState(false)
   const [switchDirection, setSwitchDirection] = useState<'next' | 'prev'>('next')
@@ -7172,10 +7183,10 @@ function AgentTeamPanel({
     const latestTool = [...visibleItems].reverse().find((item) => item.kind === 'tool')
     if (latestTool && latestTool.kind === 'tool') {
       return latestTool.isRunning
-        ? `正在执行 ${getToolDisplayName(latestTool.call.name)}`
+        ? `${t('chat.status.executingPrefix')} ${getToolDisplayName(t, latestTool.call.name)}`
         : latestTool.result?.isError
-          ? `${getToolDisplayName(latestTool.call.name)} 执行失败`
-          : `${getToolDisplayName(latestTool.call.name)} 已完成`
+          ? `${getToolDisplayName(t, latestTool.call.name)} ${t('chat.status.failedSuffix')}`
+          : `${getToolDisplayName(t, latestTool.call.name)} ${t('chat.status.doneSuffix')}`
     }
 
     const latestHint = [...visibleItems].reverse().find((item) => item.kind === 'hint')
@@ -7183,12 +7194,12 @@ function AgentTeamPanel({
       return summarizeInlineText(latestHint.data.content, 104)
     }
 
-    return '正在补充处理过程。'
+    return t('chat.status.supplementingProcess')
   }
 
   const getStatusLabel = (status: string) => {
     const visualStatus = getSubagentVisualStatus(status)
-    return visualStatus === 'failed' ? '失败' : visualStatus === 'running' ? '进行中' : '已完成'
+    return visualStatus === 'failed' ? t('chat.asyncAgentStatus.failed') : visualStatus === 'running' ? t('chat.asyncAgentStatus.running') : t('chat.asyncAgentStatus.completed')
   }
 
   const getStatusClasses = (status: string) => cn(
@@ -7223,7 +7234,7 @@ function AgentTeamPanel({
       <div className={`team-stack-card team-stack-card-${side}`} aria-hidden="true">
         <div className="team-stack-card-top">
           <span className="team-stack-card-name">{latestTask.label}</span>
-          <span className="team-stack-card-meta">{getVisibleItems(agent).length} 记录</span>
+          <span className="team-stack-card-meta">{t('chat.status.processRecords', { n: getVisibleItems(agent).length })}</span>
         </div>
       </div>
     )
@@ -7238,9 +7249,9 @@ function AgentTeamPanel({
       >
         <div className="mb-3 flex items-center gap-2">
           <Users size={14} className="text-primary" />
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Agent Team</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t('chat.team.title')}</p>
           <span className="rounded-full border border-border bg-background/75 px-2 py-0.5 text-[10px] text-muted-foreground">
-            {agents.length} 个 subagent
+            {t('chat.status.subagentUnit', { count: agents.length })}
           </span>
         </div>
 
@@ -7250,7 +7261,7 @@ function AgentTeamPanel({
               type="button"
               onClick={() => moveToIndex(wrapIndex(activeIndex - 1), 'prev')}
               className="team-stack-nav team-stack-nav-left"
-              aria-label="查看上一个 subagent"
+              aria-label={t('chat.status.prevSubagentAria')}
             >
               <ChevronLeft size={16} />
             </button>
@@ -7290,7 +7301,7 @@ function AgentTeamPanel({
                   </div>
                   <div className="min-w-0">
                     <span className="team-stack-card-name">{latestActiveTask.label}</span>
-                    <p className="team-stack-agent-copy">{activeVisibleItems.length || activeAgent.items.length} 条过程记录</p>
+                    <p className="team-stack-agent-copy">{t('chat.status.processRecords', { n: activeVisibleItems.length || activeAgent.items.length })}</p>
                   </div>
                 </div>
                 <span className="team-stack-card-meta team-stack-card-status">
@@ -7304,9 +7315,9 @@ function AgentTeamPanel({
               </div>
 
               <div className="team-stack-card-foot">
-                <span>子 Agent 协作成员</span>
+                <span>{t('chat.status.subagentCollab')}</span>
                 <span className="inline-flex items-center gap-2">
-                  <span>查看详情</span>
+                  <span>{t('chat.team.details')}</span>
                   <span className="team-stack-card-dot" />
                 </span>
               </div>
@@ -7324,7 +7335,7 @@ function AgentTeamPanel({
               type="button"
               onClick={() => moveToIndex(wrapIndex(activeIndex + 1), 'next')}
               className="team-stack-nav team-stack-nav-right"
-              aria-label="查看下一个 subagent"
+              aria-label={t('chat.status.nextSubagentAria')}
             >
               <ChevronRight size={16} />
             </button>
@@ -7332,7 +7343,7 @@ function AgentTeamPanel({
         </div>
 
         {hasMultipleAgents && (
-          <div className="team-stack-dots" aria-label="subagent 切换进度">
+          <div className="team-stack-dots" aria-label={t('chat.status.subagentSwitchProgress')}>
             {agents.map((agent, index) => (
               <button
                 key={agent.task.taskId}
@@ -7343,7 +7354,7 @@ function AgentTeamPanel({
                 }}
                 className="team-stack-dot"
                 data-active={index === activeIndex ? 'true' : undefined}
-                aria-label={`切换到 ${getLatestTask(agent).label}`}
+                aria-label={t('chat.team.switchToAria', { name: getLatestTask(agent).label })}
                 aria-pressed={index === activeIndex}
               />
             ))}
@@ -7371,7 +7382,7 @@ function AgentTeamPanel({
                 type="button"
                 onClick={() => setDetailOpen(false)}
                 className="team-stack-dialog-close"
-                aria-label="关闭 subagent 详情"
+                aria-label={t('chat.status.closeSubagentDetails')}
               >
                 <X size={15} />
               </button>
@@ -7379,22 +7390,22 @@ function AgentTeamPanel({
 
             <div className="team-stack-dialog-grid">
               <div className="team-stack-dialog-panel">
-                <p className="team-stack-dialog-label">当前状态</p>
+                <p className="team-stack-dialog-label">{t('chat.team.status')}</p>
                 <div className={getStatusClasses(latestActiveTask.status)}>{getStatusLabel(latestActiveTask.status)}</div>
                 <p className="team-stack-dialog-copy">{getAgentSummary(activeAgent)}</p>
               </div>
               <div className="team-stack-dialog-panel">
-                <p className="team-stack-dialog-label">过程记录</p>
+                <p className="team-stack-dialog-label">{t('chat.status.processRecords', { n: '' }).replace('{{n}}', '').trim()}</p>
                 <p className="team-stack-dialog-stat">{activeVisibleItems.length || activeAgent.items.length}</p>
-                <p className="team-stack-dialog-copy">当前 subagent 已输出的明细条数</p>
+                <p className="team-stack-dialog-copy">{t('chat.status.subagentDetails')}</p>
               </div>
             </div>
 
             <div className="team-stack-dialog-panel team-stack-dialog-panel-scroll">
-              <p className="team-stack-dialog-label">详细内容</p>
+              <p className="team-stack-dialog-label">{t('chat.status.detailContent')}</p>
               <div className="agent-team-dialog-flow mt-3">
                 {activeVisibleItems.length === 0 ? (
-                  <p className="text-[11px] text-muted-foreground">等待更多处理结果…</p>
+                  <p className="text-[11px] text-muted-foreground">{t('chat.status.waitingResults')}</p>
                 ) : (
                   activeVisibleItems.map((item, index) => {
                     const itemKey = item.kind === 'text'
@@ -7498,14 +7509,15 @@ function ToolCallCard({
   isRunning?: boolean
   onOpenFilePreview: (preview: FilePreviewData) => void
 }) {
+  const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const contentId = useId()
   const filePreview = extractFilePreviewData(call, result)
   // Tool name always comes from card.add (i.e. `call.name`) — never from
   // close.inner.name which is empty by v2 protocol.
-  const toolName = getToolDisplayName(call.name)
+  const toolName = getToolDisplayName(t, call.name)
   const durationLabel = formatDurationMs(result?.durationMs)
-  const renderHintLabel = result?.renderHint ? getToolRenderHintLabel(result.renderHint) : ''
+  const renderHintLabel = result?.renderHint ? getToolRenderHintLabel(t, result.renderHint) : ''
   const isSearchResult = result?.renderHint === 'search'
   const searchUrls = isSearchResult ? extractSearchResultUrls(result?.metadata) : []
   const searchQuery = isSearchResult ? extractSearchQuery(result?.metadata) : undefined
@@ -7520,7 +7532,7 @@ function ToolCallCard({
         ? result.status
         : (result.isError ? 'failed' : 'ok'))
     : 'ok'
-  const errorPresentation = status === 'failed' ? getToolErrorPresentation(result?.errorType) : null
+  const errorPresentation = status === 'failed' ? getToolErrorPresentation(t, result?.errorType) : null
   const errorColorClasses = errorPresentation ? getToolErrorColorClasses(errorPresentation.color) : null
 
   // Build a "查看详情" payload — developer-only diagnostics (raw
@@ -7529,8 +7541,8 @@ function ToolCallCard({
   // on the main card body via `getToolResultSummary`.
   const showRetryHint = status === 'failed' && (result?.retryable || (result?.retryAfterMs && result.retryAfterMs > 0))
   const retryHintText = result?.retryAfterMs && result.retryAfterMs > 0
-    ? `约 ${Math.max(1, Math.round(result.retryAfterMs / 1000))} 秒后重试…`
-    : '自动重试中…'
+    ? t('chat.status.retryIn', { n: Math.max(1, Math.round(result.retryAfterMs / 1000)) })
+    : t('chat.status.autoRetrying')
   // recovery.action is reserved — render defensively. Today the engine
   // doesn't populate it, but if/when it does the UI will surface a small
   // hint without requiring further code changes.
@@ -7538,11 +7550,11 @@ function ToolCallCard({
     if (!result?.recovery || !result.recovery.action) return ''
     switch (result.recovery.action) {
       case 'retry':
-        return '正在重试…'
+        return t('chat.status.retrying')
       case 'fallback':
-        return result.recovery.next_card_id ? '已切换到备用方案，查看后续步骤。' : '已切换到备用方案。'
+        return result.recovery.next_card_id ? t('chat.status.fallbackToNext') : t('chat.status.fallbackUsed')
       case 'abort':
-        return '已中止后续操作。'
+        return t('chat.status.abortedAction')
       default:
         return ''
     }
@@ -7566,14 +7578,14 @@ function ToolCallCard({
   // categorized errorPresentation; for `cancelled` / `skipped` we use a
   // muted neutral; for `ok` and running we keep the legacy treatment.
   const statusPillLabel = isRunning
-    ? '执行中'
+    ? t('chat.asyncAgentStatus.running')
     : status === 'failed'
       ? errorPresentation!.label
       : status === 'cancelled'
-        ? '已取消'
+        ? t('chat.asyncAgentStatus.aborted')
         : status === 'skipped'
-          ? '已跳过'
-          : result ? '完成' : ''
+          ? t('chat.asyncAgentStatus.aborted') // 暂时用 aborted
+          : result ? t('chat.asyncAgentStatus.completed') : ''
   const statusPillTextClass = isRunning
     ? 'text-yellow-500'
     : status === 'failed'
@@ -7655,7 +7667,7 @@ function ToolCallCard({
               'mt-1 text-[11px] leading-5',
               status === 'failed' ? errorColorClasses!.text : 'text-muted-foreground'
             )}>
-              {isRunning ? 'Agent 正在执行这个步骤。' : getToolResultSummary(call, result, filePreview)}
+              {isRunning ? t('chat.toolResult.executing') : getToolResultSummary(t, call, result, filePreview)}
             </p>
 
             {/* v2 §12 — retry / recovery hints. Display-only; no control
@@ -7687,7 +7699,7 @@ function ToolCallCard({
                   <div className="truncate text-[10px] text-muted-foreground">{filePreview.path}</div>
                 </div>
                 <span className="rounded-full border border-border bg-card px-2 py-0.5 text-[10px] text-muted-foreground">
-                  {filePreview.operation === 'read_file' ? '查看内容' : '查看写入'}
+                  {filePreview.operation === 'read_file' ? t('chat.toolResult.fileAssociated', { name: '' }).replace('Associated file', '').trim() : t('chat.toolResult.fileInvolved', { name: '' }).replace('Involves file', '').trim()}
                 </span>
               </button>
             )}
@@ -7697,7 +7709,7 @@ function ToolCallCard({
           <button
             onClick={() => setExpanded(!expanded)}
             className="inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition-colors hover:bg-muted"
-            aria-label={expanded ? '收起工具详情' : '展开工具详情'}
+            aria-label={expanded ? t('chat.composer.stopAria') : t('chat.task.viewDetails')}
             aria-expanded={expanded}
             aria-controls={contentId}
           >
@@ -7708,26 +7720,26 @@ function ToolCallCard({
         <div id={contentId} hidden={!expanded} className="space-y-2 border-t border-border px-3 py-2">
           {call.name && (
             <div>
-              <p className="mb-1 text-[10px] text-muted-foreground">工具名</p>
+              <p className="mb-1 text-[10px] text-muted-foreground">{t('chat.tool.nameLabel')}</p>
               <pre className="rounded-lg bg-muted p-2 text-[11px] font-mono text-foreground/80">{call.name}</pre>
             </div>
           )}
           {call.content && call.content !== '{}' && (
             <div>
-              <p className="mb-1 text-[10px] text-muted-foreground">输入参数</p>
+              <p className="mb-1 text-[10px] text-muted-foreground">{t('chat.tool.inputLabel')}</p>
               <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted p-2 text-[11px] font-mono text-foreground/80">{call.content}</pre>
             </div>
           )}
           {result?.filePath && (
             <div>
-              <p className="mb-1 text-[10px] text-muted-foreground">关联文件</p>
+              <p className="mb-1 text-[10px] text-muted-foreground">{t('chat.tool.associatedFiles')}</p>
               <pre className="rounded-lg bg-muted p-2 text-[11px] font-mono text-foreground/80">{result.filePath}</pre>
             </div>
           )}
           {isSearchResult && searchUrls.length > 0 && (
             <div>
               <div className="mb-1 flex items-center gap-2">
-                <p className="text-[10px] text-muted-foreground">搜索结果</p>
+                <p className="text-[10px] text-muted-foreground">{t('chat.tool.searchResult')}</p>
                 {searchQuery && (
                   <span className="inline-flex max-w-[220px] items-center gap-1 truncate rounded-full border border-border bg-background px-1.5 text-[10px] leading-4 text-muted-foreground" title={searchQuery}>
                     <Search size={10} className="flex-shrink-0" />
@@ -7735,7 +7747,7 @@ function ToolCallCard({
                   </span>
                 )}
                 <span className="text-[10px] text-muted-foreground">
-                  共 {searchResultCount ?? searchUrls.length} 条
+                  {t('chat.tool.totalRecords', { n: searchResultCount ?? searchUrls.length })}
                 </span>
               </div>
               {/* Cap the visible list to roughly 5 rows; everything past
@@ -7782,7 +7794,7 @@ function ToolCallCard({
               error.code out of the main UI; only here on demand. */}
           {status === 'failed' && (result?.devMessage || result?.errorCode || result?.errorType) && (
             <div>
-              <p className="mb-1 text-[10px] text-muted-foreground">诊断信息</p>
+              <p className="mb-1 text-[10px] text-muted-foreground">{t('chat.tool.diagnostics')}</p>
               <div className="space-y-1 rounded-lg bg-muted p-2 text-[11px] font-mono text-foreground/80">
                 {result?.errorType && (
                   <div>
@@ -7827,7 +7839,7 @@ function ToolCallCard({
           {isRunning && !result && (
             <div className="flex items-center gap-1.5 py-0.5">
               <Loader2 size={10} className="animate-spin text-muted-foreground" />
-              <span className="text-[11px] text-muted-foreground">等待返回...</span>
+              <span className="text-[11px] text-muted-foreground">{t('chat.tool.waitingReturn')}</span>
             </div>
           )}
         </div>
@@ -7865,16 +7877,16 @@ function PermissionRequestCard({
   const options = requestData?.options?.length
     ? requestData.options
     : [
-        { label: '允许这一次', scope: 'once' as const, allow: true },
-        { label: '本次会话都允许', scope: 'session' as const, allow: true },
-        { label: '拒绝', scope: 'once' as const, allow: false },
+        { label: t('chat.permissions.allowOnce'), scope: 'once' as const, allow: true },
+        { label: t('chat.permissions.alwaysAllow'), scope: 'session' as const, allow: true },
+        { label: t('chat.permissions.deny'), scope: 'once' as const, allow: false },
       ]
 
   const resultLabel = resultData
     ? resultData.approved
-      ? resultData.scope === 'session' ? '本会话已允许' : '已允许一次'
-      : '已拒绝'
-    : '等待授权'
+      ? resultData.scope === 'session' ? t('chat.permissions.sessionAllowed') : t('chat.permissions.onceAllowed')
+      : t('chat.permissions.denied')
+    : t('chat.permissions.waiting')
 
   return (
     <div className="mb-1.5">
@@ -7892,7 +7904,7 @@ function PermissionRequestCard({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="flex-1 truncate text-xs font-medium text-foreground">
-                需要你的确认
+                {t('chat.permissions.needsConfirmation')}
               </span>
               <span className={cn(
                 'flex-shrink-0 text-[10px]',
@@ -7910,7 +7922,7 @@ function PermissionRequestCard({
                 </pre>
               ) : (
                 <p className="line-clamp-3 break-all text-[11px] text-foreground/90">
-                  {requestData?.message || '这个操作需要先得到你的确认。'}
+                  {requestData?.message || t('chat.permissions.defaultMessage')}
                 </p>
               )}
               {!requestData?.command && requestData?.description && (
@@ -7920,8 +7932,8 @@ function PermissionRequestCard({
               )}
             </div>
             <div className="mt-1 flex items-center gap-2 text-[10px] text-muted-foreground">
-              <span>{requestData?.isReadOnly ? '只会读取信息' : '可能修改文件或环境'}</span>
-              {request.name && <span>{getToolDisplayName(request.name)}</span>}
+              <span>{requestData?.isReadOnly ? t('chat.permissions.readOnly') : t('chat.permissions.modifiesEnv')}</span>
+              {request.name && <span>{getToolDisplayName(t, request.name)}</span>}
             </div>
             {!requestData?.command && requestData?.message && requestData.description && (
               <p className="mt-1 text-[10px] text-muted-foreground">
@@ -7945,7 +7957,7 @@ function PermissionRequestCard({
                         : 'border border-red-200 bg-white text-red-600 hover:bg-red-50 dark:border-red-900/40 dark:bg-[#191f2c] dark:text-red-300 dark:hover:bg-red-950/30'
                     )}
                   >
-                    {submitting === option.label ? '提交中...' : getPermissionOptionLabel(option.label)}
+                    {submitting === option.label ? t('chat.permissions.submitting') : getPermissionOptionLabel(t, option.label)}
                   </button>
                 ))}
               </div>
@@ -7955,7 +7967,7 @@ function PermissionRequestCard({
           <button
             onClick={() => setExpanded(!expanded)}
             className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg hover:bg-black/5 dark:hover:bg-white/5"
-            aria-label={expanded ? '收起审批详情' : '展开审批详情'}
+            aria-label={expanded ? t('chat.permissions.collapseDetails') : t('chat.permissions.expandDetails')}
             aria-expanded={expanded}
             aria-controls={contentId}
           >
@@ -7966,7 +7978,7 @@ function PermissionRequestCard({
         <div id={contentId} hidden={!expanded} className="space-y-2 border-t border-amber-200/70 px-3 py-2 dark:border-amber-900/30">
           {requestData?.toolInput && (
             <div>
-              <p className="mb-1 text-[10px] text-muted-foreground">操作详情</p>
+              <p className="mb-1 text-[10px] text-muted-foreground">{t('chat.permissions.detailsLabel')}</p>
               <pre className="max-h-40 overflow-x-auto rounded-lg bg-background/80 p-2 text-[11px] font-mono text-foreground/80">
                 {requestData.toolInput}
               </pre>
@@ -7974,7 +7986,7 @@ function PermissionRequestCard({
           )}
           {resultData?.message && (
             <div>
-              <p className="mb-1 text-[10px] text-muted-foreground">审批结果</p>
+              <p className="mb-1 text-[10px] text-muted-foreground">{t('chat.permissions.resultLabel')}</p>
               <pre className="overflow-x-auto rounded-lg bg-background/80 p-2 text-[11px] font-mono text-foreground/80">
                 {resultData.message}
               </pre>
@@ -8054,8 +8066,8 @@ function AskUserQuestionCard({
       const result = await onRespondAskQuestion(request.callId, 'success', output)
       if (!result.ok) {
         setSubmitError(result.error
-          ? `答复发送失败：${result.error}。该问题可能已失效（服务端可能已重启），请发起新的会话或刷新后重试。`
-          : '答复发送失败，请稍后重试。')
+          ? t('chat.ask.submitFailedWithReason', { reason: result.error })
+          : t('chat.ask.submitFailed'))
       }
     } finally {
       setSubmitting(false)
@@ -8070,8 +8082,8 @@ function AskUserQuestionCard({
       const result = await onRespondAskQuestion(request.callId, 'cancelled', undefined, 'User dismissed the question dialog')
       if (!result.ok) {
         setSubmitError(result.error
-          ? `取消失败：${result.error}。该问题可能已失效（服务端可能已重启）。`
-          : '取消失败，请稍后重试。')
+          ? t('chat.ask.cancelFailedWithReason', { reason: result.error })
+          : t('chat.ask.cancelFailed'))
       }
     } finally {
       setSubmitting(false)
@@ -8087,9 +8099,9 @@ function AskUserQuestionCard({
 
   const statusLabel = isResolved
     ? resultData?.status === 'success'
-      ? '已答复'
-      : '已取消'
-    : '等待答复'
+      ? t('chat.ask.responded')
+      : t('chat.ask.cancelledStatus')
+    : t('chat.ask.waiting')
 
   return (
     <div className="mb-1.5">
@@ -8108,7 +8120,7 @@ function AskUserQuestionCard({
           />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <span className="flex-1 truncate text-xs font-medium text-foreground">追问一下</span>
+              <span className="flex-1 truncate text-xs font-medium text-foreground">{t('chat.ask.title')}</span>
               <span className={cn(
                 'flex-shrink-0 text-[10px]',
                 isResolved
@@ -8120,7 +8132,7 @@ function AskUserQuestionCard({
             </div>
 
             <p className="mt-1 whitespace-pre-wrap break-words text-[12px] leading-5 text-foreground/90">
-              {requestData?.question || '需要更多信息以继续。'}
+              {requestData?.question || t('chat.ask.defaultQuestion')}
             </p>
 
             {!isResolved && (
@@ -8168,7 +8180,7 @@ function AskUserQuestionCard({
                       onKeyDown={handleKeyDown}
                       disabled={submitting || selected.size > 0}
                       rows={2}
-                      placeholder={hasOptions ? '或输入自定义答复…' : '输入你的答复…'}
+                      placeholder={hasOptions ? t('chat.ask.customPlaceholder') : t('chat.ask.placeholder')}
                       className="w-full resize-none rounded-lg border border-border bg-background px-2.5 py-1.5 text-[11px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:cursor-not-allowed disabled:opacity-60"
                     />
                   </div>
@@ -8181,7 +8193,7 @@ function AskUserQuestionCard({
                     disabled={submitting}
                     className="min-h-9 w-full rounded-lg border border-border bg-background px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    取消
+                    {t('chat.ask.cancel')}
                   </button>
                   <button
                     type="button"
@@ -8189,7 +8201,7 @@ function AskUserQuestionCard({
                     disabled={!canSubmit}
                     className="min-h-9 w-full rounded-lg bg-blue-600 px-3 py-1 text-[11px] font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {submitting ? '发送中…' : '发送'}
+                    {submitting ? t('chat.ask.sending') : t('chat.ask.send')}
                   </button>
                 </div>
 
@@ -8203,7 +8215,7 @@ function AskUserQuestionCard({
 
             {isResolved && resultData?.status === 'success' && resultData.output && (
               <div className="mt-2 rounded-lg border border-blue-200/70 bg-white/70 px-2.5 py-1.5 dark:border-blue-900/30 dark:bg-background/80">
-                <p className="text-[10px] text-muted-foreground">你的答复</p>
+                <p className="text-[10px] text-muted-foreground">{t('chat.ask.yourReply')}</p>
                 <p className="mt-0.5 whitespace-pre-wrap break-words text-[12px] text-foreground/90">
                   {resultData.output}
                 </p>
@@ -8211,7 +8223,7 @@ function AskUserQuestionCard({
             )}
 
             {isResolved && resultData?.status === 'cancelled' && (
-              <p className="mt-2 text-[11px] text-muted-foreground">已取消追问，对话继续。</p>
+              <p className="mt-2 text-[11px] text-muted-foreground">{t('chat.ask.cancelled')}</p>
             )}
           </div>
         </div>
@@ -8259,8 +8271,8 @@ function StepDecisionCard({
       const res = await onRespondStepDecision(request.callId, decision, note.trim() || undefined)
       if (!res.ok) {
         setSubmitError(res.error
-          ? `决议发送失败：${res.error}。请稍后重试。`
-          : '决议发送失败，请稍后重试。')
+          ? t('chat.decision.submitFailedWithReason', { reason: res.error })
+          : t('chat.decision.submitFailed'))
       }
     } finally {
       setSubmitting(null)
@@ -8268,20 +8280,20 @@ function StepDecisionCard({
   }
 
   const scope = requestData?.scope || 'step'
-  const reason = requestData?.reason || '未提供失败原因'
+  const reason = requestData?.reason || t('chat.decision.noReason')
   const attempts = requestData?.attempts || 0
   const stepDescription = requestData?.stepDescription || ''
   const allowRetry = requestData?.allowRetry === true
 
   const decisionLabel = (decision: StepDecisionResultData['decision']): string => {
-    if (decision === 'continue') return '已选择继续'
-    if (decision === 'retry') return '已选择重试'
-    return '已取消'
+    if (decision === 'continue') return t('chat.decision.continued')
+    if (decision === 'retry') return t('chat.decision.retried')
+    return t('chat.decision.cancelled')
   }
 
   const statusLabel = isResolved
     ? decisionLabel(resultData!.decision)
-    : '等待决策'
+    : t('chat.decision.waiting')
 
   return (
     <div className="mb-1.5">
@@ -8301,7 +8313,7 @@ function StepDecisionCard({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="flex-1 truncate text-xs font-medium text-foreground">
-                {scope === 'plan' ? '计划失败 · 等你决定' : '步骤失败 · 等你决定'}
+                {scope === 'plan' ? t('chat.decision.planFailed') : t('chat.decision.stepFailed')}
               </span>
               <span className={cn(
                 'flex-shrink-0 text-[10px]',
@@ -8316,15 +8328,15 @@ function StepDecisionCard({
             <div className="mt-1 space-y-1 text-[12px] leading-5">
               {scope === 'step' && stepDescription && (
                 <p className="text-foreground/90">
-                  <span className="font-medium">步骤：</span>
+                  <span className="font-medium">{t('chat.decision.stepLabelPrefix')}</span>
                   <span className="break-words">{stepDescription}</span>
                 </p>
               )}
               <p className="text-foreground/90">
-                <span className="font-medium">原因：</span>
+                <span className="font-medium">{t('chat.decision.reasonLabel')}</span>
                 <span className="break-words">{reason}</span>
                 {attempts > 0 && (
-                  <span className="ml-1 text-muted-foreground">（已尝试 {attempts} 次）</span>
+                  <span className="ml-1 text-muted-foreground">{t('chat.decision.attemptsLabel', { n: attempts })}</span>
                 )}
               </p>
             </div>
@@ -8337,7 +8349,7 @@ function StepDecisionCard({
                     onChange={(event) => setNote(event.target.value)}
                     disabled={!!submitting}
                     rows={2}
-                    placeholder="可选：补充给后续 fallback summary 的备注…"
+                    placeholder={t('chat.decision.remarkPlaceholder')}
                     className="w-full resize-none rounded-lg border border-border bg-background px-2.5 py-1.5 text-[11px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-amber-500/40 disabled:cursor-not-allowed disabled:opacity-60"
                   />
                 </div>
@@ -8349,16 +8361,16 @@ function StepDecisionCard({
                     disabled={!!submitting}
                     className="min-h-9 w-full rounded-lg border border-border bg-background px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {submitting === 'cancel' ? '发送中…' : '取消'}
+                    {submitting === 'cancel' ? t('chat.decision.sending') : t('chat.decision.cancel')}
                   </button>
                   <button
                     type="button"
                     onClick={() => void handleSubmit('retry')}
                     disabled={!!submitting || !allowRetry}
-                    title={allowRetry ? undefined : '当前失败不支持重试'}
+                    title={allowRetry ? undefined : t('chat.decision.retryDisabledHint')}
                     className="min-h-9 w-full rounded-lg border border-amber-400 bg-amber-100 px-2.5 py-1 text-[11px] font-medium text-amber-900 transition-colors hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200 dark:hover:bg-amber-900/50"
                   >
-                    {submitting === 'retry' ? '发送中…' : '重试'}
+                    {submitting === 'retry' ? t('chat.decision.sending') : t('chat.decision.retry')}
                   </button>
                   <button
                     type="button"
@@ -8366,7 +8378,7 @@ function StepDecisionCard({
                     disabled={!!submitting}
                     className="min-h-9 w-full rounded-lg bg-emerald-600 px-3 py-1 text-[11px] font-medium text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {submitting === 'continue' ? '发送中…' : '继续'}
+                    {submitting === 'continue' ? t('chat.decision.sending') : t('chat.decision.continue')}
                   </button>
                 </div>
 
@@ -8380,7 +8392,7 @@ function StepDecisionCard({
 
             {isResolved && resultData?.note && (
               <div className="mt-2 rounded-lg border border-amber-200/70 bg-white/70 px-2.5 py-1.5 dark:border-amber-900/30 dark:bg-background/80">
-                <p className="text-[10px] text-muted-foreground">备注</p>
+                <p className="text-[10px] text-muted-foreground">{t('chat.decision.remarkLabel')}</p>
                 <p className="mt-0.5 whitespace-pre-wrap break-words text-[12px] text-foreground/90">
                   {resultData.note}
                 </p>
@@ -8410,6 +8422,7 @@ function FilePreviewDrawer({
   artifacts?: ArtifactRef[]
   onSelectArtifact?: (artifact: ArtifactRef) => void
 }) {
+  const { t } = useTranslation()
   const titleId = useId()
   const dialogRef = useRef<HTMLElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
@@ -8464,7 +8477,7 @@ function FilePreviewDrawer({
       setCopied(true)
     } catch (error) {
       console.error('Failed to copy file content:', error)
-      setExportNotice({ ok: false, text: '复制失败，请重试。' })
+      setExportNotice({ ok: false, text: t('chat.actions.copyFailed') })
     }
   }
 
@@ -8475,9 +8488,9 @@ function FilePreviewDrawer({
       content: preview.content || '',
     })
     if (result.ok && result.path) {
-      setExportNotice({ ok: true, text: `已导出到：${result.path}` })
+      setExportNotice({ ok: true, text: t('chat.actions.exportedTo', { path: result.path }) })
     } else if (!result.cancelled) {
-      setExportNotice({ ok: false, text: result.error ? `导出失败：${result.error}` : '导出失败，请重试。' })
+      setExportNotice({ ok: false, text: result.error ? t('chat.actions.exportFailedWithReason', { reason: result.error }) : t('chat.actions.exportFailed') })
     }
   }
 
@@ -8556,7 +8569,7 @@ function FilePreviewDrawer({
             onClick={() => setArtifactListOpen((v) => !v)}
             aria-expanded={artifactListOpen}
             aria-controls={`${titleId}-artifact-list`}
-            title={artifactListOpen ? '收起文件列表' : '展开文件列表'}
+            title={artifactListOpen ? t('chat.actions.collapseArtifacts') : t('chat.actions.expandArtifacts')}
             className={cn(
               // `pointer-events-auto` re-enables interaction inside the
               // slide-in wrapper (which is pointer-events-none so the empty
@@ -8570,7 +8583,7 @@ function FilePreviewDrawer({
             )}
           >
             <FolderOpen size={13} className="text-primary" />
-            <span className="hidden sm:inline">文件</span>
+            <span className="hidden sm:inline">{t('chat.file.label')}</span>
             <span className="rounded-full bg-muted px-1.5 py-px text-[10px] font-semibold text-muted-foreground">
               {artifacts.length}
             </span>
@@ -8583,7 +8596,7 @@ function FilePreviewDrawer({
 
           <nav
             id={`${titleId}-artifact-list`}
-            aria-label="本对话产出文件"
+            aria-label={t('chat.file.artifacts')}
             aria-hidden={!artifactListOpen}
             className={cn(
               // No explicit z-index → relies on document order: this <nav>
@@ -8607,7 +8620,7 @@ function FilePreviewDrawer({
             )}
           >
             <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
-              <span className="text-[11px] font-semibold tracking-wide text-foreground">产出文件</span>
+              <span className="text-[11px] font-semibold tracking-wide text-foreground">{t('chat.file.artifacts')}</span>
               <span className="rounded-full bg-muted px-1.5 py-px text-[10px] font-semibold text-muted-foreground">
                 {artifacts.length}
               </span>
@@ -8684,7 +8697,7 @@ function FilePreviewDrawer({
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <h3 id={titleId} className="truncate text-sm font-semibold text-foreground">
-                  {preview.fileName || '文件预览'}
+                  {preview.fileName || t('chat.file.preview')}
                 </h3>
                 <span className="rounded-full border border-border bg-accent/70 px-2 py-0.5 text-[10px] text-muted-foreground">
                   {preview.operation === 'read_file' ? 'read_file' : 'write_file'}
@@ -8697,10 +8710,10 @@ function FilePreviewDrawer({
               </div>
               <p className="mt-1 break-all text-[11px] text-muted-foreground">{preview.path || ''}</p>
               {preview.operation === 'read_file' && preview.limit != null && (
-                <p className="mt-1 text-[10px] text-muted-foreground">展示读取结果，调用限制为 {preview.limit} 行</p>
+                <p className="mt-1 text-[10px] text-muted-foreground">{t('chat.file.readLimit', { n: preview.limit })}</p>
               )}
               {preview.operation === 'write_file' && (
-                <p className="mt-1 text-[10px] text-muted-foreground">展示写入文件时提交的内容</p>
+                <p className="mt-1 text-[10px] text-muted-foreground">{t('chat.file.writeContent')}</p>
               )}
             </div>
             <div className="flex items-center gap-2">
@@ -8715,7 +8728,7 @@ function FilePreviewDrawer({
                       ? 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-300'
                       : 'border-border bg-card text-foreground hover:bg-muted'
                   )}
-                  aria-label="复制"
+                  aria-label={t('chat.actions.copy')}
                 >
                   {copied ? <Check size={15} /> : <Copy size={15} className="text-muted-foreground" />}
                 </button>
@@ -8723,7 +8736,7 @@ function FilePreviewDrawer({
                   role="tooltip"
                   className="pointer-events-none absolute left-1/2 top-full z-20 mt-1.5 -translate-x-1/2 whitespace-nowrap rounded-md bg-foreground px-2 py-1 text-[11px] font-medium text-background opacity-0 shadow-sm transition-opacity duration-150 delay-[100ms] group-hover:opacity-100"
                 >
-                  复制
+                  {t('chat.actions.copy')}
                 </span>
               </div>
               <div className="group relative">
@@ -8732,7 +8745,7 @@ function FilePreviewDrawer({
                   onClick={() => void handleExport()}
                   disabled={!preview.content}
                   className="relative z-10 flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl border border-border bg-card transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
-                  aria-label="导出"
+                  aria-label={t('chat.actions.export')}
                 >
                   <Download size={15} className="text-muted-foreground" />
                 </button>
@@ -8740,14 +8753,14 @@ function FilePreviewDrawer({
                   role="tooltip"
                   className="pointer-events-none absolute left-1/2 top-full z-20 mt-1.5 -translate-x-1/2 whitespace-nowrap rounded-md bg-foreground px-2 py-1 text-[11px] font-medium text-background opacity-0 shadow-sm transition-opacity duration-150 delay-[100ms] group-hover:opacity-100"
                 >
-                  导出
+                  {t('chat.actions.export')}
                 </span>
               </div>
               <button
                 ref={closeButtonRef}
                 onClick={onClose}
                 className="relative z-10 flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl border border-border bg-card transition-colors hover:bg-muted"
-                aria-label="关闭文件预览"
+                aria-label={t('chat.actions.closePreview')}
               >
                 <X size={15} className="text-muted-foreground" />
               </button>
@@ -8772,8 +8785,8 @@ function FilePreviewDrawer({
                 <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-accent">
                   <FileText size={18} className="text-primary" />
                 </div>
-                <p className="text-sm font-medium text-foreground">没有可展示的文件内容</p>
-                <p className="mt-1 text-xs text-muted-foreground">这个工具调用没有返回可预览的文本。</p>
+                <p className="text-sm font-medium text-foreground">{t('chat.file.noContent')}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{t('chat.file.noContentDesc')}</p>
               </div>
             </div>
           ) : isImage ? (
@@ -8822,6 +8835,7 @@ function FilePreviewDrawer({
 // the chat UX feels consistent.
 
 function WebPreviewDrawer({ preview, onClose }: { preview: WebPreviewData | null; onClose: () => void }) {
+  const { t } = useTranslation()
   const titleId = useId()
   const dialogRef = useRef<HTMLElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
@@ -8870,7 +8884,7 @@ function WebPreviewDrawer({ preview, onClose }: { preview: WebPreviewData | null
       // fallback for main-frame failures.
       if (e.isMainFrame === false) return
       setIsLoading(false)
-      setDidFail({ code: e.errorCode ?? -1, message: e.errorDescription || '加载失败' })
+      setDidFail({ code: e.errorCode ?? -1, message: e.errorDescription || t('chat.web.loadFailed') })
     }
     const onNavigate = (event: Event) => {
       const e = event as Event & { url?: string }
@@ -8954,7 +8968,7 @@ function WebPreviewDrawer({ preview, onClose }: { preview: WebPreviewData | null
                 </h3>
                 {preview.query && (
                   <span className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] text-muted-foreground" title={preview.query}>
-                    搜索：{preview.query}
+                    {t('chat.tool.searchResultPrefix', { query: preview.query })}
                   </span>
                 )}
               </div>
@@ -8965,8 +8979,8 @@ function WebPreviewDrawer({ preview, onClose }: { preview: WebPreviewData | null
                 type="button"
                 onClick={handleReload}
                 className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl border border-border bg-card transition-colors hover:bg-muted"
-                aria-label="刷新"
-                title="刷新"
+                aria-label={t('chat.web.refresh')}
+                title={t('chat.web.refresh')}
               >
                 <RefreshCw size={14} className="text-muted-foreground" />
               </button>
@@ -8974,8 +8988,8 @@ function WebPreviewDrawer({ preview, onClose }: { preview: WebPreviewData | null
                 type="button"
                 onClick={handleOpenExternal}
                 className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl border border-border bg-card transition-colors hover:bg-muted"
-                aria-label="在浏览器中打开"
-                title="在浏览器中打开"
+                aria-label={t('chat.web.openExternal')}
+                title={t('chat.web.openExternal')}
               >
                 <ExternalLink size={14} className="text-muted-foreground" />
               </button>
@@ -8983,7 +8997,7 @@ function WebPreviewDrawer({ preview, onClose }: { preview: WebPreviewData | null
                 ref={closeButtonRef}
                 onClick={onClose}
                 className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl border border-border bg-card transition-colors hover:bg-muted"
-                aria-label="关闭网页预览"
+                aria-label={t('chat.web.close')}
               >
                 <X size={14} className="text-muted-foreground" />
               </button>
@@ -8995,7 +9009,7 @@ function WebPreviewDrawer({ preview, onClose }: { preview: WebPreviewData | null
           {isLoading && !didFail && (
             <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center gap-2 bg-card/85 px-4 py-1.5 text-[11px] text-muted-foreground backdrop-blur-sm">
               <Loader2 size={11} className="animate-spin" />
-              <span>正在加载…</span>
+              <span>{t('chat.web.loading')}</span>
             </div>
           )}
 
@@ -9005,7 +9019,7 @@ function WebPreviewDrawer({ preview, onClose }: { preview: WebPreviewData | null
                 <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-red-50 text-red-500 dark:bg-red-950/30 dark:text-red-300">
                   <AlertCircle size={20} />
                 </div>
-                <p className="text-sm font-medium text-foreground">无法加载该页面</p>
+                <p className="text-sm font-medium text-foreground">{t('chat.web.loadFailed')}</p>
                 <p className="mt-1 break-all text-xs text-muted-foreground">{didFail.message}（{didFail.code}）</p>
                 <div className="mt-4 flex items-center justify-center gap-2">
                   <button
@@ -9014,7 +9028,7 @@ function WebPreviewDrawer({ preview, onClose }: { preview: WebPreviewData | null
                     className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-muted"
                   >
                     <RefreshCw size={12} />
-                    重试
+                    {t('chat.decision.retry')}
                   </button>
                   <button
                     type="button"
@@ -9022,7 +9036,7 @@ function WebPreviewDrawer({ preview, onClose }: { preview: WebPreviewData | null
                     className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-muted"
                   >
                     <ExternalLink size={12} />
-                    在浏览器中打开
+                    {t('chat.web.openExternal')}
                   </button>
                 </div>
               </div>
@@ -9057,7 +9071,7 @@ function ThinkingIndicator({ content }: { content: string }) {
       >
         <div className="flex items-center gap-2">
           <Brain size={12} className="animate-pulse text-primary" />
-          <span className="text-xs text-muted-foreground">Agent 正在整理答案</span>
+          <span className="text-xs text-muted-foreground">{t('chat.status.organizingAnswer')}</span>
         </div>
         <p id={contentId} hidden={!expanded} className="mt-1.5 max-h-32 overflow-y-auto whitespace-pre-wrap text-xs text-muted-foreground">{content}</p>
       </button>

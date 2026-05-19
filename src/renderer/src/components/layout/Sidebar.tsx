@@ -15,6 +15,7 @@ import {
   Settings,
   Moon,
   Sun,
+  Languages,
   PanelLeft,
   MessageSquareText,
   ChevronDown,
@@ -23,6 +24,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
+import { getProjectDisplayDescription, getProjectDisplayName } from '../../lib/projectDisplay'
 import { useHarnessclawStatus } from '../../hooks/useHarnessclawStatus'
 import sidebarLogo from '../../assets/sidebar-logo.png'
 import { AvatarLightbox } from '../common/AvatarLightbox'
@@ -74,7 +76,7 @@ const MAX_SIDEBAR_WIDTH = 440
 const DEFAULT_SIDEBAR_WIDTH = 288
 
 export function Sidebar() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -133,15 +135,15 @@ export function Sidebar() {
     return document.documentElement.classList.contains('dark')
   })
 
-  // Sync initial theme from app config (the same store the Settings page reads),
-  // so the sidebar toggle and Settings UI never drift apart.
+  // Sync initial theme and language from app config (the same store the Settings page reads),
+  // so the sidebar toggles and Settings UI never drift apart.
   useEffect(() => {
     let active = true
     void (async () => {
       try {
         const cfg = await window.appConfig.read()
         if (!active) return
-        const ui = (cfg?.ui || {}) as { theme?: string }
+        const ui = (cfg?.ui || {}) as { theme?: string; language?: string }
         const themeVal = typeof ui.theme === 'string' ? ui.theme : ''
         if (themeVal === 'dark') {
           document.documentElement.classList.add('dark')
@@ -157,8 +159,12 @@ export function Sidebar() {
           localStorage.removeItem('theme')
           setIsDark(prefersDark)
         }
+
+        if (ui.language) {
+          void i18n.changeLanguage(ui.language)
+        }
       } catch {
-        // ignore — keep localStorage-based initial state
+        // ignore — keep initial state
       }
     })()
     return () => { active = false }
@@ -189,6 +195,18 @@ export function Sidebar() {
       // ignore — DOM and localStorage already updated
     }
     window.dispatchEvent(new CustomEvent('theme-changed'))
+  }
+
+  const toggleLanguage = async () => {
+    const next = i18n.language.startsWith('zh') ? 'en' : 'zh'
+    await i18n.changeLanguage(next)
+    try {
+      const cfg = await window.appConfig.read()
+      const ui = (cfg?.ui || {}) as Record<string, unknown>
+      await window.appConfig.save({ ...cfg, ui: { ...ui, language: next } })
+    } catch {
+      // ignore
+    }
   }
 
   const toggleExpanded = () => {
@@ -448,8 +466,8 @@ export function Sidebar() {
       {
         id: 'new-session',
         type: 'action',
-        label: '新建会话',
-        description: '跳转到首页，直接开始输入新的任务。',
+        label: t('search.newSession'),
+        description: t('search.newSessionDesc'),
         onSelect: () => {
           closeSearch()
           navigate('/', { state: { focusComposer: true } })
@@ -459,7 +477,7 @@ export function Sidebar() {
 
     if (!searchKeyword) return items
     return items.filter((item) => `${item.label} ${item.description}`.toLowerCase().includes(searchKeyword))
-  }, [navigate, searchKeyword])
+  }, [navigate, searchKeyword, t])
 
   const recentSearchItems = useMemo<SearchResultItem[]>(() => {
     const filtered = recentItems.filter((item) => {
@@ -563,7 +581,7 @@ export function Sidebar() {
   return (
     <>
       <nav
-        aria-label="主导航"
+        aria-label={t('sidebar.mainNavigationAria')}
         style={expanded ? { width: `${sidebarWidth}px` } : undefined}
         className={cn(
           'relative flex-shrink-0 bg-card border-r border-border flex flex-col pt-[44px] pb-3 select-none overflow-hidden',
@@ -586,54 +604,54 @@ export function Sidebar() {
                   </div>
 
                   <div
-                    className="group relative flex h-8 w-5 flex-shrink-0 items-center justify-center"
-                    aria-label={
-                      harnessclawStatus === 'connected'
-                        ? '当前状态：已连接'
-                        : harnessclawStatus === 'connecting'
-                          ? '当前状态：连接中'
-                          : '当前状态：未连接'
-                    }
-                  >
-                    <span
-                      className={cn(
-                        'h-2 w-2 rounded-full',
+                      className="group relative flex h-8 w-5 flex-shrink-0 items-center justify-center"
+                      aria-label={
                         harnessclawStatus === 'connected'
-                          ? 'bg-emerald-500'
+                          ? t('sidebar.status.connectedAria')
                           : harnessclawStatus === 'connecting'
-                            ? 'bg-amber-500 animate-pulse'
-                            : 'bg-rose-500'
-                      )}
-                      aria-hidden="true"
-                    />
-                    <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-1 hidden -translate-x-1/2 whitespace-nowrap rounded-md border border-border bg-popover px-2 py-1 text-[11px] text-popover-foreground shadow-md group-hover:block">
-                      {harnessclawStatus === 'connected'
-                        ? '已连接'
-                        : harnessclawStatus === 'connecting'
-                          ? '连接中'
-                          : '未连接'}
-                    </span>
-                  </div>
+                            ? t('sidebar.status.connectingAria')
+                            : t('sidebar.status.disconnectedAria')
+                      }
+                    >
+                      <span
+                        className={cn(
+                          'h-2 w-2 rounded-full',
+                          harnessclawStatus === 'connected'
+                            ? 'bg-emerald-500'
+                            : harnessclawStatus === 'connecting'
+                              ? 'bg-amber-500 animate-pulse'
+                              : 'bg-rose-500'
+                        )}
+                        aria-hidden="true"
+                      />
+                      <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-1 hidden -translate-x-1/2 whitespace-nowrap rounded-md border border-border bg-popover px-2 py-1 text-[11px] text-popover-foreground shadow-md group-hover:block">
+                        {harnessclawStatus === 'connected'
+                          ? t('sidebar.status.connected')
+                          : harnessclawStatus === 'connecting'
+                            ? t('sidebar.status.connecting')
+                            : t('sidebar.status.disconnected')}
+                      </span>
+                    </div>
 
+                    <button
+                      onClick={toggleExpanded}
+                      title={t('sidebar.collapseAria')}
+                      aria-label={t('sidebar.collapseAria')}
+                      className="-mr-1 inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-foreground/78 transition-colors hover:bg-accent hover:text-foreground"
+                    >
+                      <PanelLeft size={18} className="rotate-180" aria-hidden="true" />
+                    </button>
+                  </div>
+                ) : (
                   <button
                     onClick={toggleExpanded}
-                    title="收起侧边栏"
-                    aria-label="收起侧边栏"
-                    className="-mr-1 inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-foreground/78 transition-colors hover:bg-accent hover:text-foreground"
+                    title={t('sidebar.expandAria')}
+                    aria-label={t('sidebar.expandAria')}
+                    className="flex h-11 w-11 items-center justify-center rounded-xl text-foreground/78 transition-colors hover:bg-accent hover:text-foreground"
                   >
-                    <PanelLeft size={18} className="rotate-180" aria-hidden="true" />
+                    <PanelLeft size={18} aria-hidden="true" />
                   </button>
-                </div>
-              ) : (
-                <button
-                  onClick={toggleExpanded}
-                  title="展开侧边栏"
-                  aria-label="展开侧边栏"
-                  className="flex h-11 w-11 items-center justify-center rounded-xl text-foreground/78 transition-colors hover:bg-accent hover:text-foreground"
-                >
-                  <PanelLeft size={18} aria-hidden="true" />
-                </button>
-              )}
+                )}
             </div>
 
             {navGroups.map((group, index) => (
@@ -666,7 +684,7 @@ export function Sidebar() {
                 onClick={toggleRecentExpanded}
                 className="mb-2 flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
                 aria-expanded={recentExpanded}
-                aria-label={recentExpanded ? '收起最近聊天' : '展开最近聊天'}
+                aria-label={recentExpanded ? t('sidebar.recentCollapseAria') : t('sidebar.recentExpandAria')}
               >
                 <MessageSquareText size={13} />
                 <span className="flex-1 text-left">{t('sidebar.recent')}</span>
@@ -754,7 +772,7 @@ export function Sidebar() {
                                 ? 'opacity-100'
                                 : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
                             )}
-                            aria-label="更多操作"
+                            aria-label={t('sidebar.more')}
                           >
                             <MoreHorizontal size={15} />
                           </button>
@@ -786,9 +804,18 @@ export function Sidebar() {
             </button>
 
             <button
+              onClick={toggleLanguage}
+              title={i18n.language.startsWith('zh') ? t('sidebar.switchToEnglish') : t('sidebar.switchToChinese')}
+              aria-label={i18n.language.startsWith('zh') ? t('sidebar.switchToEnglish') : t('sidebar.switchToChinese')}
+              className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-foreground/78 transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Languages size={18} aria-hidden="true" />
+            </button>
+
+            <button
               onClick={toggleTheme}
-              title={isDark ? '切换亮色' : '切换暗色'}
-              aria-label={isDark ? '切换亮色模式' : '切换暗色模式'}
+              title={isDark ? t('sidebar.switchLight') : t('sidebar.switchDark')}
+              aria-label={isDark ? t('sidebar.switchLightAria') : t('sidebar.switchDarkAria')}
               className="-mr-1 inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-foreground/78 transition-colors hover:bg-accent hover:text-foreground"
             >
               {isDark
@@ -800,8 +827,8 @@ export function Sidebar() {
           <>
             <button
               onClick={() => navigate('/settings')}
-              title="设置"
-              aria-label="设置"
+              title={t('sidebar.settings')}
+              aria-label={t('sidebar.settings')}
               aria-current={isActive('/settings') ? 'page' : undefined}
               className={itemCls(isActive('/settings'))}
             >
@@ -809,9 +836,18 @@ export function Sidebar() {
             </button>
 
             <button
+              onClick={toggleLanguage}
+              title={i18n.language.startsWith('zh') ? t('sidebar.switchToEnglish') : t('sidebar.switchToChinese')}
+              aria-label={i18n.language.startsWith('zh') ? t('sidebar.switchToEnglish') : t('sidebar.switchToChinese')}
+              className={bottomItemCls}
+            >
+              <Languages size={18} className="flex-shrink-0" aria-hidden="true" />
+            </button>
+
+            <button
               onClick={toggleTheme}
-              title={isDark ? '切换亮色' : '切换暗色'}
-              aria-label={isDark ? '切换亮色模式' : '切换暗色模式'}
+              title={isDark ? t('sidebar.switchLight') : t('sidebar.switchDark')}
+              aria-label={isDark ? t('sidebar.switchLightAria') : t('sidebar.switchDarkAria')}
               className={bottomItemCls}
             >
               {isDark
@@ -830,8 +866,8 @@ export function Sidebar() {
             onDoubleClick={() => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH)}
             role="separator"
             aria-orientation="vertical"
-            aria-label="拖动调整侧边栏宽度"
-            title="拖动调整宽度（双击重置）"
+            aria-label={t('sidebar.resizeAria')}
+            title={t('sidebar.resizeTitle')}
             className={cn(
               'absolute right-0 top-0 z-10 h-full w-1 cursor-col-resize transition-colors',
               isResizing ? 'bg-primary/60' : 'hover:bg-primary/40'
@@ -866,7 +902,7 @@ export function Sidebar() {
               className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
             >
               <FolderMinus size={14} />
-              {t('sidebar.exitProject')}
+              {t('sessions.assignProject.exit')}
             </button>
           ) : (
             <button
@@ -877,7 +913,7 @@ export function Sidebar() {
               className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
             >
               <FolderPlus size={14} />
-              {t('sidebar.joinProject')}
+              {t('sessions.assignProject.join')}
             </button>
           )}
           <button
@@ -901,7 +937,7 @@ export function Sidebar() {
         <div className="fixed inset-0 z-[140]">
           <button
             type="button"
-            aria-label="关闭搜索"
+            aria-label={t('search.close')}
             onClick={closeSearch}
             className="absolute inset-0 bg-white/28 backdrop-blur-[10px] dark:bg-slate-950/24"
           />
@@ -981,11 +1017,11 @@ export function Sidebar() {
                         searchResults[searchActiveIndex]?.onSelect()
                       }
                     }}
-                    placeholder="搜索操作或最近对话..."
+                    placeholder={t('search.placeholder')}
                     className="min-w-0 flex-1 bg-transparent text-[15px] text-foreground outline-none placeholder:text-muted-foreground"
                   />
                   <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] text-slate-500 dark:bg-slate-800 dark:text-slate-300">
-                    {navigator.platform.toUpperCase().includes('MAC') ? '⌘K' : 'Win+K'}
+                    {isMac ? '⌘K' : 'Win+K'}
                   </span>
                 </div>
               </div>
@@ -994,7 +1030,7 @@ export function Sidebar() {
                 <section>
                   <div className="mb-2 px-2">
                     <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                      Quick actions
+                      {t('search.quickActions')}
                     </span>
                   </div>
                   <div className="space-y-1">
@@ -1018,7 +1054,7 @@ export function Sidebar() {
                         </button>
                       )
                     }) : (
-                      <div className="rounded-2xl px-3 py-3 text-sm text-muted-foreground">没有匹配的快捷操作</div>
+                      <div className="rounded-2xl px-3 py-3 text-sm text-muted-foreground">{t('search.noMatchActions')}</div>
                     )}
                   </div>
                 </section>
@@ -1026,7 +1062,7 @@ export function Sidebar() {
                 <section className="mt-2.5">
                   <div className="mb-1 px-2">
                     <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                      最近
+                      {t('search.recent')}
                     </span>
                   </div>
                   <div className="space-y-1">
@@ -1065,7 +1101,7 @@ export function Sidebar() {
                     })}
                       </div>
                     ) : (
-                      <div className="rounded-2xl px-3 py-3 text-sm text-muted-foreground">没有匹配的最近对话</div>
+                      <div className="rounded-2xl px-3 py-3 text-sm text-muted-foreground">{t('search.noRecent')}</div>
                     )}
                   </div>
                 </section>
@@ -1085,16 +1121,18 @@ export function Sidebar() {
           />
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-4">
             <div className="pointer-events-auto w-full max-w-sm rounded-2xl border border-border bg-card p-5 shadow-2xl">
-              <h3 className="mb-1 text-base font-semibold text-foreground">加入项目</h3>
-              <p className="mb-3 text-xs text-muted-foreground">选择要将此对话归入的项目</p>
+              <h3 className="mb-1 text-base font-semibold text-foreground">{t('sessions.assignProject.title')}</h3>
+              <p className="mb-3 text-xs text-muted-foreground">{t('sessions.assignProject.desc')}</p>
 
               {projects.length === 0 ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">暂无可用项目</p>
+                <p className="py-6 text-center text-sm text-muted-foreground">{t('sessions.assignProject.noProjects')}</p>
               ) : (
                 <div className="max-h-60 overflow-y-auto rounded-xl border border-border">
                   {projects.map((project) => {
                     const currentSession = recentSessions.find((s) => s.session_id === assignDialog.sessionId)
                     const isCurrentProject = currentSession?.project_id === project.project_id
+                    const displayName = getProjectDisplayName(project, t)
+                    const displayDescription = getProjectDisplayDescription(project, t)
                     return (
                       <button
                         key={project.project_id}
@@ -1108,13 +1146,13 @@ export function Sidebar() {
                         )}
                       >
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium text-foreground">{project.name}</p>
-                          {project.description && (
-                            <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{project.description}</p>
+                          <p className="truncate text-sm font-medium text-foreground">{displayName}</p>
+                          {displayDescription && (
+                            <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{displayDescription}</p>
                           )}
                         </div>
                         {isCurrentProject && (
-                          <span className="mt-0.5 shrink-0 text-xs text-primary">当前</span>
+                          <span className="mt-0.5 shrink-0 text-xs text-primary">{t('sessions.assignProject.current')}</span>
                         )}
                       </button>
                     )

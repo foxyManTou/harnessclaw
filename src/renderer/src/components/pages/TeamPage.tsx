@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useTranslation } from 'react-i18next'
 import {
   ArrowRight,
   Bot,
@@ -99,36 +100,8 @@ const EMPTY_SOP_DRAFT: SopDraft = {
   agent_ids: [],
 }
 
-const SOP_STEPS = [
-  { num: 1, label: '定义目标', icon: Target },
-  { num: 2, label: '选择成员', icon: UserPlus },
-  { num: 3, label: '设计流程', icon: Workflow },
-  { num: 4, label: '配置协作', icon: Settings2 },
-  { num: 5, label: '测试与发布', icon: Rocket },
-] as const
-
-const SOP_OVERVIEW = [
-  { title: '定义目标', items: ['团队名称 / 目标描述', '应用场景', '边界约束'] },
-  { title: '选择成员', items: ['从 Agent 集选择', '角色分配', '能力匹配'] },
-  { title: '设计流程', items: ['配置交互流程', '设置消息路由', '定义触发条件'] },
-  { title: '配置协作', items: ['配置共享上下文', '设置协作策略', '定义冲突解决'] },
-  { title: '测试与发布', items: ['测试团队协作', '调试优化', '发布上线'] },
-]
-
 const AGENT_TYPE_OPTIONS: AgentTypeOption[] = ['sync', 'async', 'teammate', 'coordinator', 'custom']
-const AGENT_TYPE_LABELS: Record<AgentTypeOption, string> = {
-  sync: 'sync（同步子体）',
-  async: 'async（异步子体）',
-  teammate: 'teammate（协作体）',
-  coordinator: 'coordinator（编排体）',
-  custom: 'custom（自定义体）',
-}
 const PROFILE_OPTIONS: ProfileOption[] = ['full', 'explore', 'plan']
-const PROFILE_LABELS: Record<ProfileOption, string> = {
-  full: 'full（全能模式）',
-  explore: 'explore（探索模式）',
-  plan: 'plan（规划模式）',
-}
 // Default cartoon avatar SVGs (open-source style, DiceBear Adventurer inspired)
 function buildAvatarSvg(bgColor: string, faceColor: string, eyeStyle: string, mouthStyle: string, accessory: string): string {
   return `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="${bgColor}"/><circle cx="32" cy="34" r="18" fill="${faceColor}"/>${eyeStyle}${mouthStyle}${accessory}</svg>`)}`
@@ -254,21 +227,6 @@ function hashString(str: string): number {
   return hash
 }
 
-const VIEW_META: Record<TeamView, { label: string; buttonLabel: string; emptyTitle: string; emptyDescription: string }> = {
-  agents: {
-    label: '角色',
-    buttonLabel: '新建角色',
-    emptyTitle: '还没有角色',
-    emptyDescription: '从上方创建第一个角色，后续可用于 Team 组合。',
-  },
-  teams: {
-    label: 'Agent Team',
-    buttonLabel: '新建 Agent Team',
-    emptyTitle: '还没有 Agent Team',
-    emptyDescription: '创建一个 Team，把多个角色组合成固定协作编组。',
-  },
-}
-
 function createId(prefix: string): string {
   return `${prefix}-${globalThis.crypto.randomUUID()}`
 }
@@ -280,15 +238,61 @@ function splitLineValues(value: string): string[] {
     .filter(Boolean)
 }
 
-function formatRelativeDate(timestamp: number): string {
-  return new Date(timestamp).toLocaleDateString('zh-CN', {
+function formatRelativeDate(timestamp: number, language: string): string {
+  return new Date(timestamp).toLocaleDateString(language.startsWith('zh') ? 'zh-CN' : 'en-US', {
     month: '2-digit',
     day: '2-digit',
   })
 }
 
 export function TeamPage() {
+  const { t, i18n } = useTranslation()
   const [activeView, setActiveView] = useState<TeamView>('agents')
+
+  const AGENT_TYPE_LABELS: Record<AgentTypeOption, string> = useMemo(() => ({
+    sync: t('team.agentType.sync'),
+    async: t('team.agentType.async'),
+    teammate: t('team.agentType.teammate'),
+    coordinator: t('team.agentType.coordinator'),
+    custom: t('team.agentType.custom'),
+  }), [t])
+
+  const PROFILE_LABELS: Record<ProfileOption, string> = useMemo(() => ({
+    full: t('team.profile.full'),
+    explore: t('team.profile.explore'),
+    plan: t('team.profile.plan'),
+  }), [t])
+
+  const VIEW_META: Record<TeamView, { label: string; buttonLabel: string; emptyTitle: string; emptyDescription: string }> = useMemo(() => ({
+    agents: {
+      label: t('team.agents'),
+      buttonLabel: t('team.newAgent'),
+      emptyTitle: t('team.emptyAgents'),
+      emptyDescription: t('team.emptyAgentsDesc'),
+    },
+    teams: {
+      label: t('team.teams'),
+      buttonLabel: t('team.newTeam'),
+      emptyTitle: t('team.emptyTeams'),
+      emptyDescription: t('team.emptyTeamsDesc'),
+    },
+  }), [t])
+
+  const SOP_STEPS = useMemo(() => [
+    { num: 1, label: t('team.sop.steps.target.label'), icon: Target },
+    { num: 2, label: t('team.sop.steps.members.label'), icon: UserPlus },
+    { num: 3, label: t('team.sop.steps.workflow.label'), icon: Workflow },
+    { num: 4, label: t('team.sop.steps.collaboration.label'), icon: Settings2 },
+    { num: 5, label: t('team.sop.steps.test.label'), icon: Rocket },
+  ], [t])
+
+  const SOP_OVERVIEW = useMemo(() => [
+    { title: t('team.sop.steps.target.label'), items: t('team.sop.items.targetDesc', { returnObjects: true }) as string[] },
+    { title: t('team.sop.steps.members.label'), items: t('team.sop.items.membersDesc', { returnObjects: true }) as string[] },
+    { title: t('team.sop.steps.workflow.label'), items: t('team.sop.items.workflowDesc', { returnObjects: true }) as string[] },
+    { title: t('team.sop.steps.collaboration.label'), items: t('team.sop.items.collaborationDesc', { returnObjects: true }) as string[] },
+    { title: t('team.sop.steps.test.label'), items: t('team.sop.items.testDesc', { returnObjects: true }) as string[] },
+  ], [t])
   const [agents, setAgents] = useState<AgentRecord[]>([])
   const [teams, setTeams] = useState<AgentTeamRecord[]>([])
   const [agentDialogOpen, setAgentDialogOpen] = useState(false)
@@ -368,11 +372,11 @@ export function TeamPage() {
   const handleSaveAgent = async () => {
     const normalizedName = agentDraft.name.trim()
     if (!normalizedName) {
-      setAgentNameError('请填写角色标识。')
+      setAgentNameError(t('team.dialog.errors.nameRequired'))
       return
     }
     if (!/^[@a-zA-Z0-9_-]+$/.test(normalizedName)) {
-      setAgentNameError('角色标识仅支持字母、数字、_、-，可带 @ 前缀。')
+      setAgentNameError(t('team.dialog.errors.nameInvalid'))
       return
     }
 
@@ -407,12 +411,12 @@ export function TeamPage() {
         resetAgentDraft()
         void loadAgents()
       } else if (res.code === 'CONFLICT') {
-        setAgentNameError('角色标识已存在，请更换。')
+        setAgentNameError(t('team.dialog.errors.conflict'))
       } else {
-        setAgentNameError(res.message || '保存失败，请稍后再试。')
+        setAgentNameError(res.message || t('team.dialog.errors.failed'))
       }
     } catch {
-      setAgentNameError('网络错误，请检查引擎是否已启动。')
+      setAgentNameError(t('team.dialog.errors.network'))
     } finally {
       setAgentSaving(false)
     }
@@ -426,10 +430,10 @@ export function TeamPage() {
         resetAgentDraft()
         void loadAgents()
       } else {
-        setAgentNameError(res.message || '删除失败。')
+        setAgentNameError(res.message || t('team.dialog.errors.deleteFailed'))
       }
     } catch {
-      setAgentNameError('网络错误，请检查引擎是否已启动。')
+      setAgentNameError(t('team.dialog.errors.network'))
     }
   }
 
@@ -437,7 +441,7 @@ export function TeamPage() {
 
   const handleSopPublish = () => {
     if (!sopDraft.name.trim()) {
-      setSopNameError('请填写团队名称后再发布。')
+      setSopNameError(t('team.sop.steps.target.error'))
       setSopStep(1)
       return
     }
@@ -478,13 +482,13 @@ export function TeamPage() {
                   <TopSwitchButton
                     active={activeView === 'agents'}
                     icon={<Bot size={14} />}
-                    label="角色"
+                    label={t('team.agents')}
                     onClick={() => setActiveView('agents')}
                   />
                   <TopSwitchButton
                     active={activeView === 'teams'}
                     icon={<Layers3 size={14} />}
-                    label="Agent Team"
+                    label={t('team.teams')}
                     onClick={() => setActiveView('teams')}
                   />
                 </div>
@@ -537,24 +541,24 @@ export function TeamPage() {
 
                     <div className="space-y-3 bg-muted/18 px-4 py-3">
                       <p className="line-clamp-3 min-h-[60px] text-xs leading-5 text-muted-foreground">
-                        {agent.description || '暂未填写角色描述。'}
+                        {agent.description || t('team.card.noDesc')}
                       </p>
 
                       <div className="flex flex-wrap gap-1.5">
-                        <InlineMeta label={agent.profile} />
-                        <InlineMeta label={agent.model || '继承默认模型'} />
-                        <InlineMeta label={agent.max_turns > 0 ? `${agent.max_turns} 轮` : '自动轮次'} />
+                        <InlineMeta label={PROFILE_LABELS[agent.profile]} />
+                        <InlineMeta label={agent.model || t('team.card.inheritModel')} />
+                        <InlineMeta label={agent.max_turns > 0 ? t('team.card.turns', { n: agent.max_turns }) : t('team.card.autoTurns')} />
                       </div>
 
                       {(agent.skills.length > 0 || agent.allowed_tools.length > 0) ? (
                         <div className="space-y-2">
                           {agent.skills.length > 0 ? (
-                            <CardGroup title="技能" icon={<Sparkles size={12} />}>
+                            <CardGroup title={t('team.card.skills')} icon={<Sparkles size={12} />}>
                               {agent.skills.map((skill) => <InlineMeta key={skill} label={skill} />)}
                             </CardGroup>
                           ) : null}
                           {agent.allowed_tools.length > 0 ? (
-                            <CardGroup title="允许工具" icon={<Wrench size={12} />}>
+                            <CardGroup title={t('team.card.tools')} icon={<Wrench size={12} />}>
                               {agent.allowed_tools.map((tool) => <InlineMeta key={tool} label={tool} />)}
                             </CardGroup>
                           ) : null}
@@ -840,17 +844,17 @@ function AgentDialog({
           <div className="flex flex-shrink-0 items-start justify-between gap-4 border-b border-border/70 px-5 py-4 sm:px-6">
             <div>
               <h2 id="agent-dialog-title" className="text-lg font-semibold text-foreground">
-                {isEditing ? '编辑角色' : '新建角色'}
+                {isEditing ? t('team.dialog.editAgent') : t('team.dialog.createAgent')}
               </h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                {isEditing ? '修改角色配置，保存后立即生效。' : '创建角色，后续可单独使用或加入 Agent Team。'}
+                {isEditing ? t('team.dialog.editDesc') : t('team.dialog.createDesc')}
               </p>
             </div>
             <button
               type="button"
               onClick={onClose}
               className="rounded-xl p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              aria-label="关闭角色对话框"
+              aria-label={t('team.dialog.cancel')}
             >
               <X size={16} />
             </button>
@@ -866,7 +870,7 @@ function AgentDialog({
             <section className="space-y-4">
               <div className="flex items-center gap-2">
                 <div className="inline-flex h-8 items-center rounded-full bg-muted px-3 text-xs font-medium text-foreground">
-                  基础信息
+                  {t('team.dialog.baseInfo')}
                 </div>
               </div>
 
@@ -879,7 +883,7 @@ function AgentDialog({
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <FieldBlock label="名称 *" description="@-mention 唯一标识">
+                  <FieldBlock label={t('team.dialog.name')} description={t('team.dialog.nameDesc')}>
                     <input
                       ref={nameInputRef}
                       value={draft.name}
@@ -898,7 +902,7 @@ function AgentDialog({
                     {nameError ? <p className="text-xs text-destructive">{nameError}</p> : null}
                   </FieldBlock>
 
-                  <FieldBlock label="显示名称" description="用于 UI 展示">
+                  <FieldBlock label={t('team.dialog.displayName')} description={t('team.dialog.displayNameDesc')}>
                     <input
                       value={draft.display_name}
                       onChange={(event) => onChangeDraft((current) => ({ ...current, display_name: event.target.value }))}
@@ -907,7 +911,7 @@ function AgentDialog({
                     />
                   </FieldBlock>
 
-                  <FieldBlock label="角色类型" description="工具过滤策略">
+                  <FieldBlock label={t('team.dialog.type')} description={t('team.dialog.typeDesc')}>
                     <SelectField
                       value={draft.agent_type}
                       options={AGENT_TYPE_OPTIONS}
@@ -916,7 +920,7 @@ function AgentDialog({
                     />
                   </FieldBlock>
 
-                  <FieldBlock label="角色模板" description="预设模板">
+                  <FieldBlock label={t('team.dialog.template')} description={t('team.dialog.templateDesc')}>
                     <SelectField
                       value={draft.profile}
                       options={PROFILE_OPTIONS}
@@ -928,22 +932,22 @@ function AgentDialog({
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2">
-                <FieldBlock label="描述" description="能力说明">
+                <FieldBlock label={t('team.dialog.desc')} description={t('team.dialog.descDesc')}>
                   <textarea
                     value={draft.description}
                     onChange={(event) => onChangeDraft((current) => ({ ...current, description: event.target.value }))}
                     rows={4}
-                    placeholder="例如：负责梳理计划、拆解任务和推动执行顺序。"
+                    placeholder={t('team.dialog.descPlaceholder')}
                     className="w-full resize-y rounded-2xl border border-border bg-card px-3 py-3 text-sm leading-6 text-foreground outline-none transition-colors placeholder:text-muted-foreground/70 focus:border-ring max-h-[200px] overflow-y-auto"
                   />
                 </FieldBlock>
 
-                <FieldBlock label="系统提示词" description="自定义系统提示">
+                <FieldBlock label={t('team.dialog.systemPrompt')} description={t('team.dialog.systemPromptDesc')}>
                   <textarea
                     value={draft.system_prompt}
                     onChange={(event) => onChangeDraft((current) => ({ ...current, system_prompt: event.target.value }))}
                     rows={4}
-                    placeholder="使用多行文本定义角色行为、边界和风格。"
+                    placeholder={t('team.dialog.systemPromptPlaceholder')}
                     className="w-full resize-y rounded-2xl border border-border bg-card px-3 py-3 text-sm leading-6 text-foreground outline-none transition-colors placeholder:text-muted-foreground/70 focus:border-ring max-h-[200px] overflow-y-auto"
                   />
                 </FieldBlock>
@@ -957,8 +961,8 @@ function AgentDialog({
                 className="flex w-full items-center justify-between gap-3 text-left"
               >
                 <div>
-                  <p className="text-sm font-semibold text-foreground">高级设置</p>
-                  <p className="mt-1 text-xs text-muted-foreground">模型、轮次、工具、技能与自动组队预设</p>
+                  <p className="text-sm font-semibold text-foreground">{t('team.dialog.advanced')}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{t('team.dialog.advancedDesc')}</p>
                 </div>
                 <ChevronDown
                   size={16}
@@ -968,7 +972,7 @@ function AgentDialog({
 
               {advancedOpen ? (
                 <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                  <FieldBlock label="模型" description="留空则继承默认模型">
+                  <FieldBlock label={t('team.dialog.model')} description={t('team.dialog.modelDesc')}>
                     <input
                       value={draft.model}
                       onChange={(event) => onChangeDraft((current) => ({ ...current, model: event.target.value }))}
@@ -977,7 +981,7 @@ function AgentDialog({
                     />
                   </FieldBlock>
 
-                  <FieldBlock label="最大轮次" description="1-25，留空自动">
+                  <FieldBlock label={t('team.dialog.maxTurns')} description={t('team.dialog.maxTurnsDesc')}>
                     <input
                       value={draft.max_turns}
                       onChange={(event) => onChangeDraft((current) => ({ ...current, max_turns: event.target.value }))}
@@ -986,7 +990,7 @@ function AgentDialog({
                     />
                   </FieldBlock>
 
-                  <FieldBlock label="允许工具" description="逗号或换行分隔">
+                  <FieldBlock label={t('team.dialog.allowedTools')} description={t('team.dialog.allowedTools')}>
                     <TokenTextarea
                       value={draft.allowed_tools}
                       onChange={(value) => onChangeDraft((current) => ({ ...current, allowed_tools: value }))}
@@ -995,7 +999,7 @@ function AgentDialog({
                     />
                   </FieldBlock>
 
-                  <FieldBlock label="禁用工具" description="额外黑名单">
+                  <FieldBlock label={t('team.dialog.disallowedTools')} description={t('team.dialog.disallowedTools')}>
                     <TokenTextarea
                       value={draft.disallowed_tools}
                       onChange={(value) => onChangeDraft((current) => ({ ...current, disallowed_tools: value }))}
@@ -1004,7 +1008,7 @@ function AgentDialog({
                     />
                   </FieldBlock>
 
-                  <FieldBlock label="工具" description="独立工具白名单">
+                  <FieldBlock label={t('team.dialog.tools')} description={t('team.dialog.toolsDesc')}>
                     <TokenTextarea
                       value={draft.tools}
                       onChange={(value) => onChangeDraft((current) => ({ ...current, tools: value }))}
@@ -1013,7 +1017,7 @@ function AgentDialog({
                     />
                   </FieldBlock>
 
-                  <FieldBlock label="技能" description="技能白名单">
+                  <FieldBlock label={t('team.dialog.skills')} description={t('team.dialog.skillsDesc')}>
                     <TokenTextarea
                       value={draft.skills}
                       onChange={(value) => onChangeDraft((current) => ({ ...current, skills: value }))}
@@ -1030,10 +1034,10 @@ function AgentDialog({
                         onChange={(event) => onChangeDraft((current) => ({ ...current, auto_team: event.target.checked }))}
                         className="h-4 w-4 rounded border-border"
                       />
-                      <span>自动组队</span>
+                      <span>{t('team.dialog.autoTeam')}</span>
                     </label>
 
-                    <FieldBlock label="子角色" description="自动组队开启时可预定义子 Agent">
+                    <FieldBlock label={t('team.dialog.subAgents')} description={t('team.dialog.subAgentsDesc')}>
                       <div className="grid gap-2 sm:grid-cols-2">
                         {agents.length > 0 ? agents.map((agent) => {
                           const checked = draft.sub_agents.includes(agent.id)
@@ -1062,7 +1066,7 @@ function AgentDialog({
                           )
                         }) : (
                           <div className="rounded-2xl border border-dashed border-border bg-background px-4 py-4 text-sm text-muted-foreground sm:col-span-2">
-                            先创建角色，随后可在这里选择预定义子 Agent。
+                            {t('team.dialog.noSubAgents')}
                           </div>
                         )}
                       </div>
@@ -1080,7 +1084,7 @@ function AgentDialog({
                   className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-destructive/30 px-4 py-2 text-sm text-destructive transition-colors hover:bg-destructive/10"
                 >
                   <Trash2 size={14} />
-                  删除
+                  {t('team.dialog.delete')}
                 </button>
               ) : null}
               <div className="flex-1" />
@@ -1089,7 +1093,7 @@ function AgentDialog({
                 onClick={onClose}
                 className="inline-flex min-h-11 items-center justify-center rounded-2xl border border-border px-4 py-2 text-sm text-foreground transition-colors hover:bg-muted"
               >
-                取消
+                {t('team.dialog.cancel')}
               </button>
               <button
                 type="submit"
@@ -1099,7 +1103,7 @@ function AgentDialog({
                   saving && 'cursor-not-allowed opacity-60',
                 )}
               >
-                {saving ? '保存中…' : isEditing ? '保存' : '创建角色'}
+                {saving ? t('team.dialog.saving') : isEditing ? t('team.dialog.save') : t('team.dialog.createAgent')}
               </button>
             </div>
           </form>
@@ -1159,7 +1163,7 @@ function SopWizardView({
                     <div className="min-w-0">
                       <h3 className="truncate text-sm font-semibold text-foreground">{team.name}</h3>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        {team.agent_ids.length} 个角色
+                        {t('team.card.memberCount', { n: team.agent_ids.length })}
                       </p>
                     </div>
                     <div className="flex items-center gap-1.5">
@@ -1178,16 +1182,16 @@ function SopWizardView({
                 </div>
                 <div className="space-y-3 bg-muted/18 px-4 py-3">
                   <p className="line-clamp-3 min-h-[40px] text-xs leading-5 text-muted-foreground">
-                    {team.description || '暂未填写 Team 描述。'}
+                    {team.description || t('team.card.noTeamDesc')}
                   </p>
                   {team.agent_ids.length > 0 && (
-                    <CardGroup title="组合角色" icon={<Boxes size={12} />}>
+                    <CardGroup title={t('team.card.members')} icon={<Boxes size={12} />}>
                       {team.agent_ids.map((agentId) => {
                         const agent = agentLookup[agentId]
                         return (
                           <InlineMeta
                             key={agentId}
-                            label={agent ? (agent.display_name.trim() || agent.name) : '未知角色'}
+                            label={agent ? (agent.display_name.trim() || agent.name) : t('team.card.unknownMember')}
                           />
                         )
                       })}
@@ -1199,9 +1203,9 @@ function SopWizardView({
           </div>
         ) : (
           <EmptyStateCard
-            title="还没有 Agent Team"
-            description="通过标准 SOP 流程组建高效的 Agent 团队。"
-            buttonLabel="新建 Agent Team"
+            title={t('team.emptyTeams')}
+            description={t('team.sop.steps.target.desc')}
+            buttonLabel={t('team.newTeam')}
             onCreate={onStart}
           />
         )}
@@ -1209,7 +1213,7 @@ function SopWizardView({
     )
   }
 
-  const nextLabel = step < 5 ? `下一步　${SOP_STEPS[step]?.label ?? ''}` : '发布上线'
+  const nextLabel = step < 5 ? t('team.sop.next', { label: SOP_STEPS[step]?.label ?? '' }) : t('team.sop.publish')
 
   return (
     <div className="flex min-h-full flex-col justify-end space-y-5 pb-5">
@@ -1264,7 +1268,7 @@ function SopWizardView({
       <div className="rounded-2xl border border-border bg-card">
         <div className="border-b border-border/70 px-4 py-2">
           <h3 className="text-xs font-semibold text-foreground">
-            Step {step}: {SOP_STEPS[step - 1].label}
+            {t('team.sop.wizardTitle', { step, label: SOP_STEPS[step - 1].label })}
           </h3>
         </div>
 
@@ -1274,16 +1278,16 @@ function SopWizardView({
             {step === 1 && (
               <>
                 <p className="text-[11px] leading-4 text-muted-foreground">
-                  描述团队的目标和用途，让 AI 团队能准确执行的方向。
+                  {t('team.sop.steps.target.desc')}
                 </p>
-                <FieldBlock label="团队名称">
+                <FieldBlock label={t('team.sop.steps.target.name')}>
                   <input
                     value={draft.name}
                     onChange={(e) => {
                       onClearNameError()
                       onChangeDraft((d) => ({ ...d, name: e.target.value }))
                     }}
-                    placeholder="起一个 2-8 字的名称"
+                    placeholder={t('team.sop.steps.target.namePlaceholder')}
                     className={cn(
                       'w-full rounded-xl border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground/70 focus:border-ring',
                       nameError ? 'border-destructive' : 'border-border',
@@ -1291,28 +1295,28 @@ function SopWizardView({
                   />
                   {nameError && <p className="text-xs text-destructive">{nameError}</p>}
                 </FieldBlock>
-                <FieldBlock label="团队目标">
+                <FieldBlock label={t('team.sop.steps.target.objective')}>
                   <textarea
                     value={draft.objective}
                     onChange={(e) => onChangeDraft((d) => ({ ...d, objective: e.target.value }))}
                     rows={2}
-                    placeholder="描述你要完成的具体目标任务"
+                    placeholder={t('team.sop.steps.target.objectivePlaceholder')}
                     className="w-full resize-none rounded-xl border border-border bg-background px-3 py-2 text-sm leading-5 text-foreground outline-none transition-colors placeholder:text-muted-foreground/70 focus:border-ring"
                   />
                 </FieldBlock>
-                <FieldBlock label="应用场景">
+                <FieldBlock label={t('team.sop.steps.target.scenario')}>
                   <input
                     value={draft.scenario}
                     onChange={(e) => onChangeDraft((d) => ({ ...d, scenario: e.target.value }))}
-                    placeholder="例如：代码审查、文档生成、项目管理"
+                    placeholder={t('team.sop.steps.target.scenarioPlaceholder')}
                     className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground/70 focus:border-ring"
                   />
                 </FieldBlock>
-                <FieldBlock label="边界与约束（可选）">
+                <FieldBlock label={t('team.sop.steps.target.constraints')}>
                   <input
                     value={draft.constraints}
                     onChange={(e) => onChangeDraft((d) => ({ ...d, constraints: e.target.value }))}
-                    placeholder="例如：不允许访问生产环境数据"
+                    placeholder={t('team.sop.steps.target.constraintsPlaceholder')}
                     className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground/70 focus:border-ring"
                   />
                 </FieldBlock>
@@ -1321,7 +1325,7 @@ function SopWizardView({
             {step === 2 && (
               <>
                 <p className="text-[11px] leading-4 text-muted-foreground">
-                  从已创建的角色中选择成员加入团队。
+                  {t('team.sop.steps.members.desc')}
                 </p>
                 <div className="space-y-1.5">
                   {agents.length > 0 ? agents.map((agent) => {
@@ -1355,7 +1359,7 @@ function SopWizardView({
                     )
                   }) : (
                     <div className="rounded-xl border border-dashed border-border bg-background px-3 py-3 text-xs text-muted-foreground">
-                      暂无可选角色，请先切换到"角色"创建角色。
+                      {t('team.sop.steps.members.empty')}
                     </div>
                   )}
                 </div>
@@ -1364,36 +1368,36 @@ function SopWizardView({
             {step === 3 && (
               <>
                 <p className="text-[11px] leading-4 text-muted-foreground">
-                  设计团队内部的交互流程和消息路由规则。
+                  {t('team.sop.steps.workflow.desc')}
                 </p>
                 <div className="space-y-1.5">
-                  <SopPlaceholderItem icon={<Workflow size={13} />} label="配置交互流程" />
-                  <SopPlaceholderItem icon={<ArrowRight size={13} />} label="设置消息路由" />
-                  <SopPlaceholderItem icon={<ClipboardList size={13} />} label="定义触发条件" />
+                  <SopPlaceholderItem icon={<Workflow size={13} />} label={t('team.sop.items.workflow')} />
+                  <SopPlaceholderItem icon={<ArrowRight size={13} />} label={t('team.sop.items.routing')} />
+                  <SopPlaceholderItem icon={<ClipboardList size={13} />} label={t('team.sop.items.conditions')} />
                 </div>
               </>
             )}
             {step === 4 && (
               <>
                 <p className="text-[11px] leading-4 text-muted-foreground">
-                  配置团队协作策略和共享上下文。
+                  {t('team.sop.steps.collaboration.desc')}
                 </p>
                 <div className="space-y-1.5">
-                  <SopPlaceholderItem icon={<Cog size={13} />} label="配置共享上下文" />
-                  <SopPlaceholderItem icon={<Settings2 size={13} />} label="设置协作策略" />
-                  <SopPlaceholderItem icon={<ClipboardList size={13} />} label="定义冲突解决" />
+                  <SopPlaceholderItem icon={<Cog size={13} />} label={t('team.sop.items.context')} />
+                  <SopPlaceholderItem icon={<Settings2 size={13} />} label={t('team.sop.items.strategy')} />
+                  <SopPlaceholderItem icon={<ClipboardList size={13} />} label={t('team.sop.items.conflict')} />
                 </div>
               </>
             )}
             {step === 5 && (
               <>
                 <p className="text-[11px] leading-4 text-muted-foreground">
-                  测试团队协作效果，确认无误后发布上线。
+                  {t('team.sop.steps.test.desc')}
                 </p>
                 <div className="space-y-1.5">
-                  <SopPlaceholderItem icon={<Play size={13} />} label="测试团队协作" />
-                  <SopPlaceholderItem icon={<Cog size={13} />} label="调试优化" />
-                  <SopPlaceholderItem icon={<Rocket size={13} />} label="发布上线" />
+                  <SopPlaceholderItem icon={<Play size={13} />} label={t('team.sop.items.test')} />
+                  <SopPlaceholderItem icon={<Cog size={13} />} label={t('team.sop.items.optimization')} />
+                  <SopPlaceholderItem icon={<Rocket size={13} />} label={t('team.sop.items.publish')} />
                 </div>
               </>
             )}
@@ -1413,7 +1417,7 @@ function SopWizardView({
           onClick={onCancel}
           className="inline-flex min-h-8 items-center rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
-          取消
+          {t('team.sop.cancel')}
         </button>
         {step > 1 && (
           <button
@@ -1421,7 +1425,7 @@ function SopWizardView({
             onClick={() => onSetStep(step - 1)}
             className="inline-flex min-h-8 items-center rounded-lg border border-border px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-muted"
           >
-            上一步
+            {t('team.sop.prev')}
           </button>
         )}
         <button
@@ -1442,11 +1446,11 @@ function SopWizardView({
 
       {/* ── Bottom SOP Overview ── */}
       <div className="space-y-2">
-        <h4 className="text-sm font-semibold text-foreground">SOP 流程概览</h4>
+        <h4 className="text-sm font-semibold text-foreground">{t('team.sop.overview')}</h4>
         <div className="flex items-stretch gap-0">
           {SOP_OVERVIEW.map((col, i) => {
             const stepNum = i + 1
-            const status = stepNum < step ? '已完成' : stepNum === step ? '进行中' : '待开始'
+            const status = stepNum < step ? t('team.sop.status.done') : stepNum === step ? t('team.sop.status.doing') : t('team.sop.status.todo')
             const statusColor = stepNum < step
               ? 'bg-green-500/10 text-green-600'
               : stepNum === step
@@ -1495,22 +1499,24 @@ function SopWizardView({
 }
 
 function SopPlaceholderItem({ icon, label }: { icon: React.ReactNode; label: string }) {
+  const { t } = useTranslation()
   return (
     <div className="flex items-center gap-2 rounded-xl border border-dashed border-border bg-background px-3 py-2 text-xs text-muted-foreground">
       {icon}
       <span>{label}</span>
-      <span className="ml-auto text-[9px] text-muted-foreground/60">即将开放</span>
+      <span className="ml-auto text-[9px] text-muted-foreground/60">{t('team.sop.placeholder')}</span>
     </div>
   )
 }
 
 function SopFlowDiagram({ agents, selectedIds }: { agents: AgentRecord[]; selectedIds: string[] }) {
+  const { t } = useTranslation()
   const selected = agents.filter((a) => selectedIds.includes(a.id)).slice(0, 5)
   const placeholders = Math.max(3 - selected.length, 0)
 
   return (
     <div className="flex w-full flex-col items-center gap-2.5 rounded-xl border border-border/60 bg-muted/20 px-4 py-4">
-      <span className="text-[9px] font-medium text-muted-foreground">示例</span>
+      <span className="text-[9px] font-medium text-muted-foreground">{t('team.sop.example')}</span>
 
       <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#3b82f6]/15 text-[#3b82f6]">
         <Users size={14} />
@@ -1532,7 +1538,7 @@ function SopFlowDiagram({ agents, selectedIds }: { agents: AgentRecord[]; select
             <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-dashed border-border bg-background">
               <Bot size={12} className="text-muted-foreground/40" />
             </div>
-            <span className="text-[9px] text-muted-foreground/40">角色</span>
+            <span className="text-[9px] text-muted-foreground/40">{t('team.agents')}</span>
           </div>
         ))}
       </div>
@@ -1540,7 +1546,7 @@ function SopFlowDiagram({ agents, selectedIds }: { agents: AgentRecord[]; select
       <div className="h-3 w-[2px] bg-border" />
 
       <div className="rounded-full border border-border bg-background px-2.5 py-0.5 text-[9px] text-muted-foreground">
-        产出物：高质量项目交付
+        {t('team.sop.output')}
       </div>
     </div>
   )
