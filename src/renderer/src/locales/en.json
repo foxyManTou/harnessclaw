@@ -75,126 +75,198 @@
     "close": "Close Search"
   },
   "models": {
-    "title": "Model Configuration",
-    "searchPlaceholder": "Search model platforms...",
-    "noModels": "No matching model platforms",
-    "apiNotFound": "Management API not found (Check engine version ≥ 2026-05-14)",
+    "title": "Models",
+    "subtitle": "Manage your providers, API keys, and endpoints",
     "primaryProvider": "Primary Provider",
-    "fallbackEnabled": "Fallback Enabled",
-    "fallbackEnabledDesc": "Auto-switch to backup nodes when primary fails",
     "jumpToSettings": "Jump to Settings",
+    "fallbackEnabled": "Provider Fallback",
+    "fallbackEnabledDesc": "Automatic fallback chain when primary model is unavailable",
+    "searchPlaceholder": "Search providers...",
+    "noMatch": "No matching providers",
     "select": "Please select...",
     "unrecognized": "Unrecognized node: {{name}}",
+    "visitOfficialSite": "Visit Official Site",
+    "protocols": {
+      "openai": "OpenAI Protocol",
+      "anthropic": "Anthropic Protocol",
+      "gemini": "Gemini Protocol"
+    },
+    "protocolLabel": "Protocol Compatibility",
+    "protocolDesc": "Format used when writing Custom providers to llm.providers",
+    "apiKeyLabel": "API Key",
+    "apiKeyPlaceholder": "API Key",
+    "apiKeyHint": "Separate multiple keys with commas",
+    "getApiKey": "Click here to get a key",
+    "test": {
+      "testing": "Testing",
+      "ok": "Available",
+      "fail": "Failed",
+      "normal": "Test"
+    },
+    "apiBaseLabel": "API Base URL",
+    "protocolType": "Protocol Type",
+    "previewLabel": "Preview: ",
+    "modelsLabel": "Models",
+    "searchModels": "Search models...",
+    "noModels": "No models yet. Refresh or add below.",
+    "syncOk": "Synced {{total}} models, added {{added}} new",
+    "syncOkNoAdded": "Synced {{total}} models",
+    "syncFailed": "Failed to sync models: {{reason}}",
+    "addModelId": "Please enter model ID",
+    "modelExists": "Model ID already exists",
+    "modelAlreadyExists": "Model already exists",
+    "engineError": "Cannot connect to engine. Ensure the console port is active.",
+    "timeout": "Request timed out",
+    "requestFailed": "Request failed: {{error}}",
+    "noModelsInRegistry": "Registry returned no models",
+    "noModelsForProvider": "No models for {{name}} in registry",
+    "apiNotFound": "Management API not found (Ensure engine version ≥ 2026-05-14)",
+    "editModel": "Edit Model",
+    "addModel": "Add Model",
+    "modelIdLabel": "Model ID",
+    "modelIdHint": "Unique identifier for the model, required",
+    "modelIdPlaceholder": "Required, e.g. gpt-3.5-turbo",
+    "modelNameLabel": "Model Name",
+    "modelNameHint": "Friendly display name, optional",
+    "modelNamePlaceholder": "e.g. GPT-4",
+    "modelGroupLabel": "Group Name",
+    "modelGroupHint": "Logical grouping name, optional",
+    "modelGroupPlaceholder": "e.g. ChatGPT",
+    "modelTagsLabel": "Capabilities (Tags)",
+    "goToAgents": "Configure Agent LLM Nodes",
+    "hotReloadError": "{{label}} failed ({{detail}})",
+    "hotReloadLabels": {
+      "apiKey": "Credential Update",
+      "create": "Provider Creation",
+      "modelCreate": "Model Creation",
+      "list": "Provider Query",
+      "enable": "Model Enable",
+      "disable": "Model Disable",
+      "update": "Link Update",
+      "delete": "Model Deletion",
+      "modelUpdate": "Model Update",
+      "protocol": "Protocol Switch"
+    },
+    "validation": {
+      "missingKey": "{{name}} is missing API key",
+      "missingBase": "{{name}} is missing API base URL",
+      "noModels": "{{name}} needs at least one model added",
+      "noneSelected": "{{name}} needs at least one model selected"
+    },
+    "persist": {
+      "readFailed": "Failed to read model config",
+      "saving": "Saving UI preferences...",
+      "saveFailed": "Failed to save model config"
+    },
     "status": {
       "healthy": "Healthy",
       "tripped": "Tripped",
       "ready_to_probe": "Ready to Probe",
       "unknown": "Unknown"
     },
-    "validation": {
-      "apiKey": "API Key",
-      "apiBase": "API Base",
-      "models": "Models Selected"
-    },
     "capabilities": {
       "vision": "Vision",
-      "web": "Web",
+      "search": "Web",
       "reasoning": "Reasoning",
       "tools": "Tools"
     },
-    "protocol": {
-      "label": "Protocol Compatibility",
-      "desc": "Protocol format used when writing to llm.providers for Custom providers",
-      "openai": "OpenAI Protocol",
-      "anthropic": "Anthropic Protocol"
+    "pricing": {
+      "currency": "Currency",
+      "inputPrice": "Input Price",
+      "outputPrice": "Output Price",
+      "perMillionTokens": "/ million tokens"
     },
-    "actions": {
-      "visitSite": "Visit Site",
-      "advanced": "Advanced Settings",
-      "refresh": "Refresh",
-      "delete": "Delete",
-      "edit": "Edit",
-      "add": "Add",
-      "enable": "Enable",
-      "disable": "Disable"
+    "addModal": {
+      "namePlaceholder": "Search or create a group",
+      "tagsLabel": "Capabilities (Tags)"
     }
   },
-    "agents": {
-      "title": "Agent Settings",
-      "subtitle": "Default parameters for new agents",
-      "searchPlaceholder": "Search Agents...",
-      "newAgent": "Create Agent",
-      "empty": "No Agents yet",
-      "emptyDesc": "Create your first Agent",
-      "model": "Model",
-      "generation": "Generation",
-      "reasoningEffort": "Reasoning Effort (leave empty for model default)",
-      "reasoningDefault": "Default",
-      "style": "Response Style",
-      "stylePrecise": "Precise",
-      "stylePreciseFull": "Precise Mode",
-      "stylePreciseDesc": "Stable and repeatable answers, almost always giving the same result.",
-      "styleBalanced": "Balanced",
-      "styleBalancedFull": "Balanced Mode",
-      "styleBalancedDesc": "Accuracy-focused, natural expression, suitable for daily use.",
-      "styleFlexible": "Flexible",
-      "styleFlexibleFull": "Flexible Mode",
-      "styleFlexibleDesc": "Broad thinking, willing to provide answers from multiple perspectives.",
-      "styleCreative": "Creative",
-      "styleCreativeFull": "Creative Mode",
-      "styleCreativeDesc": "Bold and divergent, with new surprises every time.",
-      "morePrecise": "More Precise",
-      "moreCreative": "More Creative",
-      "recommended": "Recommended",
-      "suitableScenarios": "Suitable for these scenarios:",
-      "params": "Agent Parameters",
-      "maxTokens": "Max tokens per reply (0 = endpoint default)",
-      "contextBudget": "Context budget (Tokens, 0 = unlimited)",
-      "toolsAndWorkspace": "Tools and Workspace",
-      "maxToolIterations": "Max tool iterations per turn",
-      "workspace": "Working Directory",
-      "workspaceDesc": "Default file workspace path for agents",
-      "apiNotFoundHint": "Management API not found (Check engine version ≥ 2026-05-14)",
-      "params": "Agent Parameters",
-      "styleTitle": "Response Style",
-      "model": "Model Nodes",
-      "generation": "Generation",
-      "reasoningEffort": "Reasoning Effort (O1/O3)",
-      "reasoningDefault": "Auto",
-      "toolsAndWorkspace": "Tools & Workspace",
-      "maxToolIterations": "Max Tool Iterations",
-      "workspace": "Workspace Path",
-      "workspaceDesc": "Base directory for Agent file operations (Supports ~ path)",
-      "fallback": {
-        "chainTitle": "Fallback Chain",
-        "addNode": "Add Node",
-        "noNodes": "No available backup nodes",
-        "empty": "No backup nodes yet",
-        "remove": "Remove",
-        "removeNode": "Remove Node"
-      },
-      "actions": {
-        "edit": "Edit",
-        "archive": "Archive",
-        "delete": "Delete"
-      },
-      "dialog": {
-        "title": "Create Agent",
-        "name": "Name",
-        "namePlaceholder": "Agent name",
-        "emoji": "Emoji",
-        "workspace": "Workspace",
-        "cancel": "Cancel",
-        "create": "Create"
-      }
+  "agents": {
+    "title": "Agent Settings",
+    "subtitle": "Default parameters for new agents",
+    "searchPlaceholder": "Search Agents...",
+    "newAgent": "Create Agent",
+    "empty": "No Agents yet",
+    "emptyDesc": "Create your first Agent",
+    "model": "Model Nodes",
+    "generation": "Generation",
+    "reasoningEffort": "Reasoning Effort (O1/O3)",
+    "reasoningDefault": "Auto",
+    "style": "Response Style",
+    "stylePrecise": "Precise",
+    "stylePreciseFull": "Precise Mode",
+    "stylePreciseDesc": "Stable and repeatable answers, almost always giving the same result.",
+    "styleBalanced": "Balanced",
+    "styleBalancedFull": "Balanced Mode",
+    "styleBalancedDesc": "Accuracy-focused, natural expression, suitable for daily use.",
+    "styleFlexible": "Flexible",
+    "styleFlexibleFull": "Flexible Mode",
+    "styleFlexibleDesc": "Broad thinking, willing to provide answers from multiple perspectives.",
+    "styleCreative": "Creative",
+    "styleCreativeFull": "Creative Mode",
+    "styleCreativeDesc": "Bold and divergent, with new surprises every time.",
+    "morePrecise": "More Precise",
+    "moreCreative": "More Creative",
+    "recommended": "Recommended",
+    "suitableScenarios": "Suitable for these scenarios:",
+    "params": "Agent Parameters",
+    "maxTokens": "Max tokens per reply (0 = endpoint default)",
+    "contextBudget": "Context budget (Tokens, 0 = unlimited)",
+    "toolsAndWorkspace": "Tools & Workspace",
+    "maxToolIterations": "Max Tool Iterations",
+    "workspace": "Workspace Path",
+    "workspaceDesc": "Base directory for Agent file operations (Supports ~ path)",
+    "apiNotFoundHint": "Management API not found (Check engine version ≥ 2026-05-14)",
+    "styleTitle": "Response Style",
+    "fallback": {
+      "chainTitle": "Fallback Chain",
+      "addNode": "Add Node",
+      "noNodes": "No available backup nodes",
+      "empty": "No backup nodes yet",
+      "remove": "Remove",
+      "removeNode": "Remove Node"
     },
+    "actions": {
+      "edit": "Edit",
+      "archive": "Archive",
+      "delete": "Delete"
+    },
+    "dialog": {
+      "title": "Create Agent",
+      "name": "Name",
+      "namePlaceholder": "Agent name",
+      "emoji": "Emoji",
+      "workspace": "Workspace",
+      "cancel": "Cancel",
+      "create": "Create"
+    }
+  },
   "xlab": {
     "title": "X·LAB",
     "description": "Experimental field. Upcoming experimental features and early previews will appear here. Stay tuned."
   },
   "skills": {
     "title": "Skills",
-    "market": "Skill Market",
+    "market": {
+      "title": "Skill Market",
+      "back": "Back to Skills",
+      "refreshStartFailed": "Failed to start refresh task",
+      "refreshProgress": "Refresh complete: {{success}}/{{total}} repos succeeded, {{error}} failed",
+      "refreshSuccess": "Discovery refreshed: {{repos}} repos, {{skills}} skills",
+      "refreshFailed": "Background refresh failed",
+      "installed": "Installed",
+      "discovered": "Discovered",
+      "saveRepoFailed": "Failed to save repository",
+      "repoSaved": "Repo saved, discovery result kept from cache",
+      "repoRemoved": "Repo removed, discovery result kept from cache",
+      "skillDeleted": "{{name}} deleted",
+      "skillInstalled": "{{name}} installed",
+      "skillReinstalled": "{{name}} reinstalled",
+      "installFailed": "Installation failed",
+      "deleteFailed": "Deletion failed",
+      "enterUrlFirst": "Please enter GitHub repository URL first",
+      "closeMarket": "Close Skill Market"
+    },
     "back": "Back to Skills",
     "manage": "Manage Repos",
     "refresh": "Refresh Discovery",
@@ -232,26 +304,6 @@
     "enabledRepos": "Enabled Repos",
     "discoveredCount": "Discovered Skills",
     "searchMarketPlaceholder": "Search skill market...",
-    "market": {
-      "title": "Skill Market",
-      "back": "Back to Skills",
-      "refreshStartFailed": "Failed to start refresh task",
-      "refreshProgress": "Refresh complete: {{success}}/{{total}} repos succeeded, {{error}} failed",
-      "refreshSuccess": "Discovery refreshed: {{repos}} repos, {{skills}} skills",
-      "refreshFailed": "Background refresh failed",
-      "installed": "Installed",
-      "discovered": "Discovered",
-      "saveRepoFailed": "Failed to save repository",
-      "repoSaved": "Repo saved, discovery result kept from cache",
-      "repoRemoved": "Repo removed, discovery result kept from cache",
-      "skillDeleted": "{{name}} deleted",
-      "skillInstalled": "{{name}} installed",
-      "skillReinstalled": "{{name}} reinstalled",
-      "installFailed": "Installation failed",
-      "deleteFailed": "Deletion failed",
-      "enterUrlFirst": "Please enter GitHub repository URL first",
-      "closeMarket": "Close Skill Market"
-    },
     "repo": {
       "title": "Skill Repository",
       "desc": "Enabled repos participate in discovery. Refreshing only updates the remote index; it won't touch your original repo. Fill in scan path to limit range. Proxy only affects pulling and refreshing.",
@@ -302,7 +354,7 @@
     "subtitle": "View history or continue recent context.",
     "searchPlaceholder": "Search sessions...",
     "exitMultiSelect": "Exit Multi-select",
-    "enterMultiSelect": "Enter Multi-select",
+    "enterMultiSelect": "Multi-select",
     "newSession": "New Session",
     "loading": "Loading sessions...",
     "noHistory": "No session history yet",
@@ -499,20 +551,18 @@
       "lifecycleEnded": "Sub-task lifecycle ended",
       "terminated": "(Terminated)",
       "stoppingSession": "Requesting to stop current session...",
-      "requestFailed": "Request Failed",
+      "requestFailed": "Request failed",
       "serviceNotConnected": "Message failed to send: Backend service not connected. Please ensure the local backend is started and try again.",
       "serviceNotConnectedHint": "Please check if the local service is running and your connection settings are correct.",
       "unnamedTask": "Unnamed Task",
-      "newMember": "New Member",
-      "member": "Member",
+      "newMember": "new member",
+      "member": "member",
       "taskUpdated": "Task updated",
       "asyncCollab": "Background collaboration task",
       "asyncAgents": "Async Agents",
       "routedToPrefix": "Routed to",
       "totalDuration": "Total duration {{time}}",
       "allMembers": "All Members",
-      "newMember": "new member",
-      "member": "member",
       "waitingResults": "Waiting for more results...",
       "serviceContinuing": "Service is continuing",
       "processRecords": "{{n}} process records",
@@ -542,7 +592,6 @@
       "subagentStartedShort": "Subtask started",
       "subagentEndFailed": "Subtask lifecycle ended with failure",
       "subagentEnd": "Subtask lifecycle ended",
-      "requestFailed": "Request failed",
       "loadFailed": "Load failed",
       "apiNotFound": "Management API not found (please confirm engine version ≥ 2026-05-14)"
     },
@@ -580,7 +629,9 @@
       "readLimit": "Showing read result, limit is {{n}} lines",
       "writeContent": "Showing content submitted for file write",
       "noContent": "No file content to display",
-      "noContentDesc": "This tool call returned no previewable text."
+      "noContentDesc": "This tool call returned no previewable text.",
+      "binaryTitle": "Binary file, cannot preview directly",
+      "binaryDesc": "This format (e.g. .docx / .pdf / .xlsx) is not UTF-8 text. Use the Export action in the top-right to save the original file."
     },
     "web": {
       "refresh": "Refresh",
@@ -689,7 +740,8 @@
       "modelError": "Model Error",
       "contractFail": "Contract Failure",
       "dependencyFail": "Sub-task Failed",
-      "internal": "Internal Error"
+      "internal": "Internal Error",
+      "unsupportedModality": "Modality not supported by model"
     },
     "taskStatus": {
       "inProgress": "In Progress",
@@ -802,9 +854,11 @@
       "connection": "Connection",
       "models": "Models",
       "agents": "Agents",
+      "search": "Search",
       "tools": "Tools",
       "appConfig": "App Config",
       "software": "Software",
+      "launcher": "Quick Launcher",
       "logs": "Logs",
       "ui": "UI Settings",
       "storage": "Storage",
@@ -931,9 +985,9 @@
       "timeout": "Request timed out",
       "requestFailed": "Request failed: {{error}}",
       "noModelsInRegistry": "Registry returned no models",
-    "noModelsForProvider": "No models for {{name}} in registry",
-    "apiNotFound": "Management API not found (Ensure engine version ≥ 2026-05-14)",
-    "editModel": "Edit Model",
+      "noModelsForProvider": "No models for {{name}} in registry",
+      "apiNotFound": "Management API not found (Ensure engine version ≥ 2026-05-14)",
+      "editModel": "Edit Model",
       "addModel": "Add Model",
       "modelIdLabel": "Model ID",
       "modelIdHint": "Unique identifier for the model, required",
@@ -1030,178 +1084,178 @@
       }
     },
     "welcome": {
-    "greeting": "Welcome to HarnessClaw",
-    "saveError": "Failed to save configuration",
-    "back": "Back",
-    "next": "Next",
-    "finish": "Finish & Launch",
-    "submitting": "Initializing...",
-    "stages": {
-      "emma": "Meet emma",
-      "emmaSubtitle": "Your all-in-one smart assistant",
-      "engine": "Select Engine",
-      "engineSubtitle": "Choose a primary LLM service as the core brain",
-      "connection": "Connection Params",
-      "profile": "Preset Profile"
-    },
-    "modelIdHint": "e.g., gpt-4o-mini, claude-sonnet-4, etc.",
-    "engineOptions": {
-      "openaiDetail": "Supports GPT-4o, GPT-4o-mini, etc. Compatible with OpenAI protocol endpoints.",
-      "anthropicDetail": "Supports Claude 3.5 Sonnet, Claude 3 Opus, etc. Native API."
-    },
-    "profileOptions": {
-      "devTitle": "Dev Expert",
-      "devDetail": "Focus on code, debugging and architecture. High reasoning effort by default.",
-      "researchTitle": "Research Assistant",
-      "researchDetail": "Expert in data gathering, summarization and paper analysis. Balanced strategy.",
-      "opsTitle": "Ops Pro",
-      "opsDetail": "Quick handling of daily tasks, syncs and data organization. Lightweight strategy."
-    },
-    "prompts": {
-      "categories": {
-        "dev": "Dev",
-        "research": "Research",
-        "writing": "Writing",
-        "data": "Data",
-        "life": "Life",
-        "daily": "Daily"
+      "greeting": "Welcome to HarnessClaw",
+      "saveError": "Failed to save configuration",
+      "back": "Back",
+      "next": "Next",
+      "finish": "Finish & Launch",
+      "submitting": "Initializing...",
+      "stages": {
+        "emma": "Meet emma",
+        "emmaSubtitle": "Your all-in-one smart assistant",
+        "engine": "Select Engine",
+        "engineSubtitle": "Choose a primary LLM service as the core brain",
+        "connection": "Connection Params",
+        "profile": "Preset Profile"
       },
-      "items": {
-        "dev1": "Refactor this function to be more readable and add unit tests.",
-        "dev2": "Troubleshoot this error log, locate the root cause and provide a fix.",
-        "dev3": "Review this PR's design and boundaries, listing potential risks.",
-        "dev4": "Add rate limiting and retries to this interface, with unit tests.",
-        "res1": "Search for new RAG papers from the past week and summarize key points.",
-        "res2": "Compare architecture and use cases of 3 leading vector databases.",
-        "res3": "Review mainstream benchmarks in the Agent evaluation field.",
-        "res4": "Track all papers published by this author in the last 6 months.",
-        "wri1": "Write a 300-word teaser post for next week's product launch.",
-        "wri2": "Rewrite this technical document for non-technical colleagues.",
-        "wri3": "Write a concise and powerful README for this open-source project.",
-        "wri4": "Organize this retrospective into a story-driven external post.",
-        "dat1": "Analyze order data in this CSV for retention and outliers.",
-        "dat2": "Parse this log into fields and create a trend chart of hourly calls.",
-        "dat3": "Analyze these A/B test results and provide statistical significance.",
-        "dat4": "Cluster these user feedbacks into 5 most noteworthy topics.",
-        "lif1": "Plan a two-day family weekend trip around Hangzhou.",
-        "lif2": "Give me adjustment suggestions for next week based on my activity and diet.",
-        "lif3": "Compare the total cost-performance of these two flight+hotel packages.",
-        "lif4": "List weekend evening activities suitable for spending alone quietly.",
-        "dai1": "Organize today's meeting notes into To-dos and schedule for next week.",
-        "dai2": "Summarize all @ mentions in Slack today, marking those needing reply.",
-        "dai3": "Organize this week's work into a draft weekly report for external use.",
-        "dai4": "Pick 3 things from my emails that truly need processing today."
+      "modelIdHint": "e.g., gpt-4o-mini, claude-sonnet-4, etc.",
+      "engineOptions": {
+        "openaiDetail": "Supports GPT-4o, GPT-4o-mini, etc. Compatible with OpenAI protocol endpoints.",
+        "anthropicDetail": "Supports Claude 3.5 Sonnet, Claude 3 Opus, etc. Native API."
+      },
+      "profileOptions": {
+        "devTitle": "Dev Expert",
+        "devDetail": "Focus on code, debugging and architecture. High reasoning effort by default.",
+        "researchTitle": "Research Assistant",
+        "researchDetail": "Expert in data gathering, summarization and paper analysis. Balanced strategy.",
+        "opsTitle": "Ops Pro",
+        "opsDetail": "Quick handling of daily tasks, syncs and data organization. Lightweight strategy."
+      },
+      "prompts": {
+        "categories": {
+          "dev": "Dev",
+          "research": "Research",
+          "writing": "Writing",
+          "data": "Data",
+          "life": "Life",
+          "daily": "Daily"
+        },
+        "items": {
+          "dev1": "Refactor this function to be more readable and add unit tests.",
+          "dev2": "Troubleshoot this error log, locate the root cause and provide a fix.",
+          "dev3": "Review this PR's design and boundaries, listing potential risks.",
+          "dev4": "Add rate limiting and retries to this interface, with unit tests.",
+          "res1": "Search for new RAG papers from the past week and summarize key points.",
+          "res2": "Compare architecture and use cases of 3 leading vector databases.",
+          "res3": "Review mainstream benchmarks in the Agent evaluation field.",
+          "res4": "Track all papers published by this author in the last 6 months.",
+          "wri1": "Write a 300-word teaser post for next week's product launch.",
+          "wri2": "Rewrite this technical document for non-technical colleagues.",
+          "wri3": "Write a concise and powerful README for this open-source project.",
+          "wri4": "Organize this retrospective into a story-driven external post.",
+          "dat1": "Analyze order data in this CSV for retention and outliers.",
+          "dat2": "Parse this log into fields and create a trend chart of hourly calls.",
+          "dat3": "Analyze these A/B test results and provide statistical significance.",
+          "dat4": "Cluster these user feedbacks into 5 most noteworthy topics.",
+          "lif1": "Plan a two-day family weekend trip around Hangzhou.",
+          "lif2": "Give me adjustment suggestions for next week based on my activity and diet.",
+          "lif3": "Compare the total cost-performance of these two flight+hotel packages.",
+          "lif4": "List weekend evening activities suitable for spending alone quietly.",
+          "dai1": "Organize today's meeting notes into To-dos and schedule for next week.",
+          "dai2": "Summarize all @ mentions in Slack today, marking those needing reply.",
+          "dai3": "Organize this week's work into a draft weekly report for external use.",
+          "dai4": "Pick 3 things from my emails that truly need processing today."
+        }
       }
-    }
-  },
-  "plan": {
-    "buttonLabel": "Plan",
-    "dialogTitle": "Execution Plan",
-    "taskPlan": "Task Plan",
-    "close": "Close",
-    "noSteps": "No steps",
-    "dependsOn": "Depends on {{deps}}",
-    "status": {
-      "running": "Running",
-      "dispatched": "Dispatched",
-      "completed": "Completed",
-      "failed": "Failed",
-      "skipped": "Skipped",
-      "pending": "Pending"
     },
-    "summary": {
-      "completed": "Plan completed · {{completed}}/{{total}} steps successful",
-      "failed": "Plan failed · {{failed}} failed, {{skipped}} skipped",
-      "running": "Running · {{completed}}/{{total}} completed",
-      "progress": "Completed {{completed}}/{{total}} steps",
-      "waiting": "Plan approved, waiting to dispatch · {{total}} steps total"
+    "plan": {
+      "buttonLabel": "Plan",
+      "dialogTitle": "Execution Plan",
+      "taskPlan": "Task Plan",
+      "close": "Close",
+      "noSteps": "No steps",
+      "dependsOn": "Depends on {{deps}}",
+      "status": {
+        "running": "Running",
+        "dispatched": "Dispatched",
+        "completed": "Completed",
+        "failed": "Failed",
+        "skipped": "Skipped",
+        "pending": "Pending"
+      },
+      "summary": {
+        "completed": "Plan completed · {{completed}}/{{total}} steps successful",
+        "failed": "Plan failed · {{failed}} failed, {{skipped}} skipped",
+        "running": "Running · {{completed}}/{{total}} completed",
+        "progress": "Completed {{completed}}/{{total}} steps",
+        "waiting": "Plan approved, waiting to dispatch · {{total}} steps total"
+      },
+      "draft": {
+        "title": "Execution Plan Draft",
+        "goalLabel": "Goal:",
+        "noSteps": "No steps yet. Click \"+ Add Step\" below to supplement.",
+        "stepPlaceholder": "Step description",
+        "newStep": "New Step",
+        "deleteStepAria": "Delete step",
+        "addStep": "Add Step",
+        "regenerate": "Regenerate",
+        "reject": "Reject",
+        "execute": "Execute"
+      }
     },
-    "draft": {
-      "title": "Execution Plan Draft",
-      "goalLabel": "Goal:",
-      "noSteps": "No steps yet. Click \"+ Add Step\" below to supplement.",
-      "stepPlaceholder": "Step description",
-      "newStep": "New Step",
-      "deleteStepAria": "Delete step",
-      "addStep": "Add Step",
-      "regenerate": "Regenerate",
-      "reject": "Reject",
-      "execute": "Execute"
-    }
-  },
-  "stats": {
-    "title": "Stats",
-    "dialogTitle": "Session Statistics",
-    "refresh": "Refresh Stats",
-    "close": "Close",
-    "noData": "No data yet — This session hasn't generated any LLM calls.",
-    "fetchError": "Failed to fetch stats: {{error}}",
-    "fetchErrorHint": "Please try again later",
-    "contextWindow": "Context Window",
-    "remaining": "Remaining",
-    "buckets": {
-      "input": "Input",
-      "cache": "Cache",
-      "output": "Output",
-      "thinking": "Thinking",
-      "includingCache": "Incl. {{n}} cached",
-      "percentOfInput": "{{percent}}% of input"
+    "stats": {
+      "title": "Stats",
+      "dialogTitle": "Session Statistics",
+      "refresh": "Refresh Stats",
+      "close": "Close",
+      "noData": "No data yet — This session hasn't generated any LLM calls.",
+      "fetchError": "Failed to fetch stats: {{error}}",
+      "fetchErrorHint": "Please try again later",
+      "contextWindow": "Context Window",
+      "remaining": "Remaining",
+      "buckets": {
+        "input": "Input",
+        "cache": "Cache",
+        "output": "Output",
+        "thinking": "Thinking",
+        "includingCache": "Incl. {{n}} cached",
+        "percentOfInput": "{{percent}}% of input"
+      },
+      "cards": {
+        "totalTokens": "Total Tokens",
+        "inputTokens": "Input Tokens",
+        "outputTokens": "Output Tokens",
+        "avgLatency": "Avg. Latency",
+        "cacheHit": "Cache Hit {{percent}}%",
+        "includingThinking": "Incl. {{n}} thinking",
+        "ttft": "TTFT {{latency}}",
+        "cacheSaved": "Saved {{cost}}"
+      },
+      "breakdown": {
+        "title": "Agent Breakdown",
+        "agent": "Agent",
+        "input": "Input",
+        "output": "Output",
+        "contribution": "Contribution",
+        "noSubagents": "No sub-agent data",
+        "mainBadge": "Main"
+      }
     },
-    "cards": {
-      "totalTokens": "Total Tokens",
-      "inputTokens": "Input Tokens",
-      "outputTokens": "Output Tokens",
-      "avgLatency": "Avg. Latency",
-      "cacheHit": "Cache Hit {{percent}}%",
-      "includingThinking": "Incl. {{n}} thinking",
-      "ttft": "TTFT {{latency}}",
-      "cacheSaved": "Saved {{cost}}"
+    "attachments": {
+      "removeAria": "Remove file {{name}}"
     },
-    "breakdown": {
-      "title": "Agent Breakdown",
-      "agent": "Agent",
-      "input": "Input",
-      "output": "Output",
-      "contribution": "Contribution",
-      "noSubagents": "No sub-agent data",
-      "mainBadge": "Main"
-    }
-  },
-  "attachments": {
-    "removeAria": "Remove file {{name}}"
-  },
-  "pasted": {
-    "label": "Pasted",
-    "lines": "{{n}} lines",
-    "removeAria": "Remove pasted content",
-    "previewTitle": "Pasted Content Preview",
-    "closeAria": "Close preview"
-  },
-  "ui": {
+    "pasted": {
+      "label": "Pasted",
+      "lines": "{{n}} lines",
+      "removeAria": "Remove pasted content",
+      "previewTitle": "Pasted Content Preview",
+      "closeAria": "Close preview"
+    },
+    "ui": {
       "title": "UI Settings",
       "subtitle": "Interface preferences",
       "appearance": "Appearance",
-    "theme": "Theme",
-    "themeDesc": "Select the interface color theme",
-    "themeLight": "Light",
-    "themeDark": "Dark",
-    "themeSystem": "System",
-    "fontSize": "Font Size",
-    "fontSizeDesc": "Adjust the interface text size",
-    "fontSizeSmall": "Small",
-    "fontSizeMedium": "Medium",
-    "fontSizeLarge": "Large",
-    "language": "Language",
-    "languageDesc": "Interface display language",
-    "languageZh": "中文",
-    "languageEn": "English",
-    "editor": "Code Editor",
-    "codeTheme": "Code Theme",
-    "codeThemeDesc": "Syntax highlighting style for code blocks",
-    "animation": "Animations",
-    "animationDesc": "Enable interface transitions and micro-interaction animations",
-    "viewAvatar": "View avatar: {{name}}"
-  },
+      "theme": "Theme",
+      "themeDesc": "Select the interface color theme",
+      "themeLight": "Light",
+      "themeDark": "Dark",
+      "themeSystem": "System",
+      "fontSize": "Font Size",
+      "fontSizeDesc": "Adjust the interface text size",
+      "fontSizeSmall": "Small",
+      "fontSizeMedium": "Medium",
+      "fontSizeLarge": "Large",
+      "language": "Language",
+      "languageDesc": "Interface display language",
+      "languageZh": "中文",
+      "languageEn": "English",
+      "editor": "Code Editor",
+      "codeTheme": "Code Theme",
+      "codeThemeDesc": "Syntax highlighting style for code blocks",
+      "animation": "Animations",
+      "animationDesc": "Enable interface transitions and micro-interaction animations",
+      "viewAvatar": "View avatar: {{name}}"
+    },
     "tools": {
       "title": "Tool Configuration",
       "subtitle": "Search, Exec & MCP",
@@ -1245,58 +1299,121 @@
       "title": "Data & Storage",
       "subtitle": "Local files & cache management",
       "dbPath": "Database Path",
-    "dbPathDesc": "Local SQLite database file location",
-    "dbShowInFolder": "Show database file in folder",
-    "logsPath": "Logs Path",
-    "logsPathDesc": "Directory for system run logs",
-    "cacheSize": "Cache Size",
-    "cacheSizeDesc": "Disk space occupied by application temporary cache",
-    "clearCache": "Clear Cache",
-    "export": {
-      "title": "Data Export",
-      "db": "Export Database",
-      "dbDesc": "Export all sessions as JSON or Markdown",
-      "logs": "Export Logs",
-      "logsDesc": "Export application run logs",
-      "config": "Export Config",
-      "configDesc": "Export all settings as a configuration file",
-      "success": "Exported to {{path}}",
-      "failed": "Export failed",
-      "openFailed": "Failed to open directory"
+      "dbPathDesc": "Local SQLite database file location",
+      "dbShowInFolder": "Show database file in folder",
+      "logsPath": "Logs Path",
+      "logsPathDesc": "Directory for system run logs",
+      "cacheSize": "Cache Size",
+      "cacheSizeDesc": "Disk space occupied by application temporary cache",
+      "clearCache": "Clear Cache",
+      "export": {
+        "title": "Data Export",
+        "db": "Export Database",
+        "dbDesc": "Export all sessions as JSON or Markdown",
+        "logs": "Export Logs",
+        "logsDesc": "Export application run logs",
+        "config": "Export Config",
+        "configDesc": "Export all settings as a configuration file",
+        "success": "Exported to {{path}}",
+        "failed": "Export failed",
+        "openFailed": "Failed to open directory"
+      }
+    },
+    "logs": {
+      "title": "System Logs",
+      "subtitle": "Unified view of latest.log. Levels are for filtering display only and do not change the recording level (adjust in \"Software Settings\").",
+      "searchPlaceholder": "Search message, module or metadata",
+      "followModeOn": "Following",
+      "followModeOff": "Paused",
+      "directoryLabel": "Log Directory: {{path}}",
+      "openDirectory": "Open Directory",
+      "exportLogs": "Export Logs",
+      "reset": "Reset",
+      "copy": "Copy",
+      "copied": "Copied",
+      "levels": {
+        "fatal": "Fatal",
+        "error": "Error",
+        "warn": "Warn",
+        "info": "Info",
+        "debug": "Debug",
+        "trace": "Trace"
+      },
+      "viewModes": {
+        "parsed": "Parsed",
+        "raw": "Raw"
+      },
+      "notices": {
+        "openDirSuccess": "Opened log directory: {{path}}",
+        "openDirFailed": "Failed to open log directory.",
+        "exportSuccess": "Logs exported to: {{path}}",
+        "exportFailed": "Failed to export logs."
+      }
+    },
+    "search": {
+      "errors": {
+        "loadFailed": "Failed to load tool configuration",
+        "invalidConfig": "Credentials are incomplete. Please fill them in before enabling.",
+        "notRegistered": "Tool is not registered — engine version may be incompatible.",
+        "hotReloadFailed": "Hot-reload failed. Try again later or restart the service.",
+        "persistFailed": "Failed to write configuration file — in-memory state was rolled back.",
+        "registryMissing": "Tool was not registered at startup. Please restart the service.",
+        "badRequest": "Invalid request parameters.",
+        "networkError": "Cannot reach the local service. Make sure HarnessClaw is running.",
+        "timeout": "Request timed out. Please try again.",
+        "generic": "{{code}}: operation failed",
+        "requestFailed": "Request failed: {{detail}}"
+      },
+      "toast": {
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "noChanges": "No changes to save",
+        "savedAndApplied": "Saved and applied"
+      },
+      "ui": {
+        "reload": "Reload",
+        "searchPlaceholder": "Search services...",
+        "pendingConfig": "Pending",
+        "unsavedChanges": "Unsaved changes",
+        "noMatch": "No matching search services",
+        "effective": "Active",
+        "notEnabled": "Disabled",
+        "visitWebsite": "Visit website",
+        "saving": "Saving",
+        "save": "Save"
+      },
+      "fields": {
+        "apiKeyPlaceholder": "Enter API Key",
+        "getKeyHere": "Click here to get a key",
+        "iflyConsoleHint": "Visit the iFlytek Open Platform console",
+        "tavilyConsoleHint": "Visit the Tavily console",
+        "maxResults": "Max Results",
+        "maxResultsDesc": "Maximum number of results returned per request",
+        "tavilyMaxResultsDesc": "Maximum results returned per Tavily Search request"
+      }
+    },
+    "launcher": {
+      "header": {
+        "title": "Quick Launcher",
+        "subtitle": "Global hotkey to summon the input bar and start a new chat from your question"
+      },
+      "group": {
+        "basic": "Basic"
+      },
+      "enabled": {
+        "label": "Enable",
+        "desc": "When enabled, the global hotkey opens the Quick Launcher input box; type a question to jump straight into a new chat."
+      },
+      "hotkey": {
+        "label": "Hotkey",
+        "desc": "Click the input on the right and press a key combination to update. Include at least one modifier (⌘/⌃/⌥/⇧).",
+        "capturingAria": "Recording hotkey, press a key combination",
+        "idleAria": "Current hotkey {{value}}, click to edit",
+        "unset": "Not set",
+        "pressKeys": "Press a key combination…"
+      }
     }
   },
-  "logs": {
-    "title": "System Logs",
-    "subtitle": "Unified view of latest.log. Levels are for filtering display only and do not change the recording level (adjust in \"Software Settings\").",
-    "searchPlaceholder": "Search message, module or metadata",
-    "followModeOn": "Following",
-    "followModeOff": "Paused",
-    "directoryLabel": "Log Directory: {{path}}",
-    "openDirectory": "Open Directory",
-    "exportLogs": "Export Logs",
-    "reset": "Reset",
-    "copy": "Copy",
-    "copied": "Copied",
-    "levels": {
-      "fatal": "Fatal",
-      "error": "Error",
-      "warn": "Warn",
-      "info": "Info",
-      "debug": "Debug",
-      "trace": "Trace"
-    },
-    "viewModes": {
-      "parsed": "Parsed",
-      "raw": "Raw"
-    },
-    "notices": {
-      "openDirSuccess": "Opened log directory: {{path}}",
-      "openDirFailed": "Failed to open log directory.",
-      "exportSuccess": "Logs exported to: {{path}}",
-      "exportFailed": "Failed to export logs."
-    }
-  }
-},
   "welcome": {
     "greeting": "Nice to meet you",
     "stages": {
@@ -1309,8 +1426,16 @@
     },
     "engineOptions": {
       "openaiDetail": "Connect to OpenAI official API or accounts compatible with its model naming and gateway configuration.",
-      "anthropicDetail": "Connect to Anthropic official API as the default entry point for Claude series models."
+      "anthropicDetail": "Connect to Anthropic official API as the default entry point for Claude series models.",
+      "xunfeiDetail": "Connect to iFlytek Spark, suited for Chinese-language scenarios and the domestic developer ecosystem.",
+      "googleDetail": "Connect to Google Generative Language for Gemini-series models via the gemini protocol.",
+      "deepseekDetail": "Connect to DeepSeek's OpenAI-compatible API — great for code and reasoning at low cost.",
+      "zhipuDetail": "Connect to Zhipu GLM via the OpenAI-compatible gateway; supports GLM-4 series models.",
+      "moonshotDetail": "Connect to Moonshot Kimi via the OpenAI-compatible API for long-context conversations.",
+      "minimaxDetail": "Connect to MiniMax via the OpenAI-compatible API; supports the abab series.",
+      "customDetail": "Bring your own gateway — set base URL, key and a protocol (OpenAI or Anthropic) yourself."
     },
+    "protocolLabel": "Protocol",
     "profileOptions": {
       "devTitle": "R&D and Automated Ops",
       "devDetail": "Focused on long-chain execution, with higher tool iteration limits by default.",
@@ -1318,6 +1443,43 @@
       "researchDetail": "Focused on multi-round retrieval and organization, maintaining medium reasoning intensity.",
       "opsTitle": "Complex Daily Workflow",
       "opsDetail": "Focused on stable collaboration and batch processing, maintaining concise default values."
+    },
+    "modelIdHint": "Use a model ID supported by your provider, e.g. gpt-4o-mini or claude-sonnet-4.",
+    "prompts": {
+      "categories": {
+        "dev": "Engineering",
+        "research": "Research",
+        "writing": "Writing",
+        "data": "Data",
+        "life": "Life",
+        "daily": "Daily"
+      },
+      "items": {
+        "dev1": "Review this code for performance bottlenecks",
+        "dev2": "Port this Python script to TypeScript",
+        "dev3": "Write unit tests for this API",
+        "dev4": "Deploy a minimal containerized service",
+        "res1": "Summarize recent LLM benchmark papers from the past 30 days",
+        "res2": "Compare three popular vector databases",
+        "res3": "List key feature differences across competitors",
+        "res4": "Extract the key points from this meeting transcript",
+        "wri1": "Rewrite this technical post for a broader audience",
+        "wri2": "Draft a product launch announcement email",
+        "wri3": "Suggest three catchy titles for this blog post",
+        "wri4": "Turn these notes into a 200-word talk",
+        "dat1": "Find the outliers in this CSV",
+        "dat2": "Write a SQL query for last month's active users",
+        "dat3": "Aggregate these logs into a visualization",
+        "dat4": "Clean this dataset and fill missing values",
+        "lif1": "Plan a 3-day getaway near my city",
+        "lif2": "Suggest healthy breakfast ideas for the week",
+        "lif3": "Build a 30-minute home workout routine",
+        "lif4": "Recommend a few highly rated non-fiction books",
+        "dai1": "Organize today's tasks into time blocks",
+        "dai2": "Draft a time-off request email",
+        "dai3": "Remind me to archive project progress every Friday",
+        "dai4": "Transcribe this voice note into a meeting summary"
+      }
     },
     "back": "Back",
     "next": "Next",

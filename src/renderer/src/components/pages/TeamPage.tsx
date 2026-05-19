@@ -821,6 +821,7 @@ function AgentDialog({
   onDelete?: () => void
   onClearNameError: () => void
 }) {
+  const { t } = useTranslation()
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const isEditing = editingId !== null
 
@@ -1147,6 +1148,7 @@ function SopWizardView({
   onDeleteTeam: (id: string) => void
   onClearNameError: () => void
 }) {
+  const { t } = useTranslation()
   if (!active) {
     // Show existing teams list or empty state
     return (

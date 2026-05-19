@@ -611,7 +611,7 @@ export function SessionsPage() {
                     aria-label={t('sessions.multiSelect.copyTooltip')}
                     title={t('sessions.multiSelect.copy')}
                   >
-                    <CircleCheck size={14} />
+                    <Copy size={14} />
                     {t('sessions.multiSelect.copy')}
                   </button>
                   <button

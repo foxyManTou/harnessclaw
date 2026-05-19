@@ -261,6 +261,10 @@ export interface ProviderEndpointInfo {
   // enable/disable flag instead of DELETE-then-recreate.
   disabled?: boolean
   in_chain: boolean
+  // Engine 2026-05-19+: per-endpoint capability override. Tokens from
+  // {vision, pdf, audio, video, reasoning, tools, search}; empty / absent
+  // means "inherit manifest baseline".
+  model_type?: string[]
 }
 
 export interface ProviderInfo {
@@ -377,6 +381,12 @@ export interface EndpointPatch {
   // Callers that want it back in the chain at a specific position
   // must PATCH /agent themselves.
   disabled?: boolean
+  // Engine 2026-05-19+: capability token override. Sending an empty
+  // array explicitly clears the override (reverts to manifest baseline);
+  // omitting the key leaves it unchanged. Allowed tokens:
+  // vision/pdf/audio/video/reasoning/tools/search. Unknown tokens →
+  // 400 invalid_model_type.
+  model_type?: string[]
 }
 
 export type ProvidersResult<T> =
@@ -613,6 +623,81 @@ export async function updateFallbackChain(
   return { ok: true, data: flattenAgent(res.data) }
 }
 
+// ─── Agent Capabilities API ────────────────────────────────────────────
+//
+// GET /api/v1/agent/capabilities — resolved SupportsFlags + derived
+// capability buckets for the active model. Replaces the
+// /agent + /models two-step normalize previously needed in the renderer:
+// the server now takes endpoint.model_type into account (override-aware)
+// so the gate and the UI see the same truth.
+
+export interface AgentCapabilitiesData {
+  model_key: string
+  supports: RegistryModelSupports
+  capabilities: string[]
+}
+
+export type AgentCapabilitiesResult =
+  | { ok: true; data: AgentCapabilitiesData }
+  | { ok: false; status: number; error: string; message?: string }
+
+const AGENT_CAPABILITIES_PATH = '/api/v1/agent/capabilities'
+
+export function getAgentCapabilities(): Promise<AgentCapabilitiesResult> {
+  return new Promise((resolve) => {
+    const req = http.request(
+      {
+        hostname: 'localhost',
+        port: currentPort,
+        path: AGENT_CAPABILITIES_PATH,
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        timeout: 8000,
+      },
+      (res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (c) => chunks.push(c))
+        res.on('end', () => {
+          const raw = Buffer.concat(chunks).toString('utf-8')
+          const status = res.statusCode || 0
+          if (status === 200) {
+            try {
+              const body = JSON.parse(raw) as { data?: AgentCapabilitiesData }
+              if (body?.data?.model_key !== undefined) {
+                resolve({ ok: true, data: body.data })
+                return
+              }
+              resolve({ ok: false, status, error: 'internal', message: 'missing data' })
+            } catch {
+              resolve({ ok: false, status, error: 'internal', message: 'malformed JSON' })
+            }
+            return
+          }
+          try {
+            const body = JSON.parse(raw) as { error?: string; message?: string }
+            resolve({
+              ok: false,
+              status,
+              error: body.error || `http_${status}`,
+              message: body.message,
+            })
+          } catch {
+            resolve({ ok: false, status, error: `http_${status}`, message: raw.slice(0, 200) })
+          }
+        })
+      },
+    )
+    req.on('error', (err) =>
+      resolve({ ok: false, status: 0, error: 'network_error', message: err.message }),
+    )
+    req.on('timeout', () => {
+      req.destroy()
+      resolve({ ok: false, status: 0, error: 'timeout' })
+    })
+    req.end()
+  })
+}
+
 export function listRegistryModels(): Promise<RegistryModelsResult> {
   return new Promise((resolve) => {
     const req = http.request(
@@ -666,6 +751,226 @@ export function listRegistryModels(): Promise<RegistryModelsResult> {
   })
 }
 
+// ─── Tools Management API ─────────────────────────────────────────────
+//
+// GET /api/v1/tools — list all hot-editable tools (currently only the
+// search backends: web_search / tavily_search). See the engine doc
+// `docs/api/tools-management-api.md`.
+//
+// PATCH /api/v1/tools/{name} — partial update of `enabled` and / or
+// `config`. Hot-reloads the registry and persists back to the yaml.
+//
+// We talk to the Console host:port (same as session-metrics / models)
+// and surface engine errors verbatim (`invalid_config`,
+// `hot_reload_failed`, `persist_failed`, ...) so the renderer can show
+// human-readable messages.
+
+const TOOLS_PREFIX = '/api/v1/tools'
+
+export interface ToolEntry {
+  name: string
+  registered_name: string
+  enabled: boolean
+  effective: boolean
+  config: Record<string, unknown>
+  credential_fields: string[]
+}
+
+export type ToolsResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; status: number; error: string; message?: string }
+
+export interface ToolPatchPayload {
+  enabled?: boolean
+  config?: Record<string, unknown>
+}
+
+// Redact obvious credential fields before they hit the app log. The
+// Tools Management API surfaces credentials in **plaintext** by design
+// (per the doc §字段说明: "凭证以明文返回，与 providers-management-api
+// 对齐"), but the app log lives on disk and gets pasted into bug
+// reports; redacting here is purely defense-in-depth so a stray copy
+// doesn't leak a Tavily / iFly key.
+function redactToolsBody(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (k === 'config' && v && typeof v === 'object' && !Array.isArray(v)) {
+      const inner: Record<string, unknown> = {}
+      for (const [ck, cv] of Object.entries(v as Record<string, unknown>)) {
+        if (/(api_key|api_secret|app_id|secret|token|password)/i.test(ck)) {
+          inner[ck] = typeof cv === 'string' && cv ? `***(${cv.length})` : cv
+        } else {
+          inner[ck] = cv
+        }
+      }
+      out[k] = inner
+    } else {
+      out[k] = v
+    }
+  }
+  return out
+}
+
+function consoleHttpRequest<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  timeoutMs = 8000,
+): Promise<ToolsResult<T>> {
+  return new Promise((resolve) => {
+    const payload = body !== undefined ? JSON.stringify(body) : undefined
+    const url = `http://localhost:${currentPort}${path}`
+    // Debug logging — same shape as `providers.api.*` so the app-log
+    // tail / "导出诊断包" surfaces both consistently. Body is redacted
+    // for credential fields (see redactToolsBody).
+    writeAppLog('info', 'tools.api.request', `${method} ${url}`, {
+      method,
+      url,
+      body: body !== undefined ? redactToolsBody(body) : null,
+    })
+    const req = http.request(
+      {
+        hostname: 'localhost',
+        port: currentPort,
+        path,
+        method,
+        headers: {
+          Accept: 'application/json',
+          ...(payload
+            ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }
+            : {}),
+        },
+        timeout: timeoutMs,
+      },
+      (res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (chunk) => chunks.push(chunk))
+        res.on('end', () => {
+          const raw = Buffer.concat(chunks).toString('utf-8')
+          const status = res.statusCode || 0
+          if (status >= 200 && status < 300) {
+            try {
+              const body = JSON.parse(raw) as { code?: string; data?: T; message?: string }
+              if (body && body.code === 'OK' && body.data !== undefined) {
+                writeAppLog(
+                  'info',
+                  'tools.api.response',
+                  `${method} ${url} → ${status} OK`,
+                  { method, url, status, code: body.code },
+                )
+                resolve({ ok: true, data: body.data })
+              } else {
+                writeAppLog(
+                  'warn',
+                  'tools.api.response',
+                  `${method} ${url} → ${status} ${body.code || ''} (missing data)`,
+                  { method, url, status, code: body.code, raw: raw.slice(0, 500) },
+                )
+                resolve({
+                  ok: false,
+                  status,
+                  error: body.code || 'internal',
+                  message: body.message || 'missing data field',
+                })
+              }
+            } catch {
+              writeAppLog(
+                'warn',
+                'tools.api.response',
+                `${method} ${url} → ${status} (malformed JSON)`,
+                { method, url, status, raw: raw.slice(0, 500) },
+              )
+              resolve({ ok: false, status, error: 'internal', message: 'malformed JSON' })
+            }
+            return
+          }
+          try {
+            const body = JSON.parse(raw) as { code?: string; error?: string; message?: string }
+            writeAppLog(
+              'warn',
+              'tools.api.response',
+              `${method} ${url} → ${status} ${body.code || body.error || ''}`,
+              {
+                method,
+                url,
+                status,
+                code: body.code || body.error,
+                message: body.message,
+                raw: raw.slice(0, 500),
+              },
+            )
+            resolve({
+              ok: false,
+              status,
+              error: body.code || body.error || `http_${status}`,
+              message: body.message,
+            })
+          } catch {
+            writeAppLog(
+              'warn',
+              'tools.api.response',
+              `${method} ${url} → ${status} (non-JSON error body)`,
+              { method, url, status, raw: raw.slice(0, 500) },
+            )
+            resolve({ ok: false, status, error: `http_${status}`, message: raw.slice(0, 200) })
+          }
+        })
+      },
+    )
+    req.on('error', (err) => {
+      writeAppLog('warn', 'tools.api.error', `${method} ${url} network error`, {
+        method,
+        url,
+        error: err.message,
+      })
+      resolve({ ok: false, status: 0, error: 'network_error', message: err.message })
+    })
+    req.on('timeout', () => {
+      req.destroy()
+      writeAppLog('warn', 'tools.api.error', `${method} ${url} timeout`, { method, url })
+      resolve({ ok: false, status: 0, error: 'timeout' })
+    })
+    if (payload) req.write(payload)
+    req.end()
+  })
+}
+
+export function listTools(): Promise<ToolsResult<{ tools: ToolEntry[] }>> {
+  return consoleHttpRequest<{ tools: ToolEntry[] }>('GET', TOOLS_PREFIX)
+}
+
+export function getTool(name: string): Promise<ToolsResult<ToolEntry>> {
+  if (!name || name.includes('/')) {
+    return Promise.resolve({
+      ok: false,
+      status: 400,
+      error: 'bad_request',
+      message: 'invalid tool name',
+    })
+  }
+  return consoleHttpRequest<ToolEntry>('GET', `${TOOLS_PREFIX}/${encodeURIComponent(name)}`)
+}
+
+export function patchTool(
+  name: string,
+  patch: ToolPatchPayload,
+): Promise<ToolsResult<ToolEntry>> {
+  if (!name || name.includes('/')) {
+    return Promise.resolve({
+      ok: false,
+      status: 400,
+      error: 'bad_request',
+      message: 'invalid tool name',
+    })
+  }
+  return consoleHttpRequest<ToolEntry>(
+    'PATCH',
+    `${TOOLS_PREFIX}/${encodeURIComponent(name)}`,
+    patch,
+  )
+}
+
 export interface SessionMetricsContextWindow {
   used: number
   limit: number
@@ -687,7 +992,12 @@ export interface SessionMetricsPerModel {
 export interface SessionMetricsSubAgent {
   agent_run_id: string
   agent_id: string
-  agent_type: string
+  agent_type: string // sync | coordinator — runtime execution shape
+  /** LLM-facing dispatch label (writer / researcher / freelancer / ...).
+   *  Distinct from agent_type which returns "sync" for every leaf and
+   *  is useless for dashboard disambiguation. Optional — empty for
+   *  legacy rows or coordinator-tier agents. */
+  subagent_type?: string
   model: string
   input_tokens: number
   output_tokens: number
@@ -734,6 +1044,84 @@ export type SessionMetricsResult =
  * engine never created a Tracker for them). Callers should treat
  * `session_not_found` as "no data yet", not as a hard error.
  */
+// ─── Artifact Content API ───────────────────────────────────────────────
+//
+// GET /api/v1/artifacts/{id}/content — raw bytes. Used by the rich-preview
+// pipeline: main process pulls bytes, writes them to a temp file, then
+// hands the path to the existing files:read IPC which dispatches to
+// mammoth / pdf-parse / etc.
+//
+// Returns { ok, buffer, mimeType, fileName, error } shaped so callers can
+// take the bytes directly without parsing JSON. Empty buffer + ok=false
+// surfaces 404 / 5xx from the engine.
+
+export type ArtifactContentResult =
+  | { ok: true; buffer: Buffer; mimeType?: string; fileName?: string }
+  | { ok: false; status: number; error: string; message?: string }
+
+export function fetchArtifactContent(artifactId: string): Promise<ArtifactContentResult> {
+  return new Promise((resolve) => {
+    if (!artifactId || artifactId.includes('/')) {
+      resolve({ ok: false, status: 400, error: 'bad_request', message: 'invalid artifact_id' })
+      return
+    }
+    const path = `/api/v1/artifacts/${encodeURIComponent(artifactId)}/content`
+    const req = http.request(
+      {
+        hostname: 'localhost',
+        port: currentPort,
+        path,
+        method: 'GET',
+        // Accept any content-type — these are binaries.
+        headers: { Accept: '*/*' },
+        timeout: 15000,
+      },
+      (res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (chunk) => chunks.push(chunk))
+        res.on('end', () => {
+          const status = res.statusCode || 0
+          if (status !== 200) {
+            const raw = Buffer.concat(chunks).toString('utf-8')
+            resolve({
+              ok: false,
+              status,
+              error: `http_${status}`,
+              message: raw.slice(0, 200),
+            })
+            return
+          }
+          const buffer = Buffer.concat(chunks)
+          const mimeType = (res.headers['content-type'] as string | undefined) || ''
+          // RFC 5987 ext-value filename* — undo the percent-encoding so the
+          // renderer / OS gets the original utf-8 name (e.g. 中文.docx).
+          let fileName: string | undefined
+          const disp = (res.headers['content-disposition'] as string | undefined) || ''
+          // filename*=UTF-8''...
+          const extMatch = /filename\*=UTF-8''([^;]+)/i.exec(disp)
+          if (extMatch) {
+            try {
+              fileName = decodeURIComponent(extMatch[1])
+            } catch {
+              fileName = extMatch[1]
+            }
+          } else {
+            const plainMatch = /filename="?([^";]+)"?/i.exec(disp)
+            if (plainMatch) fileName = plainMatch[1]
+          }
+          resolve({ ok: true, buffer, mimeType, fileName })
+        })
+      },
+    )
+    req.on('error', (err) => resolve({ ok: false, status: 0, error: 'network_error', message: err.message }))
+    req.on('timeout', () => {
+      req.destroy()
+      resolve({ ok: false, status: 0, error: 'timeout' })
+    })
+    req.end()
+  })
+}
+
 export function getSessionMetrics(sessionId: string): Promise<SessionMetricsResult> {
   return new Promise((resolve) => {
     if (!sessionId || sessionId.includes('/')) {

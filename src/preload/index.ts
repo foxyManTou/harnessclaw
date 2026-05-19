@@ -67,7 +67,15 @@ const appRuntimeAPI = {
 const harnessclawAPI = {
   connect: () => ipcRenderer.invoke('harnessclaw:connect'),
   disconnect: () => ipcRenderer.invoke('harnessclaw:disconnect'),
-  send: (content: string, sessionId?: string, options?: { coordinatorMode?: 'react' | 'plan'; planConfirmation?: 'auto' | 'required' }) => ipcRenderer.invoke('harnessclaw:send', content, sessionId, options),
+  send: (
+    content: string,
+    sessionId?: string,
+    options?: {
+      coordinatorMode?: 'react' | 'plan'
+      planConfirmation?: 'auto' | 'required'
+      images?: Array<{ mime: string; base64: string }>
+    },
+  ) => ipcRenderer.invoke('harnessclaw:send', content, sessionId, options),
   command: (cmd: string, sessionId?: string) => ipcRenderer.invoke('harnessclaw:command', cmd, sessionId),
   stop: (sessionId?: string) => ipcRenderer.invoke('harnessclaw:stop', sessionId),
   subscribe: (sessionId: string) => ipcRenderer.invoke('harnessclaw:subscribe', sessionId),
@@ -151,8 +159,31 @@ const filesAPI = {
   pick: () => ipcRenderer.invoke('files:pick'),
   resolve: (paths: string[]) => ipcRenderer.invoke('files:resolve', paths),
   read: (path: string) => ipcRenderer.invoke('files:read', path),
-  save: (options: { defaultFileName?: string; content?: string }) =>
+  // readBase64 returns the file as base64 + sniffed MIME for multimodal
+  // user.message wire content. Whitelist enforced in main (PNG/JPEG/
+  // GIF/WebP/PDF only); SVG and unknown MIMEs come back as
+  // { ok: false, error: 'unsupported_mime' }.
+  readBase64: (path: string) => ipcRenderer.invoke('files:read-base64', path),
+  save: (options: { defaultFileName?: string; content?: string; sourcePath?: string }) =>
     ipcRenderer.invoke('files:save', options),
+}
+
+// artifactsAPI bridges the renderer to artifacts:fetch, which downloads
+// the bytes of a stored artifact from the engine over HTTP and writes
+// them to a per-session cache dir under ~/.harnessclaw/artifact-cache/.
+// The renderer feeds the returned path into the existing files:read
+// pipeline so docx / pdf rich previews work the same as for local files.
+//
+// sessionId is optional — when omitted, the file lands under the
+// "_orphan" bucket. Threading it through is a UX nicety (per-session
+// cleanup, easier debugging of "what did this conversation write to
+// disk"), not a correctness requirement.
+const artifactsAPI = {
+  fetch: (artifactId: string, sessionId?: string) =>
+    ipcRenderer.invoke('artifacts:fetch', artifactId, sessionId) as Promise<
+      | { ok: true; path: string; fileName: string; mimeType?: string; size: number }
+      | { ok: false; error: string }
+    >,
 }
 
 const agentAPI = {
@@ -181,6 +212,25 @@ const agentAPI = {
    * on failure. See harnessclaw-engine/docs/api/models-registry-api.md.
    */
   listRegistryModels: () => ipcRenderer.invoke('console:listRegistryModels'),
+  /**
+   * Agent Capabilities API — GET /api/v1/agent/capabilities. Resolved
+   * SupportsFlags + derived capability buckets for the active model,
+   * taking endpoint.model_type overrides into account so the gate
+   * and the UI never disagree.
+   */
+  getAgentCapabilities: () => ipcRenderer.invoke('console:getAgentCapabilities'),
+  /**
+   * Tools Management API — GET/PATCH /api/v1/tools[/{name}] on the
+   * Console port. Hot-edit `web_search` / `tavily_search` enabled
+   * flag + credentials with hot-reload + yaml persistence. See
+   * harnessclaw-engine/docs/api/tools-management-api.md.
+   */
+  listTools: () => ipcRenderer.invoke('console:listTools'),
+  getTool: (name: string) => ipcRenderer.invoke('console:getTool', name),
+  patchTool: (
+    name: string,
+    patch: { enabled?: boolean; config?: Record<string, unknown> },
+  ) => ipcRenderer.invoke('console:patchTool', name, patch),
   /**
    * Providers Management API — hot-edit providers + the top-level
    * `agent` block (primary + fallback_chain + tuning defaults) at
@@ -260,6 +310,30 @@ const agentAPI = {
     ipcRenderer.invoke('console:deleteEndpoint', providerName, endpointName),
 }
 
+// Quick-launcher (Alfred-style) bridge.
+//   • `submit` ships the typed prompt to main; main hides the launcher,
+//     focuses the main window, and forwards the prompt via
+//     `launcher:question` so the React shell can land it in /chat.
+//   • `hide` closes the launcher (used on Escape).
+//   • `onQuestion` lets the main renderer subscribe to incoming
+//     prompts pushed from the launcher window.
+//   • `onReset` lets the launcher renderer clear its input each time
+//     the window is re-shown via the global shortcut.
+const launcherAPI = {
+  submit: (prompt: string) => ipcRenderer.invoke('launcher:submit', prompt),
+  hide: () => ipcRenderer.invoke('launcher:hide'),
+  onQuestion: (callback: (prompt: string) => void) => {
+    const handler = (_: Electron.IpcRendererEvent, prompt: string): void => callback(prompt)
+    ipcRenderer.on('launcher:question', handler)
+    return () => ipcRenderer.removeListener('launcher:question', handler)
+  },
+  onReset: (callback: () => void) => {
+    const handler = (): void => callback()
+    ipcRenderer.on('launcher:reset', handler)
+    return () => ipcRenderer.removeListener('launcher:reset', handler)
+  },
+}
+
 if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('electron', electronAPI)
@@ -274,7 +348,9 @@ if (process.contextIsolated) {
     contextBridge.exposeInMainWorld('skills', skillsAPI)
     contextBridge.exposeInMainWorld('db', dbAPI)
     contextBridge.exposeInMainWorld('files', filesAPI)
+    contextBridge.exposeInMainWorld('artifacts', artifactsAPI)
     contextBridge.exposeInMainWorld('agentApi', agentAPI)
+    contextBridge.exposeInMainWorld('launcherApi', launcherAPI)
   } catch (error) {
     console.error(error)
   }
@@ -304,5 +380,9 @@ if (process.contextIsolated) {
   // @ts-ignore (define in dts)
   window.files = filesAPI
   // @ts-ignore (define in dts)
+  window.artifacts = artifactsAPI
+  // @ts-ignore (define in dts)
   window.agentApi = agentAPI
+  // @ts-ignore (define in dts)
+  window.launcherApi = launcherAPI
 }

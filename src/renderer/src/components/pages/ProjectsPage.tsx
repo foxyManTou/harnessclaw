@@ -303,6 +303,7 @@ function CreateProjectDialog({
   onSubmit: () => void
   onClearNameError: () => void
 }) {
+  const { t } = useTranslation()
   if (!open) return null
 
   return createPortal(

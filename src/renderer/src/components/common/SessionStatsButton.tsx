@@ -249,11 +249,20 @@ function mapMetricsToValue(metrics: SessionMetricsStats): SessionStatsValue {
       existing.thinking += sub.thinking_tokens
       existing.totalTokens += sub.total_tokens
     } else {
+      // Display name priority: subagent_type (writer / freelancer / ...)
+      // first because it's what distinguishes workers in a dashboard.
+      // agent_type ("sync") is a fallback that only kicks in for
+      // pre-2026-05 metrics rows. agent_id is the last resort.
+      const displayName = sub.subagent_type || sub.agent_type || sub.agent_id || 'subagent'
+      // Kind classification also keys off subagent_type when available
+      // so the visual treatment (icon/color) matches the worker role,
+      // not the runtime shape.
+      const kindKey = sub.subagent_type || sub.agent_type
       subAgentAccum.set(key, {
         id: key,
-        name: sub.agent_type || sub.agent_id || 'subagent',
+        name: displayName,
         agent_type: sub.agent_type,
-        kind: classifyAgentKind(sub.agent_type, sub.agent_id),
+        kind: classifyAgentKind(kindKey, sub.agent_id),
         model: sub.model,
         inputTokens: sub.input_tokens,
         outputTokens: sub.output_tokens,

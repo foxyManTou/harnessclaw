@@ -94,7 +94,18 @@ interface AppRuntimeAPI {
 interface HarnessclawAPI {
   connect: () => Promise<{ ok: boolean }>
   disconnect: () => Promise<{ ok: boolean }>
-  send: (content: string, sessionId?: string, options?: { coordinatorMode?: 'react' | 'plan'; planConfirmation?: 'auto' | 'required' }) => Promise<{ ok: boolean; error?: string }>
+  send: (
+    content: string,
+    sessionId?: string,
+    options?: {
+      coordinatorMode?: 'react' | 'plan'
+      planConfirmation?: 'auto' | 'required'
+      // images are forwarded into user.message.content as
+      // {type:'image',source:{type:'base64',media_type,data}} blocks.
+      // Use window.files.readBase64() to obtain the {mime,base64} pair.
+      images?: Array<{ mime: string; base64: string }>
+    },
+  ) => Promise<{ ok: boolean; error?: string }>
   command: (cmd: string, sessionId?: string) => Promise<{ ok: boolean }>
   stop: (sessionId?: string) => Promise<{ ok: boolean; error?: string }>
   subscribe: (sessionId: string) => Promise<{ ok: boolean }>
@@ -280,8 +291,18 @@ interface PickedLocalFile {
 interface FilesAPI {
   pick: () => Promise<PickedLocalFile[]>
   resolve: (paths: string[]) => Promise<PickedLocalFile[]>
-  read: (path: string) => Promise<{ ok: boolean; content?: string; path?: string; size?: number; error?: string }>
-  save: (options: { defaultFileName?: string; content?: string }) =>
+  read: (path: string) => Promise<{ ok: boolean; content?: string; path?: string; size?: number; isBinary?: boolean; previewKind?: 'html' | 'text'; error?: string }>
+  // readBase64 reads a whitelisted media file (PNG/JPEG/GIF/WebP/PDF
+  // only) and returns its bytes as base64 + sniffed MIME. Used to
+  // build multimodal user.message.content image blocks. Errors:
+  //   - 'too_large'        size > 10 MB (mirror of multimodal.MaxBase64BlockBytes)
+  //   - 'unsupported_mime' extension outside the whitelist (incl. SVG)
+  //   - 'not_found' | 'not_a_file' | 'invalid_path' | 'read_failed'
+  readBase64: (path: string) => Promise<
+    | { ok: true; data: string; mime: string; size: number }
+    | { ok: false; error: string; message: string }
+  >
+  save: (options: { defaultFileName?: string; content?: string; sourcePath?: string }) =>
     Promise<{ ok: boolean; path?: string; cancelled?: boolean; error?: string }>
 }
 
@@ -421,6 +442,16 @@ type RegistryModelsResult =
   | { ok: true; data: RegistryModel[] }
   | { ok: false; status: number; error: string; message?: string }
 
+interface AgentCapabilitiesData {
+  model_key: string
+  supports: RegistryModelSupports
+  capabilities: string[]
+}
+
+type AgentCapabilitiesResult =
+  | { ok: true; data: AgentCapabilitiesData }
+  | { ok: false; status: number; error: string; message?: string }
+
 type ProviderType = 'openai' | 'anthropic' | 'gemini'
 
 interface ProviderEndpointInfo {
@@ -434,6 +465,8 @@ interface ProviderEndpointInfo {
   // enable/disable flag instead of DELETE-then-recreate.
   disabled?: boolean
   in_chain: boolean
+  // Engine 2026-05-19+: per-endpoint capability override tokens.
+  model_type?: string[]
 }
 
 interface ProviderInfo {
@@ -500,6 +533,8 @@ interface EndpointPatchPayload {
   temperature?: number
   enable_thinking?: boolean | null
   disabled?: boolean
+  // Engine 2026-05-19+: per-endpoint capability override. [] clears it.
+  model_type?: string[]
 }
 
 // Engine 2026-05-14+ top-level `agent` block. The full payload of
@@ -532,6 +567,37 @@ type ProvidersResult<T> =
   | { ok: true; data: T }
   | { ok: false; status: number; error: string; message?: string }
 
+// Tools Management API — see harnessclaw-engine/docs/api/tools-management-api.md.
+//
+// The wire response uses `{code,data}` envelopes; main/console-api.ts
+// unwraps that and surfaces `{ ok: true, data }` / `{ ok: false, error,
+// message }` to the renderer.
+//
+// These types are intentionally `interface` / `type` without `export`
+// so they participate in the global ambient declaration like the rest
+// of the `*Result` aliases above (renderer code references them via
+// the bare name).
+interface ToolEntry {
+  name: string
+  registered_name: string
+  enabled: boolean
+  /** True iff yaml `enabled=true` AND every credential field is non-empty. */
+  effective: boolean
+  config: Record<string, unknown>
+  /** Names within `config` that should be rendered as password fields. */
+  credential_fields: string[]
+}
+
+type ToolsResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; status: number; error: string; message?: string }
+
+interface ToolPatchPayload {
+  enabled?: boolean
+  /** Partial map keyed by yaml field name (e.g. `api_key`, not `APIKey`). */
+  config?: Record<string, unknown>
+}
+
 interface AgentApiInterface {
   listAgents: (params?: { agent_type?: string; source?: string; limit?: number; offset?: number }) => Promise<ConsoleResponse<ConsoleAgentDefinition[]>>
   getAgent: (name: string) => Promise<ConsoleResponse<ConsoleAgentDefinition>>
@@ -543,6 +609,21 @@ interface AgentApiInterface {
   getPort: () => Promise<{ port: number }>
   getSessionMetrics: (sessionId: string) => Promise<SessionMetricsResult>
   listRegistryModels: () => Promise<RegistryModelsResult>
+  /** GET /api/v1/agent/capabilities — resolved (override-aware) supports + capability buckets. */
+  getAgentCapabilities: () => Promise<AgentCapabilitiesResult>
+  /** GET /api/v1/tools — list every hot-editable tool with its current config. */
+  listTools: () => Promise<ToolsResult<{ tools: ToolEntry[] }>>
+  /** GET /api/v1/tools/{name}. Resolves with `error: 'not_found'` for unknown names. */
+  getTool: (name: string) => Promise<ToolsResult<ToolEntry>>
+  /**
+   * PATCH /api/v1/tools/{name}. Partial update — omitted fields keep
+   * their current value. Known errors: `bad_request`, `invalid_config`,
+   * `not_found`, `hot_reload_failed`, `persist_failed`, `registry_missing`.
+   */
+  patchTool: (
+    name: string,
+    patch: ToolPatchPayload,
+  ) => Promise<ToolsResult<ToolEntry>>
   listProviders: () => Promise<ProvidersResult<{ providers: ProviderInfo[] }>>
   createProvider: (
     payload: ProviderCreatePayload,
@@ -575,6 +656,21 @@ interface AgentApiInterface {
   ) => Promise<ProvidersResult<void>>
 }
 
+// Quick-launcher (Alfred-style) bridge — see `launcherAPI` in preload/index.ts.
+export interface LauncherAPI {
+  /** Ship the typed prompt to main; main hides the launcher, focuses
+   *  the main window, and forwards the prompt to the React shell. */
+  submit: (prompt: string) => Promise<{ ok: boolean; error?: string }>
+  /** Hide the launcher (used on Escape). */
+  hide: () => Promise<{ ok: boolean }>
+  /** Subscribe to prompts pushed from the launcher window. Returns
+   *  an unsubscribe function. Used by the main renderer's <App />. */
+  onQuestion: (callback: (prompt: string) => void) => () => void
+  /** Subscribe to "launcher re-shown" pings so the launcher renderer
+   *  can clear its previous input. Returns an unsubscribe function. */
+  onReset: (callback: () => void) => () => void
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -589,6 +685,25 @@ declare global {
     skills: SkillsAPI
     db: DbAPI
     files: FilesAPI
+    artifacts: ArtifactsAPI
     agentApi: AgentApiInterface
+    launcherApi: LauncherAPI
   }
+}
+
+// ArtifactsAPI bridges the renderer to artifacts:fetch (main process
+// downloads bytes via Console HTTP and writes them to a per-session
+// cache dir under ~/.harnessclaw/artifact-cache/<session>/<id>/<name>
+// so the existing files:read pipeline can rich-preview them).
+//
+// sessionId is optional — omit it for direct-link / cross-session
+// opens; the file lands under the "_orphan" bucket in that case.
+interface ArtifactsAPI {
+  fetch: (
+    artifactId: string,
+    sessionId?: string,
+  ) => Promise<
+    | { ok: true; path: string; fileName: string; mimeType?: string; size: number }
+    | { ok: false; error: string }
+  >
 }

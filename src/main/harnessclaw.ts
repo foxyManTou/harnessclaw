@@ -1234,6 +1234,56 @@ export class HarnessclawClient extends EventEmitter {
         return
       }
 
+      case 'system': {
+        // v0.6.0 §10.9 — framework-level system notification card. Used for
+        // configuration gaps, capability degradation, key expiry, etc.
+        // Surfaced to the user as a modal that MUST be manually acknowledged
+        // (per product spec: 信息 system 的弹窗需要用户手动 check 才可以). The
+        // server dedups per session, but we also pass through `card_id` so the
+        // renderer can dedup defensively.
+        //
+        // v0.6.1 §10.9 — `payload.topic` is the stable machine-readable
+        // classification (e.g. `search_capability_gap`). The renderer routes
+        // business logic (deeplink / telemetry / conditional UI) by topic,
+        // NOT by `summary` text matching. Unknown topics still render as a
+        // generic system card per the forward-compat clause.
+        //
+        // Per spec: `hint.title` is always populated server-side (registry
+        // default), so we always prefer it over `payload.title` (which the
+        // current payload schema does not even define).
+        const hint = args.hint || {}
+        const title = typeof hint.title === 'string' && hint.title
+          ? hint.title as string
+          : (typeof args.payload.title === 'string' && args.payload.title
+            ? args.payload.title
+            : '系统提示')
+        const summary = typeof args.payload.summary === 'string'
+          ? args.payload.summary
+          : (typeof hint.summary === 'string' ? hint.summary as string : '')
+        const actionHint = typeof args.payload.action_hint === 'string'
+          ? args.payload.action_hint
+          : ''
+        const topic = typeof args.payload.topic === 'string'
+          ? args.payload.topic
+          : ''
+        const icon = typeof hint.icon === 'string' ? hint.icon as string : 'info'
+        const severity = typeof args.payload.severity === 'string'
+          ? args.payload.severity
+          : 'info'
+        this.emitCompatEvent({
+          type: 'system_notice',
+          session_id: sessionId,
+          card_id: args.cardId,
+          topic,
+          title,
+          summary,
+          action_hint: actionHint,
+          icon,
+          severity,
+        })
+        return
+      }
+
       case 'thinking':
       case 'memory_op':
       case 'budget':
@@ -1920,7 +1970,18 @@ export class HarnessclawClient extends EventEmitter {
   //  Outbound senders
   // ────────────────────────────────────────────────────────────────────
 
-  async send(content: string, sessionId?: string, options?: { coordinatorMode?: 'react' | 'plan'; planConfirmation?: 'auto' | 'required' }): Promise<boolean> {
+  async send(
+    content: string,
+    sessionId?: string,
+    options?: {
+      coordinatorMode?: 'react' | 'plan'
+      planConfirmation?: 'auto' | 'required'
+      // images carries multimodal user input. Each entry becomes one
+      // `{type:'image',source:{type:'base64',media_type,data}}` block
+      // in the wire content[] array. Read via `window.files.readBase64`.
+      images?: Array<{ mime: string; base64: string }>
+    },
+  ): Promise<boolean> {
     const resolvedSessionId = sessionId || this.defaultSessionId
     if (!resolvedSessionId) {
       this.emitCompatEvent({ type: 'error', content: 'No active Harnessclaw session' })
@@ -1933,12 +1994,33 @@ export class HarnessclawClient extends EventEmitter {
         throw new Error('Harnessclaw websocket is not open')
       }
 
-      // v2 §9.1: content is now an ARRAY of typed parts.
+      // v2 §9.1: content is an ARRAY of typed parts. IMAGES FIRST, then
+      // the text question. Anthropic's vision best-practice docs
+      // (docs.anthropic.com/.../vision#image-best-practices) measured
+      // a few percentage points higher accuracy when images precede
+      // the related text — the vision encoder's attention on early
+      // tokens is stronger. OpenAI / Gemini accept the same order
+      // without preference, so image-first is provider-agnostic.
+      //
+      // Empty-text + no-image guard: still emit a placeholder text
+      // block so legacy parsers that index content[0].text don't NPE.
+      const blocks: Array<Record<string, unknown>> = []
+      for (const img of options?.images ?? []) {
+        if (!img.base64 || !img.mime) continue
+        blocks.push({
+          type: 'image',
+          source: { type: 'base64', media_type: img.mime, data: img.base64 },
+        })
+      }
+      if (content || blocks.length === 0) {
+        blocks.push({ type: 'text', text: content })
+      }
+
       const payload: Record<string, unknown> = {
         type: 'user.message',
         event_id: makeEventId(),
         session_id: resolvedSessionId,
-        content: [{ type: 'text', text: content }],
+        content: blocks,
       }
       if (options?.coordinatorMode === 'plan' || options?.coordinatorMode === 'react') {
         payload.coordinator_mode = options.coordinatorMode
@@ -1946,7 +2028,26 @@ export class HarnessclawClient extends EventEmitter {
       if (options?.planConfirmation === 'required') {
         payload.plan_confirmation = 'required'
       }
-      logEngineFrame('send', payload, {
+      // Don't log base64 image data — it bloats logs and may leak PII.
+      // Substitute summary placeholders before emitting the frame log.
+      const loggablePayload = {
+        ...payload,
+        content: blocks.map((b) => {
+          if (b.type === 'image') {
+            const src = b.source as { media_type?: string; data?: string }
+            return {
+              type: 'image',
+              source: {
+                media_type: src?.media_type,
+                size: typeof src?.data === 'string' ? src.data.length : 0,
+                data: '<redacted>',
+              },
+            }
+          }
+          return b
+        }),
+      }
+      logEngineFrame('send', loggablePayload, {
         sessionId: resolvedSessionId,
         type: 'user.message',
       })

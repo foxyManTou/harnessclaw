@@ -56,4 +56,3 @@ test_report.json
 # Custom Ignores
 /.claude
 /commits.txt
-/package.json

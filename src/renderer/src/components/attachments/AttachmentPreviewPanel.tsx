@@ -25,6 +25,12 @@ interface AttachmentPreviewPanelProps {
   attachments: LocalAttachmentItem[]
   onRemove?: (id: string) => void
   removable?: boolean
+  /**
+   * 点击附件卡片时触发。提供后整张卡片变成可点击区域（仍保留右上角
+   * 删除按钮的 stopPropagation 不会触发预览）。常见用法：把附件交给
+   * FilePreviewDrawer 打开预览。未提供时卡片是纯展示元素。
+   */
+  onPreview?: (attachment: LocalAttachmentItem) => void
 }
 
 function formatSize(size: number): string {
@@ -82,6 +88,7 @@ export function AttachmentPreviewPanel({
   attachments,
   onRemove,
   removable = true,
+  onPreview,
 }: AttachmentPreviewPanelProps) {
   const { t } = useTranslation()
   if (attachments.length === 0) return null
@@ -91,11 +98,29 @@ export function AttachmentPreviewPanel({
       <div className="flex min-w-max flex-nowrap gap-2">
         {attachments.map((attachment) => {
           const Icon = getAttachmentIcon(attachment.kind)
+          const clickable = Boolean(onPreview)
 
           return (
             <div
               key={attachment.id}
-              className="group relative flex h-[52px] w-56 max-w-[calc(100vw-8rem)] flex-shrink-0 items-center gap-2 rounded-xl border border-border bg-muted/35 px-2.5 py-2"
+              role={clickable ? 'button' : undefined}
+              tabIndex={clickable ? 0 : undefined}
+              onClick={clickable ? () => onPreview?.(attachment) : undefined}
+              onKeyDown={
+                clickable
+                  ? (e) => {
+                      // 跟原生 <button> 一致：Enter / 空格触发预览。
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        onPreview?.(attachment)
+                      }
+                    }
+                  : undefined
+              }
+              className={cn(
+                'group relative flex h-[52px] w-56 max-w-[calc(100vw-8rem)] flex-shrink-0 items-center gap-2 rounded-xl border border-border bg-muted/35 px-2.5 py-2 text-left transition-colors',
+                clickable && 'cursor-pointer hover:border-primary hover:bg-muted/60 focus:outline-none focus-visible:outline-none',
+              )}
               title={attachment.path}
             >
               <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground">
@@ -114,7 +139,11 @@ export function AttachmentPreviewPanel({
               {onRemove && (
                 <button
                   type="button"
-                  onClick={() => onRemove(attachment.id)}
+                  // stopPropagation：删除按钮不应触发外层卡片的预览点击。
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onRemove(attachment.id)
+                  }}
                   disabled={!removable}
                   aria-label={t('attachments.removeAria', { name: attachment.name })}
                   className={cn(

@@ -260,6 +260,29 @@
   }
 }
 
+/* 用户消息折叠：当用户消息超过 8 行时，正文区会被 max-height 截断并在
+ * 底部用 mask-image 做渐隐，与侧边栏「最近对话」靠近底部的 fade 一致，
+ * 提示下方还有更多内容；同时让紧贴下方的「展开」按钮自然衔接被遮掩的
+ * 文字尾部。 */
+.user-message-fade-bottom {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    #000 0,
+    #000 calc(100% - 72px),
+    rgba(0, 0, 0, 0.7) calc(100% - 48px),
+    rgba(0, 0, 0, 0.35) calc(100% - 24px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    #000 0,
+    #000 calc(100% - 72px),
+    rgba(0, 0, 0, 0.7) calc(100% - 48px),
+    rgba(0, 0, 0, 0.35) calc(100% - 24px),
+    transparent 100%
+  );
+}
+
 /* 点状背景模式 */
 .dot-pattern {
   background-image: radial-gradient(circle, var(--border) 1px, transparent 1px);

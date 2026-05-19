@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
 import { FileText, X, Clipboard } from 'lucide-react'
@@ -13,6 +13,7 @@ export interface PastedBlock {
 interface PastedBlocksBarProps {
   blocks: PastedBlock[]
   onRemove: (id: string) => void
+  onUpdate?: (id: string, content: string) => void
   removable?: boolean
 }
 
@@ -36,6 +37,14 @@ export function usePastedBlocks() {
     setBlocks((prev) => prev.filter((b) => b.id !== id))
   }, [])
 
+  const updateBlock = useCallback((id: string, content: string) => {
+    setBlocks((prev) =>
+      prev.map((b) =>
+        b.id === id ? { ...b, content, lines: content.split('\n').length } : b
+      )
+    )
+  }, [])
+
   const clearBlocks = useCallback(() => setBlocks([]), [])
 
   const buildPastedSuffix = useCallback(() => {
@@ -43,21 +52,65 @@ export function usePastedBlocks() {
     return blocks.map((b) => b.content).join('\n\n')
   }, [blocks])
 
-  return { blocks, setBlocks, preview, setPreview, handlePaste, removeBlock, clearBlocks, buildPastedSuffix }
+  return {
+    blocks,
+    setBlocks,
+    preview,
+    setPreview,
+    handlePaste,
+    removeBlock,
+    updateBlock,
+    clearBlocks,
+    buildPastedSuffix,
+  }
 }
 
-export function PastedBlocksBar({ blocks, onRemove, removable = true }: PastedBlocksBarProps) {
+export function PastedBlocksBar({ blocks, onRemove, onUpdate, removable = true }: PastedBlocksBarProps) {
   const { t } = useTranslation()
-  const [preview, setPreview] = useState<{ content: string; lines: number } | null>(null)
+  const [previewId, setPreviewId] = useState<string | null>(null)
+  const [draft, setDraft] = useState('')
+  const gutterRef = useRef<HTMLDivElement | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+
+  const previewBlock = useMemo(
+    () => (previewId ? blocks.find((b) => b.id === previewId) ?? null : null),
+    [previewId, blocks]
+  )
+
+  const editable = Boolean(onUpdate)
+
+  const closePreview = useCallback(() => {
+    setPreviewId(null)
+  }, [])
 
   useEffect(() => {
-    if (!preview) return
+    if (!previewBlock) return
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setPreview(null)
+      if (e.key === 'Escape') closePreview()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [preview])
+  }, [previewBlock, closePreview])
+
+  const openPreview = (block: PastedBlock) => {
+    setPreviewId(block.id)
+    setDraft(block.content)
+  }
+
+  const handleChange = (next: string) => {
+    setDraft(next)
+    if (previewBlock && onUpdate) {
+      onUpdate(previewBlock.id, next)
+    }
+  }
+
+  const syncScroll = (e: React.UIEvent<HTMLTextAreaElement>) => {
+    if (gutterRef.current) {
+      gutterRef.current.scrollTop = e.currentTarget.scrollTop
+    }
+  }
+
+  const draftLines = useMemo(() => draft.split('\n').length, [draft])
 
   if (blocks.length === 0) return null
 
@@ -71,7 +124,7 @@ export function PastedBlocksBar({ blocks, onRemove, removable = true }: PastedBl
           >
             <button
               type="button"
-              onClick={() => setPreview({ content: block.content, lines: block.lines })}
+              onClick={() => openPreview(block)}
               className="flex min-w-0 items-center gap-1.5"
             >
               <Clipboard size={13} className="flex-shrink-0 text-primary/70" />
@@ -92,38 +145,52 @@ export function PastedBlocksBar({ blocks, onRemove, removable = true }: PastedBl
         ))}
       </div>
 
-      {preview && createPortal(
+      {previewBlock && createPortal(
         <div
           className="fixed inset-0 z-[200] flex items-center justify-center"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
-          <div className="absolute inset-0 bg-slate-950/25 backdrop-blur-[2px]" onClick={() => setPreview(null)} />
+          <div className="absolute inset-0 bg-slate-950/25 backdrop-blur-[2px]" onClick={closePreview} />
           <div className="relative mx-4 flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
             <div className="flex items-center justify-between border-b border-border px-5 py-3">
               <div className="flex items-center gap-2">
                 <FileText size={16} className="text-primary" />
                 <span className="text-sm font-semibold text-foreground">{t('pasted.previewTitle')}</span>
                 <span className="rounded-full border border-border bg-accent/70 px-2 py-0.5 text-[10px] text-muted-foreground">
-                  {t('pasted.lines', { n: preview.lines })}
+                  {t('pasted.lines', { n: draftLines })}
                 </span>
               </div>
               <button
-                onClick={() => setPreview(null)}
+                onClick={closePreview}
                 className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-card transition-colors hover:bg-muted"
                 aria-label={t('pasted.closeAria')}
               >
                 <X size={14} className="text-muted-foreground" />
               </button>
             </div>
-            <div className="flex-1 overflow-auto p-4">
-              <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-6 text-foreground">
-                {preview.content.split('\n').map((line, i) => (
-                  <div key={i} className="flex">
-                    <span className="mr-4 inline-block w-8 flex-shrink-0 select-none text-right text-muted-foreground/50">{i + 1}</span>
-                    <span className="min-w-0 flex-1">{line || ' '}</span>
+            <div className="relative flex flex-1 min-h-[260px] overflow-hidden">
+              <div
+                ref={gutterRef}
+                aria-hidden="true"
+                className="select-none overflow-hidden border-r border-border/60 bg-muted/30 py-4 pl-3 pr-2 font-mono text-[12px] leading-6 text-muted-foreground/60"
+              >
+                {Array.from({ length: draftLines }, (_, i) => (
+                  <div key={i} className="text-right tabular-nums">
+                    {i + 1}
                   </div>
                 ))}
-              </pre>
+              </div>
+              <textarea
+                ref={textareaRef}
+                value={draft}
+                onChange={(e) => handleChange(e.target.value)}
+                onScroll={syncScroll}
+                readOnly={!editable}
+                spellCheck={false}
+                wrap="off"
+                className="block flex-1 resize-none border-0 bg-transparent p-4 pl-3 font-mono text-[12px] leading-6 text-foreground outline-none focus:ring-0"
+                autoFocus
+              />
             </div>
           </div>
         </div>,

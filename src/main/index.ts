@@ -1,7 +1,7 @@
-import { app, shell, BrowserWindow, ipcMain, dialog, nativeImage, screen } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog, nativeImage, screen, globalShortcut, protocol, net } from 'electron'
 import { basename, dirname, extname, isAbsolute, join } from 'path'
 import { homedir } from 'os'
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync, copyFileSync } from 'fs'
 import { spawn, ChildProcess } from 'child_process'
 import { pathToFileURL } from 'url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -69,6 +69,7 @@ import {
   getConsolePort,
   getSessionMetrics,
   listRegistryModels,
+  getAgentCapabilities,
   listProviders,
   createProvider,
   getFallbackChain,
@@ -80,11 +81,16 @@ import {
   createEndpoint,
   patchEndpoint,
   deleteEndpoint,
+  listTools,
+  getTool,
+  patchTool,
+  fetchArtifactContent,
   type ProviderPatch,
   type ProviderCreatePayload,
   type EndpointCreatePayload,
   type EndpointPatch,
   type AgentPatch,
+  type ToolPatchPayload,
 } from './console-api'
 
 type PersistedSubagent = { taskId: string; label: string; status: string }
@@ -563,6 +569,135 @@ function classifyFileKind(extension: string): PickedLocalFile['kind'] {
   return 'other'
 }
 
+// Extensions whose bytes are NOT valid UTF-8 text. Reading these with
+// `readFileSync(path, 'utf-8')` produces mojibake (例如 .docx 这类压缩包
+// 格式)。这些文件必须当作二进制处理：预览时不展示原始字节，导出时直接复制
+// 源文件，避免在 UTF-8 与二进制之间来回转换导致内容损坏。
+const BINARY_FILE_EXTENSIONS = new Set([
+  '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx',
+  '.zip', '.rar', '.7z', '.tar', '.gz', '.tgz', '.bz2', '.xz',
+  '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.ico', '.avif', '.tiff', '.tif',
+  '.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg',
+  '.mp4', '.mov', '.avi', '.mkv', '.webm',
+  '.exe', '.dll', '.so', '.dylib', '.bin', '.dat', '.parquet',
+  '.ttf', '.otf', '.woff', '.woff2', '.eot',
+])
+
+function isBinaryFile(filePath: string): boolean {
+  return BINARY_FILE_EXTENSIONS.has(extname(filePath).toLowerCase())
+}
+
+// sniffMimeForBase64 returns the MIME type for files that are allowed
+// to flow through user.message.content as a base64 image/PDF block.
+// Returns "" for any file outside the whitelist — caller treats that
+// as an `unsupported_mime` rejection so the engine + renderer agree
+// on the same closed set (mirror of multimodal.AllowedImageMIMEs).
+const ALLOWED_INLINE_MIMES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.pdf': 'application/pdf',
+}
+
+function sniffMimeForBase64(filePath: string): string {
+  return ALLOWED_INLINE_MIMES[extname(filePath).toLowerCase()] ?? ''
+}
+
+// 富预览：用于 docx / xlsx / pptx / pdf 这几类「二进制但可读出可读内容」
+// 的文件。把它们在主进程统一转成 HTML 或纯文本字符串，前端按 kind 渲染：
+//   - 'html': 直接 dangerouslySetInnerHTML 到 prose 容器
+//   - 'text': pre-wrap 排版，保留换行与分页标记
+type RichPreviewKind = 'html' | 'text'
+type RichPreviewResult = { kind: RichPreviewKind; content: string }
+
+function escapeHtml(input: string): string {
+  return input
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+async function buildRichPreview(ext: string, filePath: string): Promise<RichPreviewResult> {
+  // .docx → mammoth：直接产出干净的语义化 HTML（段落、标题、列表、表格、
+  // 加粗、斜体、链接、内联图）。
+  if (ext === '.docx') {
+    const mammoth = require('mammoth') as typeof import('mammoth')
+    const result = await mammoth.convertToHtml({ path: filePath })
+    return { kind: 'html', content: result.value || '' }
+  }
+
+  // .xlsx → SheetJS：每个 sheet 单独转成 HTML 表格，加 sheet 名作为小标题，
+  // 多 sheet 之间用 <hr/> 分隔。SheetJS 输出的 HTML 自带边框/合并单元格属性，
+  // 配合 prose 容器里的 prose-table 样式即可获得可读的表格预览。
+  if (ext === '.xlsx') {
+    const XLSX = require('xlsx') as typeof import('xlsx')
+    const wb = XLSX.readFile(filePath, { cellHTML: true })
+    const parts: string[] = []
+    for (const name of wb.SheetNames) {
+      const sheet = wb.Sheets[name]
+      if (!sheet) continue
+      const tableHtml = XLSX.utils.sheet_to_html(sheet, { header: '', footer: '' })
+      parts.push(`<h3>${escapeHtml(name)}</h3>${tableHtml}`)
+    }
+    return { kind: 'html', content: parts.join('<hr/>') }
+  }
+
+  // .pptx → 自写解析：pptx 也是 ZIP+XML，没有体量合适的 JS 解析器，所以
+  // 直接用 mammoth 已经间接带入的 jszip，把每张幻灯片里 <a:t> 标签里的
+  // 文本抽出来，按幻灯片组织为标题 + 文本块。够用来浏览要点，比塞个庞大
+  // 的 pptx 解析依赖更划算。
+  if (ext === '.pptx') {
+    const JSZip = require('jszip') as typeof import('jszip')
+    const buffer = readFileSync(filePath)
+    const zip = await JSZip.loadAsync(buffer)
+    const slideNames = Object.keys(zip.files)
+      .filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n))
+      .sort((a, b) => {
+        const an = parseInt(a.match(/slide(\d+)\.xml$/)?.[1] || '0', 10)
+        const bn = parseInt(b.match(/slide(\d+)\.xml$/)?.[1] || '0', 10)
+        return an - bn
+      })
+    const sections: string[] = []
+    for (let i = 0; i < slideNames.length; i += 1) {
+      const xml = await zip.file(slideNames[i])!.async('string')
+      // <a:t>...</a:t> 是 OOXML 里的纯文本运行节点；按出现顺序拼接，
+      // 不同 <a:p>（段落）之间在 XML 里是 `</a:p><a:p>`，用换行近似还原。
+      const paragraphs = xml.split(/<\/a:p>/).map((chunk) => {
+        const texts = [...chunk.matchAll(/<a:t[^>]*>([\s\S]*?)<\/a:t>/g)].map((m) => m[1])
+        return texts.join('')
+      }).filter((line) => line.trim().length > 0)
+      const body = paragraphs.length
+        ? paragraphs.map((line) => `<p>${escapeHtml(line)}</p>`).join('')
+        : '<p class="text-muted-foreground">（空白幻灯片）</p>'
+      sections.push(`<section><h3>幻灯片 ${i + 1} / ${slideNames.length}</h3>${body}</section>`)
+    }
+    return {
+      kind: 'html',
+      content: sections.length ? sections.join('<hr/>') : '<p>（未检测到幻灯片内容）</p>',
+    }
+  }
+
+  // .pdf → pdf-parse(1.x)：内部用 pdf.js 解析。视觉版式恢复成本远高于
+  // 收益，这里只取纯文本，PDF 原始排版以"导出"按钮（copyFileSync 原始字节）
+  // 为准。直接从 lib 子路径 require 以绕开包入口的调试逻辑（pdf-parse 顶层
+  // 在 `!module.parent` 时会尝试读取一个示例 pdf 文件用于自测，打包后可能
+  // 触发误判）。
+  if (ext === '.pdf') {
+    const pdfParse = require('pdf-parse/lib/pdf-parse.js') as
+      (data: Buffer) => Promise<{ text: string; numpages: number }>
+    const buffer = readFileSync(filePath)
+    const data = await pdfParse(buffer)
+    const header = `（共 ${data.numpages} 页，仅提取文本，原始版式以"导出"为准）\n\n`
+    return { kind: 'text', content: header + (data.text || '') }
+  }
+
+  throw new Error(`unsupported rich preview ext: ${ext}`)
+}
+
 function buildPickedLocalFiles(filePaths: string[]): PickedLocalFile[] {
   const uniquePaths = [...new Set(filePaths.map((value) => value.trim()).filter(Boolean))]
   const files: PickedLocalFile[] = []
@@ -848,10 +983,275 @@ function createWindow(): BrowserWindow {
   }
 
   setupAutoUpdater(mainWindow)
+  mainWindowRef = mainWindow
+  mainWindow.on('closed', () => {
+    if (mainWindowRef === mainWindow) {
+      mainWindowRef = null
+    }
+  })
   return mainWindow
 }
 
+// ────────────────────────────────────────────────────────────────────
+// Quick-launcher window (Alfred-style)
+//
+// A small, frameless, always-on-top BrowserWindow that loads the same
+// renderer bundle but at the `#/launcher` hash. The renderer detects
+// that hash and renders <LauncherPage /> instead of the full app shell.
+//
+// The window is created lazily on first hotkey press and reused
+// afterwards (cheaper than re-creating per toggle; the renderer
+// remembers the input value across hides). Submitting the question
+// hides the launcher, focuses the main window, and pushes a
+// `launcher:question` IPC event with the prompt; <App> in the main
+// renderer subscribes to it and navigates to /chat with the prompt
+// pre-filled (which ChatPage then auto-sends as its initial turn).
+// ────────────────────────────────────────────────────────────────────
+
+let launcherWindow: BrowserWindow | null = null
+let mainWindowRef: BrowserWindow | null = null
+
+const LAUNCHER_WIDTH = 710
+const LAUNCHER_HEIGHT = 90
+// Distance from the top edge of the display (NOT the work area, so
+// the menu bar / taskbar is excluded) to the launcher's top edge.
+// The user pins this at 140px so the bar feels anchored just below
+// the top of the screen — a familiar Spotlight-ish anchor point.
+const LAUNCHER_TOP_OFFSET = 140
+
+function createLauncherWindow(): BrowserWindow {
+  // Anchor the launcher to whichever display currently has the cursor
+  // so the user sees it on the screen they're actively using (e.g. an
+  // external monitor) rather than the primary one.
+  const cursorPoint = screen.getCursorScreenPoint()
+  const targetDisplay = screen.getDisplayNearestPoint(cursorPoint)
+  // Use the full display `bounds` (not `workArea`) for both axes so the
+  // 140px top offset is measured from the actual screen edge rather
+  // than from below the menu bar / taskbar.
+  const { x: dx, y: dy, width: dw } = targetDisplay.bounds
+  const x = Math.round(dx + (dw - LAUNCHER_WIDTH) / 2)
+  const y = dy + LAUNCHER_TOP_OFFSET
+
+  const win = new BrowserWindow({
+    width: LAUNCHER_WIDTH,
+    height: LAUNCHER_HEIGHT,
+    x,
+    y,
+    show: false,
+    frame: false,
+    transparent: false,
+    resizable: false,
+    movable: true,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    backgroundColor: '#FFFFFF',
+    hasShadow: true,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  })
+
+  // Always float above other apps, even fullscreen ones (macOS).
+  win.setAlwaysOnTop(true, 'floating')
+  if (process.platform === 'darwin') {
+    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  }
+
+  // Hide when focus is lost so the launcher behaves like a popover —
+  // clicking elsewhere dismisses it, just like Alfred / Spotlight.
+  win.on('blur', () => {
+    if (launcherWindow && !launcherWindow.isDestroyed() && launcherWindow.isVisible()) {
+      launcherWindow.hide()
+    }
+  })
+
+  win.on('closed', () => {
+    if (launcherWindow === win) {
+      launcherWindow = null
+    }
+  })
+
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/#/launcher`)
+  } else {
+    win.loadFile(join(__dirname, '../renderer/index.html'), { hash: '/launcher' })
+  }
+
+  return win
+}
+
+function showLauncher(): void {
+  let coldStart = false
+  if (!launcherWindow || launcherWindow.isDestroyed()) {
+    launcherWindow = createLauncherWindow()
+    coldStart = true
+  } else {
+    // Re-anchor to the current cursor display each time so users with
+    // multiple monitors see it next to where they're looking. The
+    // top offset is measured against the display's outer bounds so
+    // the launcher sits 140px below the screen edge regardless of
+    // the menu bar / taskbar.
+    const cursorPoint = screen.getCursorScreenPoint()
+    const targetDisplay = screen.getDisplayNearestPoint(cursorPoint)
+    const { x: dx, y: dy, width: dw } = targetDisplay.bounds
+    launcherWindow.setBounds({
+      x: Math.round(dx + (dw - LAUNCHER_WIDTH) / 2),
+      y: dy + LAUNCHER_TOP_OFFSET,
+      width: LAUNCHER_WIDTH,
+      height: LAUNCHER_HEIGHT,
+    })
+  }
+  const win = launcherWindow
+  win.show()
+  win.focus()
+  // On cold start the React app hasn't mounted yet, so `launcher:reset`
+  // would be lost. Defer it until the renderer finishes loading; on
+  // warm re-shows the listener is already wired so we can send right
+  // away to clear stale input and re-focus the field.
+  if (coldStart) {
+    win.webContents.once('did-finish-load', () => {
+      if (!win.isDestroyed()) win.webContents.send('launcher:reset')
+    })
+  } else {
+    win.webContents.send('launcher:reset')
+  }
+}
+
+function toggleLauncher(): void {
+  if (launcherWindow && !launcherWindow.isDestroyed() && launcherWindow.isVisible()) {
+    launcherWindow.hide()
+    return
+  }
+  showLauncher()
+}
+
+/**
+ * Resolve the launcher settings out of the app config.
+ *   • `enabled` — whether the global hotkey should be registered at all.
+ *     Default true. Disabling here doesn't tear down the launcher
+ *     window; the user can no longer summon it via the OS-level
+ *     accelerator, but in-app entry points (if any are added later)
+ *     still work.
+ *   • `hotkey`  — Electron accelerator string (e.g. `"Alt+Space"`,
+ *     `"CommandOrControl+Shift+K"`). Stored verbatim so we can hand
+ *     it straight to `globalShortcut.register`.
+ */
+const DEFAULT_LAUNCHER_HOTKEY = 'Alt+Space'
+
+function readLauncherSettings(): { enabled: boolean; hotkey: string } {
+  try {
+    const cfg = asRecord(readHarnessclawConfig({}))
+    const launcher = asRecord(cfg.launcher)
+    const enabled = launcher.enabled === false ? false : true
+    const hotkey = typeof launcher.hotkey === 'string' && launcher.hotkey.trim().length > 0
+      ? String(launcher.hotkey).trim()
+      : DEFAULT_LAUNCHER_HOTKEY
+    return { enabled, hotkey }
+  } catch {
+    return { enabled: true, hotkey: DEFAULT_LAUNCHER_HOTKEY }
+  }
+}
+
+let registeredLauncherAccelerator: string | null = null
+
+/**
+ * Apply the current launcher config — unregister any previously bound
+ * accelerator and re-register the new one if the launcher is enabled.
+ * Safe to call repeatedly (idempotent for the same hotkey).
+ */
+function applyLauncherConfig(): void {
+  const { enabled, hotkey } = readLauncherSettings()
+
+  // Always release the prior binding first so changing the hotkey
+  // doesn't leave the old one wired up.
+  if (registeredLauncherAccelerator) {
+    try {
+      globalShortcut.unregister(registeredLauncherAccelerator)
+    } catch {
+      /* ignore — accelerator may have been unregistered already */
+    }
+    registeredLauncherAccelerator = null
+  }
+
+  if (!enabled) {
+    writeAppLog('info', 'launcher.shortcut', 'Quick launcher disabled by config')
+    return
+  }
+
+  try {
+    const ok = globalShortcut.register(hotkey, () => {
+      toggleLauncher()
+    })
+    if (ok) {
+      registeredLauncherAccelerator = hotkey
+      writeAppLog('info', 'launcher.shortcut', `Registered launcher hotkey: ${hotkey}`)
+    } else {
+      writeAppLog('warn', 'launcher.shortcut', `Failed to register ${hotkey} — another app may already own it`)
+    }
+  } catch (error) {
+    writeAppLog('warn', 'launcher.shortcut', `Invalid launcher hotkey: ${hotkey}`, {
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+// 注册自定义协议 `local-file://`，用于在渲染端安全加载磁盘上的图片 /
+// 音视频等本地资源。直接 <img src="file:///..."> 在 Electron 默认安全
+// 配置（webSecurity=true, contextIsolation=true）下会被跨源策略拦截，
+// 尤其在 dev 模式下页面本身来自 http://localhost。`local-file` 走自定义
+// scheme：renderer 侧拼成 `local-file://local/<absolute-path>`（`local`
+// 是固定占位 host，避免 Chromium 把路径首段提升为 host），主进程在
+// protocol.handle 里转回 file:// 用 net.fetch 读取。
+// registerSchemesAsPrivileged 必须在 app.ready 之前调用。
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'local-file',
+    privileges: {
+      secure: true,
+      standard: true,
+      supportFetchAPI: true,
+      stream: true,
+      bypassCSP: true,
+    },
+  },
+])
+
 app.whenReady().then(() => {
+  // 把 local-file:// 解析回磁盘路径，再以 file:// 流回浏览器。
+  //
+  // URL 形如 `local-file://local/<encoded-abs-path>`：`local` 是固定占位
+  // host（详见 renderer 端 `localFileUrl` 的注释 —— 没有 host 时 Chromium
+  // 会把路径首段提升为 host，pathname 就少一段，文件就读不到）。所以
+  // 这里只看 `url.pathname`，host 直接忽略。
+  //
+  // 之后必须用 pathToFileURL 重新编码成合法 file:// URL，否则带空格 /
+  // 中文 / `#` / `?` 的路径会拼出非法 URL，net.fetch 会静默失败、渲染端
+  // 只看到一张破图。
+  protocol.handle('local-file', (request) => {
+    try {
+      const url = new URL(request.url)
+      // macOS/Linux: pathname = /Users/foo/bar.png
+      // Windows:    pathname = /C:/Users/foo.png，需要去掉前导 `/` 还原盘符
+      let filePath = decodeURIComponent(url.pathname)
+      if (process.platform === 'win32' && /^\/[A-Za-z]:/.test(filePath)) {
+        filePath = filePath.slice(1)
+      }
+      return net.fetch(pathToFileURL(filePath).href)
+    } catch (err) {
+      writeAppLog('error', 'protocol.local-file', 'Failed to resolve URL', {
+        url: request.url,
+        error: String(err),
+      })
+      return new Response('Bad Request', { status: 400 })
+    }
+  })
+
   electronApp.setAppUserModelId('com.iflytek.harnessclaw')
   initializeLogging()
   const appConfigInit = ensureHarnessclawConfigInitialized()
@@ -946,6 +1346,9 @@ app.whenReady().then(() => {
     if (result.ok) {
       setLogThreshold(normalizeLogThreshold(asRecord(asRecord(data).logging).level))
       broadcastAppRuntimeStatus()
+      // Re-apply launcher hotkey / enabled state so changes from the
+      // settings page take effect without an app restart.
+      applyLauncherConfig()
       writeAppLog('info', 'setting.app', 'App config saved', {
         loggingLevel: normalizeLogThreshold(asRecord(asRecord(data).logging).level),
       })
@@ -1333,6 +1736,47 @@ app.whenReady().then(() => {
     }
   })
 
+  // Agent capabilities — GET /api/v1/agent/capabilities. Resolved
+  // SupportsFlags + derived buckets for the active model, override-aware.
+  // The multimodal gate hook reads this instead of normalising /agent
+  // + /models in the renderer.
+  ipcMain.handle('console:getAgentCapabilities', async () => {
+    try {
+      return await getAgentCapabilities()
+    } catch (error) {
+      return { ok: false, status: 0, error: 'network_error', message: String(error) }
+    }
+  })
+
+  // Tools Management — GET/PATCH /api/v1/tools[/{name}] on the Console
+  // port. See harnessclaw-engine/docs/api/tools-management-api.md.
+  // Currently covers the search backends (web_search / tavily_search).
+  // PATCH hot-reloads the registry AND persists back to the yaml, so
+  // changes take effect for the next sub-agent spawn without restart.
+  ipcMain.handle('console:listTools', async () => {
+    try {
+      return await listTools()
+    } catch (error) {
+      return { ok: false, status: 0, error: 'network_error', message: String(error) }
+    }
+  })
+
+  ipcMain.handle('console:getTool', async (_, name: string) => {
+    try {
+      return await getTool(name)
+    } catch (error) {
+      return { ok: false, status: 0, error: 'network_error', message: String(error) }
+    }
+  })
+
+  ipcMain.handle('console:patchTool', async (_, name: string, patch: ToolPatchPayload) => {
+    try {
+      return await patchTool(name, patch || {})
+    } catch (error) {
+      return { ok: false, status: 0, error: 'network_error', message: String(error) }
+    }
+  })
+
   // Providers Management API — see
   // harnessclaw-engine/docs/api/providers-management-api.md. Hot-edit
   // provider config & the agent block (primary + fallback_chain) at
@@ -1529,16 +1973,26 @@ app.whenReady().then(() => {
     return buildPickedLocalFiles(Array.isArray(filePaths) ? filePaths : [])
   })
 
-  ipcMain.handle('files:save', async (event, options: { defaultFileName?: string; content?: string } | undefined) => {
+  ipcMain.handle('files:save', async (event, options: { defaultFileName?: string; content?: string; sourcePath?: string } | undefined) => {
     try {
       writeAppLog('info', 'files:save', 'IPC files:save received', {
         hasDefaultFileName: Boolean(options?.defaultFileName),
         contentLength: options?.content?.length ?? 0,
+        hasSourcePath: Boolean(options?.sourcePath),
       })
       const fileName = typeof options?.defaultFileName === 'string' && options.defaultFileName.trim()
         ? options.defaultFileName.trim()
         : 'untitled.txt'
       const content = typeof options?.content === 'string' ? options.content : ''
+      // Resolve the optional source path: when supplied (e.g. previewing a
+      // binary .docx that cannot be safely serialized through a UTF-8 string)
+      // we copy the file's raw bytes directly instead of writing a text
+      // payload, which would corrupt the content.
+      let sourcePath = typeof options?.sourcePath === 'string' ? options.sourcePath.trim() : ''
+      if (sourcePath.startsWith('~')) {
+        sourcePath = sourcePath.replace(/^~(?=\/|\\|$)/, app.getPath('home'))
+      }
+      const hasValidSource = sourcePath && existsSync(sourcePath) && statSync(sourcePath).isFile()
       // Anchor the dialog to the parent BrowserWindow so it shows as a sheet
       // on macOS instead of a free-floating window the user can miss.
       const parentWindow = BrowserWindow.fromWebContents(event.sender)
@@ -1552,8 +2006,13 @@ app.whenReady().then(() => {
         writeAppLog('info', 'files:save', 'Save dialog cancelled')
         return { ok: false, cancelled: true as const }
       }
-      writeFileSync(result.filePath, content, 'utf-8')
-      writeAppLog('info', 'files:save', 'File saved', { path: result.filePath })
+      if (hasValidSource) {
+        copyFileSync(sourcePath, result.filePath)
+        writeAppLog('info', 'files:save', 'File copied from source', { from: sourcePath, to: result.filePath })
+      } else {
+        writeFileSync(result.filePath, content, 'utf-8')
+        writeAppLog('info', 'files:save', 'File saved', { path: result.filePath })
+      }
       return { ok: true as const, path: result.filePath }
     } catch (error) {
       writeAppLog('error', 'files:save', 'files:save failed', { error: String(error) })
@@ -1561,7 +2020,7 @@ app.whenReady().then(() => {
     }
   })
 
-  ipcMain.handle('files:read', (_, rawPath: unknown) => {
+  ipcMain.handle('files:read', async (_, rawPath: unknown) => {
     try {
       if (typeof rawPath !== 'string' || !rawPath.trim()) {
         return { ok: false, error: 'Invalid path' }
@@ -1581,8 +2040,171 @@ app.whenReady().then(() => {
       if (stat.size > MAX_BYTES) {
         return { ok: false, error: 'File too large to preview', path: resolved, size: stat.size }
       }
+      // 二进制 Office / PDF 文件的"富预览"：mammoth / SheetJS / 自写
+      // pptx 解析器 / pdf-parse 各司其职，在主进程把内容转成 HTML 或
+      // 纯文本，再交给渲染端展示。`isBinary: true` 一直保留，确保导出
+      // 走 copyFileSync 复制原始字节，而不是把抽出的预览文本写回去
+      // 当成假 docx / xlsx。
+      const ext = extname(resolved).toLowerCase()
+      if (ext === '.docx' || ext === '.xlsx' || ext === '.pptx' || ext === '.pdf') {
+        try {
+          const rich = await buildRichPreview(ext, resolved)
+          return {
+            ok: true,
+            path: resolved,
+            content: rich.content,
+            isBinary: true,
+            previewKind: rich.kind,
+            size: stat.size,
+          }
+        } catch (richErr) {
+          writeAppLog('error', 'files:read', 'rich preview failed', {
+            path: resolved,
+            ext,
+            error: String(richErr),
+          })
+          // 回退到二进制占位，至少导出仍可用。
+          return { ok: true, path: resolved, content: '', isBinary: true, size: stat.size }
+        }
+      }
+      // 其它二进制文件（图片 / 压缩包 / 老 .doc / .ppt / .xls 等）：返回
+      // isBinary 占位，预览展示提示文案，导出走原始字节复制。
+      if (isBinaryFile(resolved)) {
+        return { ok: true, path: resolved, content: '', isBinary: true, size: stat.size }
+      }
       const content = readFileSync(resolved, 'utf-8')
       return { ok: true, path: resolved, content, size: stat.size }
+    } catch (error) {
+      return { ok: false, error: String((error as Error)?.message || error) }
+    }
+  })
+
+  // files:read-base64 — read a file's raw bytes and return them as
+  // base64 + sniffed MIME, for multimodal user.message wire content.
+  // Mirrors the engine-side caps in internal/engine/multimodal
+  // (MaxBase64BlockBytes = 10MB). Whitelisted MIMEs only — SVG and
+  // unknown formats are rejected at the IPC boundary so the renderer
+  // doesn't need to duplicate the check.
+  ipcMain.handle('files:read-base64', async (_, rawPath: unknown) => {
+    if (typeof rawPath !== 'string' || !rawPath.trim()) {
+      return { ok: false, error: 'invalid_path', message: 'path required' }
+    }
+    let resolved = rawPath.trim()
+    if (resolved.startsWith('~')) {
+      resolved = resolved.replace(/^~(?=\/|\\|$)/, app.getPath('home'))
+    }
+    try {
+      if (!existsSync(resolved)) {
+        return { ok: false, error: 'not_found', message: 'file not found' }
+      }
+      const stat = statSync(resolved)
+      if (!stat.isFile()) {
+        return { ok: false, error: 'not_a_file', message: 'path is not a regular file' }
+      }
+      const MAX_BYTES = 10 * 1024 * 1024 // mirror multimodal.MaxBase64BlockBytes
+      if (stat.size > MAX_BYTES) {
+        return {
+          ok: false,
+          error: 'too_large',
+          message: `file exceeds ${MAX_BYTES / 1024 / 1024}MB inline limit`,
+        }
+      }
+      const mime = sniffMimeForBase64(resolved)
+      if (!mime) {
+        return {
+          ok: false,
+          error: 'unsupported_mime',
+          message: 'only PNG / JPEG / GIF / WebP / PDF are supported for inline upload',
+        }
+      }
+      const buf = readFileSync(resolved)
+      return {
+        ok: true,
+        data: buf.toString('base64'),
+        mime,
+        size: stat.size,
+      }
+    } catch (error) {
+      return { ok: false, error: 'read_failed', message: String((error as Error)?.message || error) }
+    }
+  })
+
+  // artifacts:fetch — pull raw binary content for an artifact from the
+  // engine over Console HTTP, write it to a per-session cache dir under
+  // ~/.harnessclaw/, and return the on-disk path so the renderer can
+  // reuse files:read (which already handles docx/pdf/xlsx rich preview
+  // via mammoth / pdf-parse).
+  //
+  // Layout: ~/.harnessclaw/artifact-cache/<session_id>/<artifact_id>/<fileName>
+  //
+  //   - session_id bucket: artifacts from different conversations are
+  //     physically isolated; clearing a session is a single rm -rf of
+  //     that bucket. Falls back to "_orphan" when the renderer didn't
+  //     thread session_id through (legacy / direct-link cases).
+  //   - artifact_id sub-bucket: same artifact opened twice reuses the
+  //     same path; the fileName preserves the .docx / .pdf extension so
+  //     extension-based dispatch in files:read still works.
+  //   - Co-located with the server's blob store under ~/.harnessclaw/
+  //     because the client and the engine ARE on the same machine (the
+  //     engine is an Electron-spawned sidecar). No need for a separate
+  //     "client-cache" prefix.
+  //
+  // Why a fetch+temp-file path instead of streaming bytes to the renderer
+  // directly: the existing preview pipeline keys on file paths
+  // (FilePreviewData.path) and mammoth wants a file path or Buffer — not
+  // a base64 string in IPC. Writing once on fetch keeps the renderer
+  // logic untouched.
+  ipcMain.handle('artifacts:fetch', async (_, rawId: unknown, rawSessionId: unknown) => {
+    try {
+      if (typeof rawId !== 'string' || !rawId.trim()) {
+        return { ok: false, error: 'Invalid artifact id' }
+      }
+      const id = rawId.trim()
+      // Derive a short, human-readable session bucket from the engine
+      // session_id. The engine emits "harnessclaw:session:<uuid>";
+      // stripping the well-known prefix yields the bare UUID which is
+      // both filesystem-safe (no `:` cross-OS) and short enough that the
+      // resulting path stays browsable.
+      //
+      // Examples:
+      //   "harnessclaw:session:0c8e..."   → "0c8e..."
+      //   "harnessclaw_session_0c8e..."   → "0c8e..." (legacy already-sanitised form)
+      //   "session:foo"                   → "foo"
+      //   "freeform-id"                   → "freeform-id"
+      //   ""                              → "_orphan"
+      const rawSid = typeof rawSessionId === 'string' ? rawSessionId.trim() : ''
+      const stripped = rawSid.replace(/^(?:harnessclaw[:_])?session[:_]?/i, '')
+      const sessionBucket =
+        stripped !== ''
+          ? stripped.replace(/[\\/:*?"<>|]/g, '_')
+          : '_orphan'
+
+      const res = await fetchArtifactContent(id)
+      if (!res.ok) {
+        return {
+          ok: false,
+          error: res.message || res.error || `HTTP ${res.status}`,
+        }
+      }
+      // Flat layout: <cacheRoot>/<sessionUuid>/<fileName>
+      // Skipping the per-artifact sub-bucket keeps the path browsable.
+      // Same-name collisions across artifacts in the same session
+      // overwrite each other; we accept that — fetch is on-demand so
+      // the next click re-pulls the correct bytes.
+      const cacheRoot = join(homedir(), '.harnessclaw', 'artifact-cache')
+      const sidDir = join(cacheRoot, sessionBucket)
+      mkdirSync(sidDir, { recursive: true })
+      const fileName = res.fileName && res.fileName.trim() ? res.fileName : `${id}.bin`
+      const safeName = fileName.replace(/[\\/:*?"<>|]/g, '_')
+      const outPath = join(sidDir, safeName)
+      writeFileSync(outPath, res.buffer)
+      return {
+        ok: true,
+        path: outPath,
+        fileName: safeName,
+        mimeType: res.mimeType,
+        size: res.buffer.length,
+      }
     } catch (error) {
       return { ok: false, error: String((error as Error)?.message || error) }
     }
@@ -2072,7 +2694,16 @@ app.whenReady().then(() => {
     return { ok: true }
   })
 
-  ipcMain.handle('harnessclaw:send', async (_, content: string, sessionId?: string, options?: { coordinatorMode?: 'react' | 'plan'; planConfirmation?: 'auto' | 'required' }) => {
+  ipcMain.handle('harnessclaw:send', async (
+    _,
+    content: string,
+    sessionId?: string,
+    options?: {
+      coordinatorMode?: 'react' | 'plan'
+      planConfirmation?: 'auto' | 'required'
+      images?: Array<{ mime: string; base64: string }>
+    },
+  ) => {
     const ok = await harnessclawClient.send(content, sessionId, options)
     if (!ok) {
       return { ok: false, error: 'Failed to send message to Harnessclaw' }
@@ -2188,6 +2819,51 @@ app.whenReady().then(() => {
     return manuallyCheckForUpdates(win)
   })
 
+  // Quick-launcher IPC: renderer (LauncherPage) → main.
+  // `submit` carries the typed prompt; we hide the launcher, focus the
+  // main window, and forward the prompt to it via webContents.send so
+  // the React shell can navigate to /chat with the message pre-filled.
+  ipcMain.handle('launcher:submit', (_, prompt: unknown) => {
+    const text = typeof prompt === 'string' ? prompt.trim() : ''
+    if (launcherWindow && !launcherWindow.isDestroyed()) {
+      launcherWindow.hide()
+    }
+    if (!text) return { ok: false, error: 'empty' }
+
+    let target = mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef : null
+    if (!target) {
+      target = createWindow()
+    }
+    // Bring the main window forward; on macOS the launcher window's
+    // hide() already returned focus to the previous app, so we have to
+    // explicitly raise the main window again.
+    if (target.isMinimized()) target.restore()
+    target.show()
+    target.focus()
+    app.focus({ steal: true })
+
+    const send = () => {
+      if (target && !target.isDestroyed()) {
+        target.webContents.send('launcher:question', text)
+      }
+    }
+    if (target.webContents.isLoading()) {
+      target.webContents.once('did-finish-load', send)
+    } else {
+      send()
+    }
+    return { ok: true }
+  })
+
+  ipcMain.handle('launcher:hide', () => {
+    if (launcherWindow && !launcherWindow.isDestroyed()) {
+      launcherWindow.hide()
+    }
+    return { ok: true }
+  })
+
+  applyLauncherConfig()
+
   createWindow()
   broadcastAppRuntimeStatus()
 
@@ -2203,6 +2879,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
+  globalShortcut.unregisterAll()
   harnessclawClient.disconnect()
   stopHarnessclawEngine()
   closeDb()

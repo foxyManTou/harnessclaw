@@ -15,7 +15,6 @@ import {
   Settings,
   Moon,
   Sun,
-  Languages,
   PanelLeft,
   MessageSquareText,
   ChevronDown,
@@ -197,18 +196,6 @@ export function Sidebar() {
     window.dispatchEvent(new CustomEvent('theme-changed'))
   }
 
-  const toggleLanguage = async () => {
-    const next = i18n.language.startsWith('zh') ? 'en' : 'zh'
-    await i18n.changeLanguage(next)
-    try {
-      const cfg = await window.appConfig.read()
-      const ui = (cfg?.ui || {}) as Record<string, unknown>
-      await window.appConfig.save({ ...cfg, ui: { ...ui, language: next } })
-    } catch {
-      // ignore
-    }
-  }
-
   const toggleExpanded = () => {
     const next = !expanded
     setExpanded(next)
@@ -318,6 +305,17 @@ export function Sidebar() {
         return
       }
 
+      // ⌘/Ctrl + N — new session. Handled here (rather than in
+      // App.tsx) so we can close the search palette first when it's
+      // open; otherwise the navigation would land on the homepage
+      // with the overlay still mounted on top.
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'n') {
+        event.preventDefault()
+        closeSearch()
+        navigate('/', { state: { focusComposer: true } })
+        return
+      }
+
       if (event.key === 'Escape') {
         setMenuState(null)
         setRenamingSessionId(null)
@@ -328,7 +326,7 @@ export function Sidebar() {
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
+  }, [navigate])
 
   useEffect(() => {
     if (!searchOpen) return
@@ -405,6 +403,13 @@ export function Sidebar() {
     if (renamingSessionId === sessionId) {
       setRenamingSessionId(null)
       setRenameValue('')
+    }
+    // If the deleted session is the one currently open in the chat
+    // view, the chat page would otherwise keep showing a stale session
+    // (its activeSessionId is sourced from location.state.sessionId).
+    // Navigate back to home so the user lands on a clean state.
+    if (selectedRecentSessionId === sessionId) {
+      navigate('/', { state: { focusComposer: true } })
     }
   }
 
@@ -804,15 +809,6 @@ export function Sidebar() {
             </button>
 
             <button
-              onClick={toggleLanguage}
-              title={i18n.language.startsWith('zh') ? t('sidebar.switchToEnglish') : t('sidebar.switchToChinese')}
-              aria-label={i18n.language.startsWith('zh') ? t('sidebar.switchToEnglish') : t('sidebar.switchToChinese')}
-              className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-foreground/78 transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <Languages size={18} aria-hidden="true" />
-            </button>
-
-            <button
               onClick={toggleTheme}
               title={isDark ? t('sidebar.switchLight') : t('sidebar.switchDark')}
               aria-label={isDark ? t('sidebar.switchLightAria') : t('sidebar.switchDarkAria')}
@@ -833,15 +829,6 @@ export function Sidebar() {
               className={itemCls(isActive('/settings'))}
             >
               <Settings size={18} className="flex-shrink-0" aria-hidden="true" />
-            </button>
-
-            <button
-              onClick={toggleLanguage}
-              title={i18n.language.startsWith('zh') ? t('sidebar.switchToEnglish') : t('sidebar.switchToChinese')}
-              aria-label={i18n.language.startsWith('zh') ? t('sidebar.switchToEnglish') : t('sidebar.switchToChinese')}
-              className={bottomItemCls}
-            >
-              <Languages size={18} className="flex-shrink-0" aria-hidden="true" />
             </button>
 
             <button
@@ -943,7 +930,7 @@ export function Sidebar() {
           />
 
           <div className="pointer-events-none absolute inset-0 flex items-start justify-center px-5 pt-20">
-            <div className="pointer-events-auto w-full max-w-[720px] overflow-hidden rounded-[30px] border border-white/70 bg-white/86 shadow-[0_30px_90px_rgba(15,23,42,0.16)] backdrop-blur-xl dark:border-white/10 dark:bg-slate-950/75">
+            <div className="pointer-events-auto w-full max-w-[720px] overflow-hidden rounded-[30px] border border-slate-200 bg-white shadow-[0_30px_90px_rgba(15,23,42,0.16)] dark:border-slate-800 dark:bg-slate-950">
               <div className="border-b border-slate-200/80 px-5 py-4 dark:border-slate-800">
                 <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white/82 px-4 py-3 dark:border-slate-800 dark:bg-slate-900/80">
                   <Search size={16} className="text-slate-400" />
@@ -952,14 +939,10 @@ export function Sidebar() {
                     value={searchQuery}
                     onChange={(event) => setSearchQuery(event.target.value)}
                     onKeyDown={(event) => {
-                      if (event.metaKey && event.key.toLowerCase() === 'n') {
-                        const newSessionAction = quickActions.find((item) => item.id === 'new-session')
-                        if (newSessionAction) {
-                          event.preventDefault()
-                          newSessionAction.onSelect()
-                          return
-                        }
-                      }
+                      // ⌘/Ctrl + N is handled by the window listener
+                      // in the parent effect — it closes the palette
+                      // and navigates in one shot, so we don't need
+                      // a duplicate path here.
 
                       const quickSelectMatch = event.key.match(/^[1-8]$/)
                       if (event.metaKey && quickSelectMatch) {

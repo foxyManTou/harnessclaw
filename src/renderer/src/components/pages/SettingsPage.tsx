@@ -12,6 +12,9 @@ import {
   ChevronDown, ChevronRight, ExternalLink,
   SlidersHorizontal, RefreshCw, Settings2,
   Globe, Sun, GripVertical, Plus,
+  // Keyboard = typing hint icon shown inside the hotkey-capture input
+  // while we're waiting for the user to press a combination.
+  Keyboard,
   // Icons for the "回答风格" preset cards. Target = precise,
   // Scale = balanced, Lightbulb = flexible, Sparkles = creative.
   Target, Scale, Lightbulb, Sparkles,
@@ -20,6 +23,23 @@ import { cn } from '@/lib/utils'
 import { NoticeToast } from '../common/NoticeToast'
 import { useAppConfig, useEngineConfig } from '@/hooks/useEngineConfig'
 import { defaultDbDisplayPath, defaultLogsDisplayPath } from '@/lib/runtimePaths'
+import {
+  ENGINE_TYPE_OPTIONS,
+  MANAGED_PROVIDER_KEYS,
+  PROVIDER_DEFAULT_BASES,
+  PROVIDER_DISPLAY_NAMES,
+  PROVIDER_ENGINE_TYPES,
+  buildAppModelConfig,
+  buildAppProviderRaw,
+  createEmptyProviderConfig,
+  getEffectiveEngineType,
+  isManagedProviderKey,
+  resolveProviderProtocol,
+  type ManagedProviderKey,
+  type ProtocolProviderKey,
+  type ProviderConfig,
+  type ProviderModelEntry,
+} from '@/lib/providers'
 
 // ─── Primitives ────────────────────────────────────────────────────────────
 
@@ -1462,135 +1482,11 @@ function AgentSection({
 }
 
 // ─── Model Config Helpers ───────────────────────────────────────────────────
-
-interface ProviderModelEntry {
-  id: string
-  name?: string
-  group?: string
-  tags?: string[]
-  // Whether this model is enabled for the provider. Multi-select: any
-  // number of models can be enabled at once. The engine still receives
-  // a single "active" model (`ProviderConfig.model`) — typically the
-  // first enabled entry — but the renderer keeps the full enabled set
-  // so users can pick from a subset.
-  enabled?: boolean
-}
-
-interface ProviderConfig {
-  apiKey: string
-  apiBase: string | null
-  model: string | null
-  models: ProviderModelEntry[]
-  protocol: 'openai' | 'anthropic'
-  // Engine-side `type` for `POST/PATCH /providers`. Independent from
-  // `protocol` (which is renderer-only and only meaningful for
-  // `custom`). Defaults to PROVIDER_ENGINE_TYPES[key]; the user can
-  // override per-provider via the API-地址 row dropdown. See engine
-  // docs (`type` enum: openai | anthropic | gemini).
-  engineType?: 'openai' | 'anthropic' | 'gemini'
-  extraHeaders: Record<string, string> | null
-  raw: Record<string, unknown>
-  // Whether this provider is enabled (multi-select — any number of
-  // providers can be ON at once). The renderer also tracks a single
-  // `defaultProvider` separately for `agents.defaults`; the default
-  // is always one of the enabled providers (auto-promoted when the
-  // current default is disabled).
-  enabled?: boolean
-}
-
-// Managed provider keys MUST match the `provider` field returned by the
-// Model Registry API (see harnessclaw-engine/docs/api/models-registry-api.md
-// and internal/provider/registry/default-manifest.yaml). `handleFetchModels`
-// filters registry results via `m.provider === selectedProvider`, so the
-// canonical engine names (e.g. `moonshot` for Kimi, `zhipu` for GLM) are used
-// as keys; the display name is what surfaces to the user.
-type ManagedProviderKey =
-  | 'xunfei'
-  | 'anthropic'
-  | 'openai'
-  | 'google'
-  | 'deepseek'
-  | 'zhipu'
-  | 'moonshot'
-  | 'minimax'
-  | 'custom'
-type ProtocolProviderKey = 'anthropic' | 'openai'
-
-const MANAGED_PROVIDER_KEYS: ManagedProviderKey[] = [
-  'xunfei',
-  'anthropic',
-  'openai',
-  'google',
-  'deepseek',
-  'zhipu',
-  'moonshot',
-  'minimax',
-  'custom',
-]
-const PROVIDER_DISPLAY_NAMES: Record<ManagedProviderKey, string> = {
-  xunfei: '科大讯飞 Spark',
-  anthropic: 'Anthropic',
-  openai: 'OpenAI',
-  google: 'Google',
-  deepseek: 'DeepSeek',
-  zhipu: '智谱 GLM',
-  moonshot: 'Kimi',
-  minimax: 'MiniMax',
-  custom: 'Custom',
-}
-
-const PROVIDER_DEFAULT_BASES: Record<ManagedProviderKey, string> = {
-  xunfei: 'https://spark-api-open.xf-yun.com/agent/v1',
-  anthropic: 'https://api.anthropic.com',
-  openai: 'https://api.openai.com',
-  google: 'https://generativelanguage.googleapis.com',
-  deepseek: 'https://api.deepseek.com',
-  zhipu: 'https://open.bigmodel.cn/api/paas/v4',
-  moonshot: 'https://api.moonshot.cn',
-  minimax: 'https://api.minimax.chat',
-  custom: '',
-}
-
-// Engine `type` to send to `POST/PATCH /providers`. See
-// harnessclaw-engine/docs/api/providers-management-api.md (`type` enum:
-// openai / anthropic / gemini).
 //
-// OpenAI-compatible vendors (DeepSeek, Kimi=moonshot, GLM=zhipu, MiniMax,
-// 讯飞=xunfei) all use `openai` and only differ by `base_url`. Google goes
-// to `gemini` — NOT `google`. `custom` is resolved at call time from the
-// user-selected protocol (openai | anthropic).
-const PROVIDER_ENGINE_TYPES: Record<Exclude<ManagedProviderKey, 'custom'>, 'openai' | 'anthropic' | 'gemini'> = {
-  xunfei: 'openai',
-  anthropic: 'anthropic',
-  openai: 'openai',
-  google: 'gemini',
-  deepseek: 'openai',
-  zhipu: 'openai',
-  moonshot: 'openai',
-  minimax: 'openai',
-}
-
-// Engine types the user can cycle through (matches engine `type` enum).
-const ENGINE_TYPE_OPTIONS: ReadonlyArray<'openai' | 'anthropic' | 'gemini'> = [
-  'openai',
-  'anthropic',
-  'gemini',
-]
-
-// Resolve the effective engine type for a provider:
-//   1. explicit cfg.engineType override (user toggled the badge)
-//   2. cfg.protocol when key === 'custom' (the legacy "OpenAI 协议 /
-//      Anthropic 协议" selector)
-//   3. the PROVIDER_ENGINE_TYPES default for that vendor
-//   4. fallback 'openai'
-function getEffectiveEngineType(
-  key: ManagedProviderKey,
-  cfg: ProviderConfig,
-): 'openai' | 'anthropic' | 'gemini' {
-  if (cfg.engineType) return cfg.engineType
-  if (key === 'custom') return cfg.protocol
-  return PROVIDER_ENGINE_TYPES[key] ?? 'openai'
-}
+// Shared provider primitives (types, constants, helpers) now live in
+// `@/lib/providers` so the first-run WelcomeModal can write to the
+// same shape under `appConfig.modelProviders.<key>` without
+// duplicating definitions here.
 
 const PROVIDER_LOGO_BG: Record<ManagedProviderKey, string> = {
   xunfei: '#1A6BFF',
@@ -1912,6 +1808,36 @@ function compareModelEntries(a: ProviderModelEntry, b: ProviderModelEntry): numb
   return a.id.localeCompare(b.id)
 }
 
+// 把"币种 / 输入价格 / 输出价格"三个表单字段（用户在 <input> 里录入的
+// 字符串）规范化成 ProviderModelEntry 上的可选字段。规则：
+//   - 字符串去前后空白；空串 / 非数字 → 该字段不写入 entry（视为未配置）
+//   - 数字 → Number 转换，非有限数（NaN/Infinity）按未配置处理
+//   - 货币符号若与默认值 '$' 相同也写入，保留用户的显式选择；只有完全
+//     未触碰（空串）才省略
+function applyPricingToEntry(
+  entry: ProviderModelEntry,
+  draft: { currency: string; inputPrice: string; outputPrice: string }
+): void {
+  const currency = draft.currency.trim()
+  if (currency) entry.currency = currency
+  else delete entry.currency
+
+  const parsePrice = (raw: string): number | undefined => {
+    const trimmed = raw.trim()
+    if (!trimmed) return undefined
+    const n = Number(trimmed)
+    return Number.isFinite(n) ? n : undefined
+  }
+
+  const inputPrice = parsePrice(draft.inputPrice)
+  if (inputPrice !== undefined) entry.inputPrice = inputPrice
+  else delete entry.inputPrice
+
+  const outputPrice = parsePrice(draft.outputPrice)
+  if (outputPrice !== undefined) entry.outputPrice = outputPrice
+  else delete entry.outputPrice
+}
+
 function groupModels(models: ProviderModelEntry[]): Array<{ name: string; items: ProviderModelEntry[] }> {
   const groups = new Map<string, ProviderModelEntry[]>()
   for (const m of models) {
@@ -2007,20 +1933,41 @@ interface ModelTagDef {
   border: string
 }
 
-const MODEL_TAGS = (t: any): ModelTagDef[] => [
-  { key: 'vision',    label: t('models.capabilities.vision'), icon: Eye,    fg: '#16A34A', bg: '#DCFCE7', border: '#BBF7D0' },
-  { key: 'web',       label: t('models.capabilities.web'), icon: Globe,  fg: '#2563EB', bg: '#DBEAFE', border: '#BFDBFE' },
-  { key: 'reasoning', label: t('models.capabilities.reasoning'), icon: Sun,    fg: '#7C3AED', bg: '#EDE9FE', border: '#DDD6FE' },
-  { key: 'tools',     label: t('models.capabilities.tools'), icon: Wrench, fg: '#EA580C', bg: '#FFEDD5', border: '#FED7AA' },
+// MODEL_TAGS doubles as the renderer-visible chip set AND the server-side
+// model_type override token list. Keys MUST match the engine's
+// KnownModelTypeTokens (provider/registry/capabilities.go) — that's why
+// `search` instead of the older renderer-local `web` label. The other
+// known tokens (pdf / audio / video) are intentionally NOT exposed here
+// per the plan: yaml-only for now, preserved across UI saves via the
+// hiddenModelTypeTokens state. `label` holds an i18n key resolved by
+// callers via `t(tag.label)`.
+const MODEL_TAGS: ModelTagDef[] = [
+  { key: 'vision',    label: 'models.capabilities.vision',    icon: Eye,    fg: '#16A34A', bg: '#DCFCE7', border: '#BBF7D0' },
+  { key: 'search',    label: 'models.capabilities.search',    icon: Globe,  fg: '#2563EB', bg: '#DBEAFE', border: '#BFDBFE' },
+  { key: 'reasoning', label: 'models.capabilities.reasoning', icon: Sun,    fg: '#7C3AED', bg: '#EDE9FE', border: '#DDD6FE' },
+  { key: 'tools',     label: 'models.capabilities.tools',     icon: Wrench, fg: '#EA580C', bg: '#FFEDD5', border: '#FED7AA' },
 ]
 
-function ModelTagBadge({ tagKey, t }: { tagKey: string; t: any }) {
+// HIDDEN_MODEL_TYPE_TOKENS are model_type values the engine knows about
+// but the UI doesn't surface as chips. Preserved across UI edits so a
+// hand-edited `pdf` in yaml isn't clobbered when the user saves model
+// settings in the SettingsPage.
+const HIDDEN_MODEL_TYPE_TOKENS: ReadonlySet<string> = new Set(['pdf', 'audio', 'video'])
+
+// VISIBLE_MODEL_TYPE_TOKENS mirrors MODEL_TAGS' keys — used to split a
+// model_type list returned by the engine into visible (chips) vs
+// hidden (preserved as-is) buckets.
+const VISIBLE_MODEL_TYPE_TOKENS: ReadonlySet<string> = new Set(MODEL_TAGS.map((t) => t.key))
+
+const MODEL_TAG_MAP: Record<string, ModelTagDef> =
+  Object.fromEntries(MODEL_TAGS.map((t) => [t.key, t]))
+
+function ModelTagBadge({ tagKey, t }: { tagKey: string; t: (key: string) => string }) {
   const [tooltipPos, setTooltipPos] = useState<{ left: number; top: number } | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const badgeRef = useRef<HTMLSpanElement | null>(null)
 
-  const tags = useMemo(() => MODEL_TAGS(t), [t])
-  const tag = useMemo(() => tags.find((t) => t.key === tagKey), [tags, tagKey])
+  const tag = MODEL_TAG_MAP[tagKey]
   if (!tag) return null
 
   const Icon = tag.icon
@@ -2078,7 +2025,7 @@ function ModelTagBadge({ tagKey, t }: { tagKey: string; t: any }) {
           }}
           className="pointer-events-none whitespace-nowrap rounded-md bg-foreground px-1.5 py-0.5 text-[10px] font-medium text-card shadow-md"
         >
-          {tag.label}
+          {t(tag.label)}
         </span>,
         document.body,
       )}
@@ -2249,22 +2196,6 @@ function normalizeProviderConfig(rawValue: unknown): ProviderConfig {
   }
 }
 
-function isManagedProviderKey(value: string): value is ManagedProviderKey {
-  return MANAGED_PROVIDER_KEYS.includes(value as ManagedProviderKey)
-}
-
-function createEmptyProviderConfig(key: ManagedProviderKey): ProviderConfig {
-  return {
-    apiKey: '',
-    apiBase: PROVIDER_DEFAULT_BASES[key] || null,
-    model: null,
-    models: [],
-    protocol: key === 'anthropic' ? 'anthropic' : 'openai',
-    extraHeaders: null,
-    raw: {},
-  }
-}
-
 function mergeProviderSource(
   rootValue: unknown,
   llmValue: unknown,
@@ -2350,72 +2281,6 @@ function getManagedDefaultProvider(
   return 'anthropic'
 }
 
-function buildAppProviderRaw(next: ProviderConfig): Record<string, unknown> {
-  const apiKey = next.apiKey.trim()
-  const apiBase = next.apiBase?.trim() || ''
-  const model = next.model?.trim() || ''
-
-  return {
-    apiKey,
-    apiBase,
-    model,
-    models: next.models,
-    protocol: next.protocol,
-    ...(next.engineType ? { engineType: next.engineType } : {}),
-    extraHeaders: next.extraHeaders ?? null,
-    enabled: next.enabled === true,
-  }
-}
-
-// Determine the engine-level protocol slot a managed provider maps onto.
-// - `anthropic` uses the Anthropic Messages protocol.
-// - `custom` uses whatever protocol the user toggled.
-// - Everyone else (openai, deepseek, zhipu, moonshot, minimax, google) is
-//   OpenAI-compatible from the engine's perspective.
-function resolveProviderProtocol(
-  key: ManagedProviderKey,
-  providers: Record<ManagedProviderKey, ProviderConfig>,
-): ProtocolProviderKey {
-  if (key === 'anthropic') return 'anthropic'
-  if (key === 'custom') return providers.custom.protocol
-  return 'openai'
-}
-
-function buildAppModelConfig(
-  previous: Record<string, unknown>,
-  providers: Record<ManagedProviderKey, ProviderConfig>,
-  defaultProvider: ManagedProviderKey,
-): Record<string, unknown> {
-  const agents = asRecord(previous.agents)
-  const defaults = asRecord(agents.defaults)
-  const modelProviders = getAppModelProvidersConfig(previous)
-  const resolvedDefaultProvider = resolveProviderProtocol(defaultProvider, providers)
-  const activeProvider = providers[defaultProvider]
-  const modelId = activeProvider.model?.trim() || ''
-
-  const persistedProviders = MANAGED_PROVIDER_KEYS.reduce<Record<string, unknown>>((acc, key) => {
-    acc[key] = buildAppProviderRaw(providers[key])
-    return acc
-  }, {})
-
-  return {
-    ...previous,
-    modelProviders: {
-      ...modelProviders,
-      ...persistedProviders,
-      defaultSelection: defaultProvider,
-    },
-    agents: {
-      ...agents,
-      defaults: {
-        ...defaults,
-        provider: resolvedDefaultProvider,
-        model: modelId ? `${resolvedDefaultProvider}/${modelId}` : null,
-      },
-    },
-  }
-}
-
 function hasPersistedModelProviders(appConfig: Record<string, unknown>): boolean {
   const modelProviders = getAppModelProvidersConfig(appConfig)
   return Object.keys(modelProviders).length > 0
@@ -2471,6 +2336,18 @@ function ModelSection({
   const [addModelName, setAddModelName] = useState('')
   const [addModelGroup, setAddModelGroup] = useState('')
   const [addModelTags, setAddModelTags] = useState<string[]>([])
+  // hiddenModelTypeTokens preserves engine-side model_type values that
+  // aren't surfaced as UI chips (pdf / audio / video). Hydrated from the
+  // endpoint snapshot when the edit form opens; merged back into the
+  // model_type payload on save so a hand-edited yaml token isn't
+  // clobbered by a chip-only save.
+  const [hiddenModelTypeTokens, setHiddenModelTypeTokens] = useState<string[]>([])
+  // 高级设置里的"币种 / 输入价格 / 输出价格"。三者都是字符串状态：用户
+  // 可以输入 "0.00" 这种带前导零的写法，保存时再转成 `number | undefined`
+  // (空串视为未配置)。
+  const [addModelCurrency, setAddModelCurrency] = useState('$')
+  const [addModelInputPrice, setAddModelInputPrice] = useState('')
+  const [addModelOutputPrice, setAddModelOutputPrice] = useState('')
   const [groupSuggestOpen, setGroupSuggestOpen] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [engineTypePopupOpen, setEngineTypePopupOpen] = useState(false)
@@ -2727,6 +2604,7 @@ function ModelSection({
       key: ManagedProviderKey,
       modelId: string,
       maxTokens?: number,
+      tags?: string[],
     ): Promise<void> => {
       // Guard: the engine rejects POST endpoint when the provider entry
       // doesn't exist. Create it first if needed.
@@ -2777,6 +2655,32 @@ function ModelSection({
         }
       }
       if (!endpointReady) return
+
+      // Push the chip-derived model_type to the engine. The POST endpoint
+      // payload doesn't accept model_type (engine 2026-05-19 added the
+      // field via PATCH only), so this is the canonical write path for
+      // newly-enabled models. Filter to known server tokens (visible +
+      // hidden) — anything else would 400 invalid_model_type.
+      if (tags && tags.length > 0) {
+        const allowed = new Set<string>([
+          ...Array.from(VISIBLE_MODEL_TYPE_TOKENS),
+          ...Array.from(HIDDEN_MODEL_TYPE_TOKENS),
+        ])
+        const modelType = tags.filter((t) => allowed.has(t))
+        if (modelType.length > 0) {
+          const mtRes = await window.agentApi.patchEndpoint(key, modelId, {
+            model_type: modelType,
+          })
+          if (!mtRes.ok && mtRes.status !== 404 && mtRes.status !== 0
+              && mtRes.error !== 'update_failed') {
+            reportHotReloadError(
+              '能力同步',
+              mtRes.error || `http_${mtRes.status}`,
+              mtRes.message,
+            )
+          }
+        }
+      }
 
       // After create (or detected-exists), append to chain so the
       // endpoint actually routes. Canonical chain ref separator is `:`
@@ -2849,7 +2753,7 @@ function ModelSection({
       key: ManagedProviderKey,
       previousId: string,
       nextId: string,
-      patch: { model?: string; max_tokens?: number },
+      patch: { model?: string; max_tokens?: number; model_type?: string[] },
     ): Promise<void> => {
       if (previousId !== nextId) {
         // Renames are local-only now. The original endpoint stays on
@@ -3238,6 +3142,15 @@ function ModelSection({
     // flight (race condition that previously revived deleted entries).
     const targetProvider = selectedProvider
 
+    // Clear this provider's tombstones — a manual refresh is the user's
+    // explicit "give me the full registry view" intent, so previously-
+    // deleted ids should be eligible to re-appear. Without this,
+    // 🗑 + 刷新 looks like the refresh did nothing because every
+    // deleted entry stays suppressed. Auto-refresh (the useEffect at
+    // mount) keeps the tombstones so a stale fetch can't revive an
+    // entry mid-delete.
+    deletedModelIdsRef.current.delete(targetProvider)
+
     setModelFetchState('loading')
     try {
       const result = await window.agentApi.listRegistryModels()
@@ -3269,12 +3182,14 @@ function ModelSection({
         return
       }
 
-      // Derive tags from registry supports flags.
+      // Derive tags from registry supports flags. Keys match MODEL_TAGS
+      // (= server-side model_type tokens) so chip selections can pass
+      // straight through to PATCH /endpoint without translation.
       const deriveTags = (s?: Record<string, unknown>): string[] => {
         if (!s) return []
         const tags: string[] = []
         if (s.vision === true) tags.push('vision')
-        if (s.web_search === true) tags.push('web')
+        if (s.web_search === true) tags.push('search')
         if (s.reasoning === true) tags.push('reasoning')
         if (s.function_calling === true) tags.push('tools')
         return tags
@@ -3387,6 +3302,11 @@ function ModelSection({
         if (addModelGroup.trim()) entry.group = addModelGroup.trim()
         if (addModelTags.length > 0) entry.tags = [...addModelTags]
         if (m.enabled) entry.enabled = true
+        applyPricingToEntry(entry, {
+          currency: addModelCurrency,
+          inputPrice: addModelInputPrice,
+          outputPrice: addModelOutputPrice,
+        })
         return entry
       })
       const patch: Partial<ProviderConfig> = { models: next }
@@ -3397,9 +3317,16 @@ function ModelSection({
       updateProvider(selectedProvider, patch)
       // Hot-reload endpoint on the engine. Only the enabled endpoints are
       // live in the engine; skip the API call if the renderer-side entry
-      // was never enabled.
+      // was never enabled. model_type combines visible chip selections
+      // with any hidden tokens (pdf/audio/video) hydrated from the
+      // endpoint snapshot so a yaml-only token survives.
       if (previousEntry?.enabled) {
-        void hotPatchEndpoint(selectedProvider, editingModelId, id, { model: id })
+        const visible = addModelTags.filter((t) => VISIBLE_MODEL_TYPE_TOKENS.has(t))
+        const modelType = [...visible, ...hiddenModelTypeTokens]
+        void hotPatchEndpoint(selectedProvider, editingModelId, id, {
+          model: id,
+          model_type: modelType,
+        })
       }
       closeAddModal()
       return
@@ -3413,6 +3340,11 @@ function ModelSection({
     if (addModelName.trim()) entry.name = addModelName.trim()
     if (addModelGroup.trim()) entry.group = addModelGroup.trim()
     if (addModelTags.length > 0) entry.tags = [...addModelTags]
+    applyPricingToEntry(entry, {
+      currency: addModelCurrency,
+      inputPrice: addModelInputPrice,
+      outputPrice: addModelOutputPrice,
+    })
     updateProvider(selectedProvider, { models: [...current, entry] })
     // New models default to disabled — no endpoint hot-create until the
     // user clicks the checkmark toggle (see handleToggleModelEnabled).
@@ -3425,6 +3357,32 @@ function ModelSection({
     setAddModelName(entry.name ?? '')
     setAddModelGroup(entry.group ?? '')
     setAddModelTags(entry.tags ? [...entry.tags] : [])
+    // Fetch the engine-side model_type so hidden tokens (pdf/audio/video)
+    // survive the next save. listProviders is cheap enough to call on
+    // every edit open; the engine already holds the snapshot in memory.
+    setHiddenModelTypeTokens([])
+    void (async () => {
+      const res = await window.agentApi.listProviders()
+      if (!res.ok) return
+      const prov = res.data.providers.find((p) => p.name === selectedProvider)
+      const ep = prov?.endpoints.find((e) => e.name === entry.id)
+      const mt = Array.isArray(ep?.model_type) ? ep!.model_type! : []
+      const hidden = mt.filter((t) => HIDDEN_MODEL_TYPE_TOKENS.has(t))
+      setHiddenModelTypeTokens(hidden)
+    })()
+    // 把已保存的"币种 / 价格"灌回编辑表单。number → string 是为了让
+    // <input type="number" /> 在空值与 0.00 之间不闪烁。
+    setAddModelCurrency(entry.currency ?? '$')
+    setAddModelInputPrice(
+      typeof entry.inputPrice === 'number' && Number.isFinite(entry.inputPrice)
+        ? String(entry.inputPrice)
+        : ''
+    )
+    setAddModelOutputPrice(
+      typeof entry.outputPrice === 'number' && Number.isFinite(entry.outputPrice)
+        ? String(entry.outputPrice)
+        : ''
+    )
     setAdvancedOpen(false)
     setAddModelOpen(true)
   }
@@ -3493,8 +3451,12 @@ function ModelSection({
     updateProvider(selectedProvider, patch)
 
     // Hot-reload to the engine. Fire-and-forget; failures surface as toasts.
+    // Pass the entry's tags so model_type lands in the engine the same
+    // moment the endpoint is created — saves the user from having to
+    // open the edit form just to push capability flags through.
     if (willEnable) {
-      void hotCreateEndpoint(selectedProvider, id)
+      const tags = previousEntry?.tags
+      void hotCreateEndpoint(selectedProvider, id, undefined, tags)
     } else {
       void hotSetEndpointDisabled(selectedProvider, id, true)
     }
@@ -3507,6 +3469,10 @@ function ModelSection({
     setAddModelName('')
     setAddModelGroup('')
     setAddModelTags([])
+    setHiddenModelTypeTokens([])
+    setAddModelCurrency('$')
+    setAddModelInputPrice('')
+    setAddModelOutputPrice('')
     setGroupSuggestOpen(false)
     setAdvancedOpen(false)
   }
@@ -4188,7 +4154,10 @@ function ModelSection({
                 </div>
               </div>
 
-              {editingModelId && advancedOpen && (
+              {/* 模型类型：编辑模式下始终可见，不再藏在"高级设置"里。
+                  用户反馈里它是一个高频字段（决定能力开关），放进折叠区
+                  会增加点击成本。*/}
+              {editingModelId && (
                 <div className="mt-2 border-t border-border pt-5">
                   <div className="mb-2 flex items-center gap-1">
                     <span className="text-sm font-medium text-foreground">{t('models.addModal.tagsLabel')}</span>
@@ -4227,10 +4196,88 @@ function ModelSection({
                           }
                         >
                           <Icon size={12} />
-                          {tag.label}
+                          {t(tag.label)}
                         </button>
                       )
                     })}
+                  </div>
+                </div>
+              )}
+
+              {/* 高级设置：当前仅承载计费相关三项。"币种"用下拉选择常见
+                  货币符号；"输入价格 / 输出价格"采用左侧数字输入 + 右侧
+                  单位（$/百万 Token）的并排布局，与设计稿对齐。 */}
+              {editingModelId && advancedOpen && (
+                <div className="mt-2 space-y-4 border-t border-border pt-5">
+                  <div className="grid grid-cols-[6rem_1fr] items-center gap-3">
+                    <label htmlFor="add-model-currency" className="text-sm text-foreground">
+                      {t('models.pricing.currency')}
+                    </label>
+                    <div className="flex">
+                      <div className="relative w-28">
+                        <select
+                          id="add-model-currency"
+                          value={addModelCurrency}
+                          onChange={(e) => setAddModelCurrency(e.target.value)}
+                          className="h-10 w-full appearance-none rounded-md border border-border bg-background px-3 pr-8 text-sm text-foreground outline-none focus:ring-1 focus:ring-ring"
+                        >
+                          <option value="$">$</option>
+                          <option value="¥">¥</option>
+                          <option value="€">€</option>
+                          <option value="£">£</option>
+                          <option value="₩">₩</option>
+                          <option value="₹">₹</option>
+                        </select>
+                        <ChevronDown
+                          size={14}
+                          className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-[6rem_1fr] items-center gap-3">
+                    <label htmlFor="add-model-input-price" className="text-sm text-foreground">
+                      {t('models.pricing.inputPrice')}
+                    </label>
+                    <div className="flex items-stretch">
+                      <input
+                        id="add-model-input-price"
+                        type="number"
+                        inputMode="decimal"
+                        min={0}
+                        step="0.01"
+                        value={addModelInputPrice}
+                        onChange={(e) => setAddModelInputPrice(e.target.value)}
+                        placeholder="0.00"
+                        className="h-10 w-40 rounded-l-md border border-r-0 border-border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+                      />
+                      <span className="inline-flex h-10 items-center rounded-r-md border border-border bg-muted px-3 text-xs text-muted-foreground">
+                        {addModelCurrency} {t('models.pricing.perMillionTokens')}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-[6rem_1fr] items-center gap-3">
+                    <label htmlFor="add-model-output-price" className="text-sm text-foreground">
+                      {t('models.pricing.outputPrice')}
+                    </label>
+                    <div className="flex items-stretch">
+                      <input
+                        id="add-model-output-price"
+                        type="number"
+                        inputMode="decimal"
+                        min={0}
+                        step="0.01"
+                        value={addModelOutputPrice}
+                        onChange={(e) => setAddModelOutputPrice(e.target.value)}
+                        placeholder="0.00"
+                        className="h-10 w-40 rounded-l-md border border-r-0 border-border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+                      />
+                      <span className="inline-flex h-10 items-center rounded-r-md border border-border bg-muted px-3 text-xs text-muted-foreground">
+                        {addModelCurrency} {t('models.pricing.perMillionTokens')}
+                      </span>
+                    </div>
                   </div>
                 </div>
               )}
@@ -4537,6 +4584,605 @@ function SecretFieldRow({ label, value, onChange }: { label: string; value: stri
   )
 }
 
+// ─── Search Section ─────────────────────────────────────────────────────────
+// 搜索服务配置：iFly Search / Tavily Search。采用与模型配置一致的
+// 左右两栏布局：左侧为搜索服务列表，右侧为所选服务的详情卡片。
+
+type SearchProviderKey = 'ifly' | 'tavily'
+
+const SEARCH_PROVIDER_KEYS: SearchProviderKey[] = ['ifly', 'tavily']
+
+const SEARCH_PROVIDER_LABELS: Record<SearchProviderKey, string> = {
+  ifly: 'iFly Search',
+  tavily: 'Tavily Search',
+}
+
+const SEARCH_PROVIDER_DOCS: Record<SearchProviderKey, string> = {
+  ifly: 'https://www.xfyun.cn/services/OneAPI',
+  tavily: 'https://app.tavily.com/home',
+}
+
+const SEARCH_PROVIDER_BG: Record<SearchProviderKey, string> = {
+  ifly: '#1A6BFF',
+  tavily: '#0F172A',
+}
+
+function SearchProviderLogo({ provider, size = 28 }: { provider: SearchProviderKey; size?: number }) {
+  const inner = Math.round(size * 0.62)
+  return (
+    <div
+      className="rounded-full flex items-center justify-center flex-shrink-0"
+      style={{ width: size, height: size, backgroundColor: SEARCH_PROVIDER_BG[provider] }}
+    >
+      {provider === 'ifly' ? (
+        <BrandMark brand="spark" size={inner} color="#FFFFFF" />
+      ) : (
+        <Search size={Math.round(size * 0.5)} color="#FFFFFF" strokeWidth={2.4} />
+      )}
+    </div>
+  )
+}
+
+// SearchProviderKey ↔ engine tool name. The engine's Tools Management
+// API keys tools by their yaml field name (`web_search` / `tavily_search`),
+// so we centralize the mapping here.
+const SEARCH_PROVIDER_TOOL_NAMES: Record<SearchProviderKey, string> = {
+  ifly: 'web_search',
+  tavily: 'tavily_search',
+}
+
+// iFly `web_search` config schema. api_key is the v2/search APIPassword
+// (used verbatim as `Authorization: Bearer <key>`); endpoint and rerank
+// flags are owned by the engine and not configurable from the UI.
+interface IflySearchConfig {
+  enabled?: boolean
+  api_key?: string
+  limit?: number
+}
+
+interface TavilySearchConfig {
+  enabled?: boolean
+  api_key?: string
+  max_results?: number
+}
+
+// Local mirror of the wire ToolEntry shape (kept in sync with
+// docs/api/tools-management-api.md §数据模型 and the global ambient
+// declaration in preload/index.d.ts). Inlined here because the global
+// `ToolEntry` interface lives behind an ES-module-style preload
+// declaration that the renderer's tsconfig doesn't pull into scope —
+// see the existing pattern for `ProviderInfo` etc.
+interface ToolEntryView {
+  name: string
+  registered_name: string
+  enabled: boolean
+  effective: boolean
+  config: Record<string, unknown>
+  credential_fields: string[]
+}
+
+function emptyToolEntry(name: string): ToolEntryView {
+  return {
+    name,
+    registered_name: '',
+    enabled: false,
+    effective: false,
+    config: {},
+    credential_fields: [],
+  }
+}
+
+function SearchSection() {
+  // Tools Management API is the source of truth for runtime state +
+  // hot-reload; we no longer write to engine.yaml directly via
+  // `useEngineConfig`. PATCH /api/v1/tools/{name} handles both the live
+  // registry swap and the yaml persistence atomically.
+  //
+  // Local edit buffer: the user types into `iflyDraft` / `tavilyDraft`
+  // and hits "Save" — at that point we PATCH the whole config block in
+  // one round-trip. Enable/disable toggle bypasses the draft and goes
+  // straight to the server so the user gets immediate feedback if
+  // credentials are missing (`invalid_config`).
+  const { t } = useTranslation()
+  const [tools, setTools] = useState<Record<string, ToolEntryView>>({})
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  const [selectedProvider, setSelectedProvider] = useState<SearchProviderKey>('ifly')
+  const [showIflyApiKey, setShowIflyApiKey] = useState(false)
+  const [showTavilyApiKey, setShowTavilyApiKey] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+
+  // Per-provider local edit buffers (un-saved). `null` means "in sync
+  // with server"; we never persist `null` — saving copies the merged
+  // config back to `tools` and resets the draft to `null`.
+  const [iflyDraft, setIflyDraft] = useState<IflySearchConfig | null>(null)
+  const [tavilyDraft, setTavilyDraft] = useState<TavilySearchConfig | null>(null)
+
+  // PATCH inflight per provider — disables Save / Toggle to avoid
+  // overlapping writes (engine serializes them anyway, but the UI
+  // should reflect that).
+  const [savingProvider, setSavingProvider] = useState<SearchProviderKey | null>(null)
+  const [togglingProvider, setTogglingProvider] = useState<SearchProviderKey | null>(null)
+
+  // NoticeToast supports `error | info | success` (NoticeTone). We map
+  // warning-class outcomes (e.g. "no changes to save") onto `info` so
+  // we don't widen NoticeTone just for one screen.
+  const [toastNotice, setToastNotice] = useState<{
+    tone: 'success' | 'info' | 'error'
+    message: string
+  } | null>(null)
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const showToast = useCallback((tone: 'success' | 'info' | 'error', message: string) => {
+    setToastNotice({ tone, message })
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    toastTimerRef.current = setTimeout(() => setToastNotice(null), 3200)
+  }, [])
+
+  // Initial load + retry hook. We don't poll — config rarely changes
+  // out from under the user; the system_notice modal's "去设置" CTA is
+  // the typical entry path, and we always render the freshest state on
+  // mount.
+  const refreshTools = useCallback(async () => {
+    setLoading(true)
+    setLoadError(null)
+    try {
+      const result = await window.agentApi.listTools()
+      if (result.ok) {
+        const map: Record<string, ToolEntryView> = {}
+        for (const entry of result.data.tools) map[entry.name] = entry as ToolEntryView
+        setTools(map)
+      } else {
+        setLoadError(result.message || result.error || t('settings.search.errors.loadFailed'))
+      }
+    } catch (error) {
+      setLoadError(String(error))
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshTools()
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    }
+  }, [refreshTools])
+
+  // Translate engine error codes (per tools-management-api.md §错误表)
+  // into Chinese guidance. Falls back to the raw message when we don't
+  // recognize the code.
+  const explainError = (code: string, message?: string): string => {
+    switch (code) {
+      case 'invalid_config':
+        return message || t('settings.search.errors.invalidConfig')
+      case 'not_found':
+        return t('settings.search.errors.notRegistered')
+      case 'hot_reload_failed':
+        return t('settings.search.errors.hotReloadFailed')
+      case 'persist_failed':
+        return t('settings.search.errors.persistFailed')
+      case 'registry_missing':
+        return t('settings.search.errors.registryMissing')
+      case 'bad_request':
+        return message || t('settings.search.errors.badRequest')
+      case 'network_error':
+        return t('settings.search.errors.networkError')
+      case 'timeout':
+        return t('settings.search.errors.timeout')
+      default:
+        return message || t('settings.search.errors.generic', { code })
+    }
+  }
+
+  // Server-side ToolEntry view, merged with the local draft when the
+  // user has un-saved edits. Reads from `tools` (the API snapshot) for
+  // the `enabled` / `effective` truth and lays the draft over `config`.
+  const iflyEntry = tools.web_search || emptyToolEntry('web_search')
+  const tavilyEntry = tools.tavily_search || emptyToolEntry('tavily_search')
+
+  const iflyConfig: IflySearchConfig = {
+    ...(iflyEntry.config as IflySearchConfig),
+    ...(iflyDraft || {}),
+  }
+  const tavilyConfig: TavilySearchConfig = {
+    ...(tavilyEntry.config as TavilySearchConfig),
+    ...(tavilyDraft || {}),
+  }
+
+  const updateIflyDraft = (patch: Partial<IflySearchConfig>) => {
+    setIflyDraft((prev) => ({ ...(prev || {}), ...patch }))
+  }
+
+  const updateTavilyDraft = (patch: Partial<TavilySearchConfig>) => {
+    setTavilyDraft((prev) => ({ ...(prev || {}), ...patch }))
+  }
+
+  // PATCH wrapper — `enabledOverride` lets the toggle send `enabled`
+  // explicitly even when the draft is empty; the Save button uses the
+  // current `tools[name].enabled` (no change to enabled state).
+  const patchProviderTool = async (
+    provider: SearchProviderKey,
+    body: { enabled?: boolean; config?: Record<string, unknown> },
+    inflightSetter: (p: SearchProviderKey | null) => void,
+  ): Promise<boolean> => {
+    inflightSetter(provider)
+    try {
+      const targetName = SEARCH_PROVIDER_TOOL_NAMES[provider]
+      const result = await window.agentApi.patchTool(targetName, body)
+      if (result.ok) {
+        setTools((prev) => ({ ...prev, [targetName]: result.data as ToolEntryView }))
+        return true
+      }
+      showToast('error', explainError(result.error, result.message))
+      return false
+    } catch (error) {
+      showToast('error', t('settings.search.errors.requestFailed', { detail: String(error) }))
+      return false
+    } finally {
+      inflightSetter(null)
+    }
+  }
+
+  // Helper — coerces the typed config draft into the API's flat record
+  // shape. The typed interface uses optional keys; we strip undefined
+  // before sending so the engine treats the field as "not provided" per
+  // its partial-update contract.
+  const draftToConfig = (
+    draft: IflySearchConfig | TavilySearchConfig | null,
+  ): Record<string, unknown> | undefined => {
+    if (!draft) return undefined
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(draft)) {
+      if (v !== undefined) out[k] = v
+    }
+    return Object.keys(out).length > 0 ? out : undefined
+  }
+
+  const handleToggleEnabled = async (provider: SearchProviderKey, checked: boolean) => {
+    // Merge any un-saved draft into the PATCH so the user doesn't lose
+    // half-typed credentials when flipping the toggle. If they only
+    // wanted to flip the switch and nothing else, both drafts are null
+    // and we send the enabled flag alone.
+    const draft = provider === 'ifly' ? iflyDraft : tavilyDraft
+    const body: { enabled: boolean; config?: Record<string, unknown> } = { enabled: checked }
+    const draftConfig = draftToConfig(draft)
+    if (draftConfig) body.config = draftConfig
+    const ok = await patchProviderTool(provider, body, setTogglingProvider)
+    if (ok) {
+      if (provider === 'ifly') setIflyDraft(null)
+      else setTavilyDraft(null)
+      showToast('success', checked ? t('settings.search.toast.enabled') : t('settings.search.toast.disabled'))
+    }
+  }
+
+  const handleSave = async (provider: SearchProviderKey) => {
+    const draft = provider === 'ifly' ? iflyDraft : tavilyDraft
+    const draftConfig = draftToConfig(draft)
+    if (!draftConfig) {
+      // Nothing changed — no-op, but acknowledge so the user gets
+      // feedback instead of a silent button click.
+      showToast('info', t('settings.search.toast.noChanges'))
+      return
+    }
+    const ok = await patchProviderTool(provider, { config: draftConfig }, setSavingProvider)
+    if (ok) {
+      if (provider === 'ifly') setIflyDraft(null)
+      else setTavilyDraft(null)
+      showToast('success', t('settings.search.toast.savedAndApplied'))
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 size={20} className="animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 py-20 text-sm">
+        <AlertTriangle size={20} className="text-amber-500" />
+        <p className="text-muted-foreground">{loadError}</p>
+        <button
+          type="button"
+          onClick={() => void refreshTools()}
+          className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+        >
+          <RefreshCw size={12} />
+          {t('settings.search.ui.reload')}
+        </button>
+      </div>
+    )
+  }
+
+  const providerKeys = SEARCH_PROVIDER_KEYS.filter((key) => {
+    if (!searchQuery) return true
+    const q = searchQuery.toLowerCase()
+    return key.toLowerCase().includes(q) || SEARCH_PROVIDER_LABELS[key].toLowerCase().includes(q)
+  })
+
+  const enabledMap: Record<SearchProviderKey, boolean> = {
+    ifly: iflyEntry.enabled,
+    tavily: tavilyEntry.enabled,
+  }
+  const effectiveMap: Record<SearchProviderKey, boolean> = {
+    ifly: iflyEntry.effective,
+    tavily: tavilyEntry.effective,
+  }
+  const dirtyMap: Record<SearchProviderKey, boolean> = {
+    ifly: !!iflyDraft && Object.keys(iflyDraft).length > 0,
+    tavily: !!tavilyDraft && Object.keys(tavilyDraft).length > 0,
+  }
+
+  return (
+    <div className="flex h-full">
+      <div className="w-56 flex-shrink-0 border-r border-border bg-card flex flex-col">
+        <div className="p-2.5">
+          <div className="relative">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder={t('settings.search.ui.searchPlaceholder')}
+              className="w-full h-8 pl-8 pr-3 text-sm bg-background border border-border rounded-lg outline-none focus:ring-1 focus:ring-ring transition-shadow text-foreground placeholder:text-muted-foreground"
+            />
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-1.5 pb-2">
+          {providerKeys.map((key) => {
+            const isActive = key === selectedProvider
+            const isEnabled = enabledMap[key]
+            return (
+              <button
+                key={key}
+                onClick={() => setSelectedProvider(key)}
+                className={cn(
+                  'w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors mb-0.5',
+                  isActive ? 'bg-accent text-foreground' : 'text-foreground hover:bg-accent/50'
+                )}
+              >
+                <SearchProviderLogo provider={key} size={28} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium">{SEARCH_PROVIDER_LABELS[key]}</span>
+                    {/*
+                      Surface the engine's `effective` (yaml enabled +
+                      credentials non-empty) and `enabled` (yaml flag
+                      alone) separately. `effective=true` is the strong
+                      signal — the tool is actually registered and
+                      callable in the LLM pool. `enabled=true` but
+                      `effective=false` means credentials are missing.
+                    */}
+                    {effectiveMap[key] ? (
+                      <span className="text-[10px] font-semibold text-status-connected bg-status-connected/15 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                        ON
+                      </span>
+                    ) : isEnabled ? (
+                      <span className="text-[10px] font-semibold text-amber-600 bg-amber-500/15 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                        {t('settings.search.ui.pendingConfig')}
+                      </span>
+                    ) : null}
+                    {dirtyMap[key] && (
+                      <span
+                        className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-sky-500"
+                        title={t('settings.search.ui.unsavedChanges')}
+                      />
+                    )}
+                  </div>
+                </div>
+              </button>
+            )
+          })}
+
+          {providerKeys.length === 0 && (
+            <div className="px-2 py-4">
+              <div className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground">
+                {t('settings.search.ui.noMatch')}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto">
+        <div className="px-8 py-6 max-w-[52rem] mx-auto w-full">
+          <div className="rounded-2xl border border-border bg-card shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-5 border-b border-border">
+              <div className="flex items-center gap-2.5">
+                <SearchProviderLogo provider={selectedProvider} size={28} />
+                <h2 className="text-lg font-semibold text-foreground">{SEARCH_PROVIDER_LABELS[selectedProvider]}</h2>
+                {/*
+                  Effectiveness pill — backed by ToolEntry.effective, not
+                  the local toggle. `effective=true` means the engine has
+                  the tool registered AND callable; if the user disabled
+                  it just now we still display the new state from the
+                  PATCH response.
+                */}
+                {effectiveMap[selectedProvider] ? (
+                  <span className="rounded-full bg-status-connected/15 px-2 py-0.5 text-[11px] font-medium text-status-connected">
+                    {t('settings.search.ui.effective')}
+                  </span>
+                ) : enabledMap[selectedProvider] ? (
+                  <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-600">
+                    {t('settings.search.ui.pendingConfig')}
+                  </span>
+                ) : (
+                  <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                    {t('settings.search.ui.notEnabled')}
+                  </span>
+                )}
+                {SEARCH_PROVIDER_DOCS[selectedProvider] && (
+                  <button
+                    type="button"
+                    onClick={() => window.appRuntime?.openExternal?.(SEARCH_PROVIDER_DOCS[selectedProvider])}
+                    className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+                    title={t('settings.search.ui.visitWebsite')}
+                  >
+                    <ExternalLink size={14} />
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
+                {/*
+                  Save button — PATCHes only the local draft (omitting
+                  `enabled`), engine hot-swaps the registry, and the
+                  yaml is rewritten atomically. Disabled when there are
+                  no pending edits OR another PATCH is in flight.
+                */}
+                <button
+                  type="button"
+                  onClick={() => void handleSave(selectedProvider)}
+                  disabled={
+                    !dirtyMap[selectedProvider]
+                    || savingProvider === selectedProvider
+                    || togglingProvider === selectedProvider
+                  }
+                  className={cn(
+                    'inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-medium transition-colors',
+                    dirtyMap[selectedProvider]
+                      ? 'bg-foreground text-background hover:opacity-90 dark:bg-primary dark:text-primary-foreground'
+                      : 'cursor-not-allowed bg-muted text-muted-foreground',
+                  )}
+                >
+                  {savingProvider === selectedProvider ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin" />
+                      {t('settings.search.ui.saving')}
+                    </>
+                  ) : (
+                    <>
+                      <Check size={14} />
+                      {t('settings.search.ui.save')}
+                    </>
+                  )}
+                </button>
+                <Toggle
+                  checked={enabledMap[selectedProvider]}
+                  onChange={(v) => void handleToggleEnabled(selectedProvider, v)}
+                />
+              </div>
+            </div>
+
+            <div className="px-6 py-5 space-y-6">
+              {selectedProvider === 'ifly' ? (
+                <>
+                  <div>
+                    <p className="text-sm font-semibold text-foreground mb-2">API Key</p>
+                    <div className="relative">
+                      <input
+                        type={showIflyApiKey ? 'text' : 'password'}
+                        value={iflyConfig.api_key || ''}
+                        onChange={(e) => updateIflyDraft({ api_key: e.target.value })}
+                        placeholder={t('settings.search.fields.apiKeyPlaceholder')}
+                        className="h-10 w-full rounded-md border border-border bg-background pl-3 pr-10 text-sm text-foreground outline-none transition-shadow placeholder:text-muted-foreground focus:ring-1 focus:ring-ring font-mono"
+                      />
+                      <button
+                        onClick={() => setShowIflyApiKey(!showIflyApiKey)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+                      >
+                        {showIflyApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                      </button>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between text-xs">
+                      <button
+                        type="button"
+                        onClick={() => window.appRuntime?.openExternal?.('https://console.xfyun.cn/services/aggSearch')}
+                        className="text-sky-500 hover:text-sky-600 hover:underline"
+                      >
+                        {t('settings.search.fields.getKeyHere')}
+                      </button>
+                      <span className="text-muted-foreground">{t('settings.search.fields.iflyConsoleHint')}</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-foreground">Limit</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">{t('settings.search.fields.maxResultsDesc')}</p>
+                      </div>
+                      <NumberInput
+                        value={iflyConfig.limit ?? 5}
+                        onChange={(v) => updateIflyDraft({ limit: v })}
+                        min={1}
+                        max={20}
+                      />
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <p className="text-sm font-semibold text-foreground mb-2">API Key</p>
+                    <div className="relative">
+                      <input
+                        type={showTavilyApiKey ? 'text' : 'password'}
+                        value={tavilyConfig.api_key || ''}
+                        onChange={(e) => updateTavilyDraft({ api_key: e.target.value })}
+                        placeholder="tvly-xxx"
+                        className="h-10 w-full rounded-md border border-border bg-background pl-3 pr-10 text-sm text-foreground outline-none transition-shadow placeholder:text-muted-foreground focus:ring-1 focus:ring-ring font-mono"
+                      />
+                      <button
+                        onClick={() => setShowTavilyApiKey(!showTavilyApiKey)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+                      >
+                        {showTavilyApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                      </button>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between text-xs">
+                      <button
+                        type="button"
+                        onClick={() => window.appRuntime?.openExternal?.('https://app.tavily.com/home')}
+                        className="text-sky-500 hover:text-sky-600 hover:underline"
+                      >
+                        {t('settings.search.fields.getKeyHere')}
+                      </button>
+                      <span className="text-muted-foreground">{t('settings.search.fields.tavilyConsoleHint')}</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-foreground">{t('settings.search.fields.maxResults')}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">{t('settings.search.fields.tavilyMaxResultsDesc')}</p>
+                      </div>
+                      <NumberInput
+                        value={tavilyConfig.max_results ?? 5}
+                        onChange={(v) => updateTavilyDraft({ max_results: v })}
+                        min={1}
+                        max={20}
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+      {/*
+        Toast for hot-reload feedback. The engine error codes
+        (invalid_config / hot_reload_failed / persist_failed / ...) are
+        translated by `explainError` into actionable Chinese guidance.
+      */}
+      {toastNotice && (
+        <NoticeToast
+          tone={toastNotice.tone}
+          message={toastNotice.message}
+          position="top"
+          anchor="viewport"
+        />
+      )}
+    </div>
+  )
+}
+
 // ─── Tools Section ──────────────────────────────────────────────────────────
 
 function ToolsSection() {
@@ -4544,36 +5190,10 @@ function ToolsSection() {
   const { config, loading, updateConfig } = useEngineConfig()
 
   const tools = (config?.tools || {}) as Record<string, unknown>
-  const iflySearch = (tools.web_search || {}) as {
-    enabled?: boolean
-    api_key?: string
-    api_secret?: string
-    app_id?: string
-    host?: string
-    path?: string
-    limit?: number
-  }
-  const tavilySearch = (tools.tavily_search || {}) as {
-    enabled?: boolean
-    api_key?: string
-    max_results?: number
-  }
   const exec = (tools.exec || {}) as { timeout?: number; pathAppend?: string }
   const restrictToWorkspace = (tools.restrictToWorkspace as boolean) ?? false
   const mcpServers = (tools.mcpServers || {}) as Record<string, unknown>
   const mcpCount = Object.keys(mcpServers).length
-
-  const [showIflyApiKey, setShowIflyApiKey] = useState(false)
-  const [showIflyApiSecret, setShowIflyApiSecret] = useState(false)
-  const [showTavilyApiKey, setShowTavilyApiKey] = useState(false)
-
-  const updateIflySearch = (patch: Record<string, unknown>) => {
-    updateConfig({ tools: { ...tools, web_search: { ...iflySearch, ...patch } } })
-  }
-
-  const updateTavilySearch = (patch: Record<string, unknown>) => {
-    updateConfig({ tools: { ...tools, tavily_search: { ...tavilySearch, ...patch } } })
-  }
 
   const updateExec = (patch: Record<string, unknown>) => {
     updateConfig({ tools: { ...tools, exec: { ...exec, ...patch } } })
@@ -4585,129 +5205,29 @@ function ToolsSection() {
 
   return (
     <div>
-      <SectionHeader icon={Wrench} title={t('tools.title')} subtitle={t('tools.subtitle')} />
+      <SectionHeader icon={Wrench} title={t('settings.tools.title')} subtitle={t('settings.tools.subtitle')} />
 
-      <GroupCard title="iFly Search">
-        <SettingRow label={t('tools.iflySearch.label')} description={t('tools.iflySearch.desc')}>
-          <Toggle checked={iflySearch.enabled === true} onChange={(v) => updateIflySearch({ enabled: v })} />
-        </SettingRow>
-        <SettingRow label={t('tools.iflySearch.apiKey')} description={t('tools.iflySearch.apiKey') + " (API Key)"}>
-          <div className="flex items-center gap-1.5">
-            <input
-              type={showIflyApiKey ? 'text' : 'password'}
-              value={iflySearch.api_key || ''}
-              onChange={(e) => updateIflySearch({ api_key: e.target.value })}
-              placeholder={t('tools.iflySearch.apiKey')}
-              className="w-52 h-7 px-2.5 text-sm bg-background border border-border rounded-md outline-none focus:ring-1 focus:ring-ring transition-shadow text-foreground font-mono"
-            />
-            <button onClick={() => setShowIflyApiKey(!showIflyApiKey)} className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors">
-              {showIflyApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
-            </button>
-          </div>
-        </SettingRow>
-        <SettingRow label={t('tools.iflySearch.apiSecret')} description={t('tools.iflySearch.apiSecret') + " (API Secret)"}>
-          <div className="flex items-center gap-1.5">
-            <input
-              type={showIflyApiSecret ? 'text' : 'password'}
-              value={iflySearch.api_secret || ''}
-              onChange={(e) => updateIflySearch({ api_secret: e.target.value })}
-              placeholder={t('tools.iflySearch.apiSecret')}
-              className="w-52 h-7 px-2.5 text-sm bg-background border border-border rounded-md outline-none focus:ring-1 focus:ring-ring transition-shadow text-foreground font-mono"
-            />
-            <button onClick={() => setShowIflyApiSecret(!showIflyApiSecret)} className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors">
-              {showIflyApiSecret ? <EyeOff size={14} /> : <Eye size={14} />}
-            </button>
-          </div>
-        </SettingRow>
-        <SettingRow label={t('tools.iflySearch.appId')} description={t('tools.iflySearch.appId') + " (App ID)"}>
-          <TextInput value={iflySearch.app_id || ''} onChange={(v) => updateIflySearch({ app_id: v })} placeholder={t('tools.iflySearch.appId')} className="w-52" mono />
-        </SettingRow>
-        <SettingRow label={t('tools.iflySearch.host')} description={t('tools.iflySearch.hostDesc')}>
-          <TextInput
-            value={iflySearch.host || 'cbm-search-api.cn-huabei-1.xf-yun.com'}
-            onChange={(v) => updateIflySearch({ host: v })}
-            placeholder="cbm-search-api.cn-huabei-1.xf-yun.com"
-            className="w-72"
-            mono
-          />
-        </SettingRow>
-        <SettingRow label={t('tools.iflySearch.path')} description={t('tools.iflySearch.pathDesc')}>
-          <TextInput
-            value={iflySearch.path || '/biz/search'}
-            onChange={(v) => updateIflySearch({ path: v })}
-            placeholder="/biz/search"
-            className="w-52"
-            mono
-          />
-        </SettingRow>
-        <SettingRow label={t('tools.iflySearch.limit')} description={t('tools.iflySearch.limitDesc')}>
-          <NumberInput
-            value={iflySearch.limit ?? 5}
-            onChange={(v) => updateIflySearch({ limit: v })}
-            min={1}
-            max={20}
-          />
-        </SettingRow>
-      </GroupCard>
-
-      <GroupCard title="Tavily Search">
-        <SettingRow label={t('tools.tavilySearch.label')} description={t('tools.tavilySearch.desc')}>
-          <Toggle checked={tavilySearch.enabled === true} onChange={(v) => updateTavilySearch({ enabled: v })} />
-        </SettingRow>
-        <SettingRow label={t('tools.tavilySearch.apiKey')} description={t('tools.tavilySearch.apiKey') + " (API Key)"}>
-          <div className="flex items-center gap-1.5">
-            <input
-              type={showTavilyApiKey ? 'text' : 'password'}
-              value={tavilySearch.api_key || ''}
-              onChange={(e) => updateTavilySearch({ api_key: e.target.value })}
-              placeholder="tvly-xxx"
-              className="w-52 h-7 px-2.5 text-sm bg-background border border-border rounded-md outline-none focus:ring-1 focus:ring-ring transition-shadow text-foreground font-mono"
-            />
-            <button onClick={() => setShowTavilyApiKey(!showTavilyApiKey)} className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors">
-              {showTavilyApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
-            </button>
-            <button
-              type="button"
-              onClick={() => window.open('https://app.tavily.com/home', '_blank', 'noopener,noreferrer')}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:text-foreground hover:border-foreground/20"
-              title={t('tools.tavilySearch.console')}
-              aria-label={t('tools.tavilySearch.console')}
-            >
-              <ExternalLink size={12} />
-            </button>
-          </div>
-        </SettingRow>
-        <SettingRow label={t('tools.tavilySearch.limit')} description={t('tools.tavilySearch.limitDesc')}>
-          <NumberInput
-            value={tavilySearch.max_results ?? 5}
-            onChange={(v) => updateTavilySearch({ max_results: v })}
-            min={1}
-            max={20}
-          />
-        </SettingRow>
-      </GroupCard>
-
-      <GroupCard title={t('tools.exec.title')}>
-        <SettingRow label={t('tools.exec.timeout')} description={t('tools.exec.timeoutDesc')}>
+      <GroupCard title={t('settings.tools.exec.title')}>
+        <SettingRow label={t('settings.tools.exec.timeout')} description={t('settings.tools.exec.timeoutDesc')}>
           <NumberInput value={exec.timeout ?? 60} onChange={(v) => updateExec({ timeout: v })} suffix={t('common.seconds')} min={5} max={600} />
         </SettingRow>
-        <SettingRow label={t('tools.exec.pathAppend')} description={t('tools.exec.pathAppendDesc')}>
+        <SettingRow label={t('settings.tools.exec.pathAppend')} description={t('settings.tools.exec.pathAppendDesc')}>
           <TextInput value={exec.pathAppend || ''} onChange={(v) => updateExec({ pathAppend: v })} placeholder="/usr/local/bin" className="w-52" mono />
         </SettingRow>
-        <SettingRow label={t('tools.exec.restrictWorkspace')} description={t('tools.exec.restrictWorkspaceDesc')}>
+        <SettingRow label={t('settings.tools.exec.restrictWorkspace')} description={t('settings.tools.exec.restrictWorkspaceDesc')}>
           <Toggle checked={restrictToWorkspace} onChange={(v) => updateConfig({ tools: { ...tools, restrictToWorkspace: v } })} />
         </SettingRow>
       </GroupCard>
 
-      <GroupCard title={t('tools.mcp.title')}>
+      <GroupCard title={t('settings.tools.mcp.title')}>
         <div className="py-4">
           {mcpCount === 0 ? (
             <div className="flex items-center justify-center py-6 border border-dashed border-border rounded-lg">
-              <p className="text-xs text-muted-foreground">{t('tools.mcp.noServers')}</p>
+              <p className="text-xs text-muted-foreground">{t('settings.tools.mcp.noServers')}</p>
             </div>
           ) : (
             <div className="text-sm text-muted-foreground">
-              {t('tools.mcp.configured', { count: mcpCount })}
+              {t('settings.tools.mcp.configured', { count: mcpCount })}
             </div>
           )}
         </div>
@@ -5261,15 +5781,15 @@ function LogsSection() {
   const handleOpenLogsDirectory = async () => {
     const result = await window.appRuntime.openLogsDirectory()
     setNotice(result.ok
-      ? { ok: true, text: t('logs.notices.openDirSuccess', { path: result.path }) }
-      : { ok: false, text: result.error || t('logs.notices.openDirFailed') })
+      ? { ok: true, text: t('settings.logs.notices.openDirSuccess', { path: result.path }) }
+      : { ok: false, text: result.error || t('settings.logs.notices.openDirFailed') })
   }
 
   const handleExportLogs = async () => {
     const result = await window.appRuntime.exportData('logs')
     setNotice(result.ok && result.path
-      ? { ok: true, text: t('logs.notices.exportSuccess', { path: result.path }) }
-      : { ok: false, text: result.error || t('logs.notices.exportFailed') })
+      ? { ok: true, text: t('settings.logs.notices.exportSuccess', { path: result.path }) }
+      : { ok: false, text: result.error || t('settings.logs.notices.exportFailed') })
   }
 
   if (loading) {
@@ -5279,7 +5799,7 @@ function LogsSection() {
   return (
     <div className="h-full overflow-hidden">
       <div className="h-full max-w-5xl mx-auto px-8 py-8 flex flex-col">
-        <SectionHeader icon={FileText} title={t('logs.title')} subtitle={t('logs.subtitle')} />
+        <SectionHeader icon={FileText} title={t('settings.logs.title')} subtitle={t('settings.logs.subtitle')} />
 
         <div className="rounded-2xl border border-border bg-card shadow-sm p-4 mb-5">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
@@ -5290,7 +5810,7 @@ function LogsSection() {
                   type="text"
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
-                  placeholder={t('logs.searchPlaceholder')}
+                  placeholder={t('settings.logs.searchPlaceholder')}
                   className="w-full h-10 pl-9 pr-3 rounded-xl border border-border bg-background text-sm text-foreground outline-none focus:ring-1 focus:ring-ring"
                 />
               </div>
@@ -5299,20 +5819,20 @@ function LogsSection() {
             <div className="flex flex-wrap items-center gap-2">
               <Segment
                 options={[
-                  { label: t('logs.levels.fatal'), value: 'fatal' },
-                  { label: t('logs.levels.error'), value: 'error' },
-                  { label: t('logs.levels.warn'), value: 'warn' },
-                  { label: t('logs.levels.info'), value: 'info' },
-                  { label: t('logs.levels.debug'), value: 'debug' },
-                  { label: t('logs.levels.trace'), value: 'trace' },
+                  { label: t('settings.logs.levels.fatal'), value: 'fatal' },
+                  { label: t('settings.logs.levels.error'), value: 'error' },
+                  { label: t('settings.logs.levels.warn'), value: 'warn' },
+                  { label: t('settings.logs.levels.info'), value: 'info' },
+                  { label: t('settings.logs.levels.debug'), value: 'debug' },
+                  { label: t('settings.logs.levels.trace'), value: 'trace' },
                 ]}
                 value={selectedLevel}
                 onChange={handleLevelChange}
               />
               <Segment
                 options={[
-                  { label: t('logs.viewModes.parsed'), value: 'parsed' },
-                  { label: t('logs.viewModes.raw'), value: 'raw' },
+                  { label: t('settings.logs.viewModes.parsed'), value: 'parsed' },
+                  { label: t('settings.logs.viewModes.raw'), value: 'raw' },
                 ]}
                 value={viewMode}
                 onChange={(value) => setViewMode(value as LogViewerMode)}
@@ -5327,9 +5847,9 @@ function LogsSection() {
                 followMode ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'
               )}>
                 <span className={cn('w-2 h-2 rounded-full', followMode ? 'bg-emerald-500' : 'bg-amber-500')} />
-                {followMode ? t('logs.followModeOn') : t('logs.followModeOff')}
+                {followMode ? t('settings.logs.followModeOn') : t('settings.logs.followModeOff')}
               </span>
-              <span>{t('logs.directoryLabel', { path: defaultLogsDisplayPath })}</span>
+              <span>{t('settings.logs.directoryLabel', { path: defaultLogsDisplayPath })}</span>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -5338,28 +5858,28 @@ function LogsSection() {
                 className="h-9 px-3 rounded-lg border border-border bg-card hover:bg-muted transition-colors text-sm text-foreground flex items-center gap-1.5"
               >
                 {followMode ? <Pause size={14} /> : <Play size={14} />}
-                {followMode ? t('logs.followModeOff') : t('logs.followModeOn')}
+                {followMode ? t('settings.logs.followModeOff') : t('settings.logs.followModeOn')}
               </button>
               <button
                 onClick={handleReset}
                 className="h-9 px-3 rounded-lg border border-border bg-card hover:bg-muted transition-colors text-sm text-foreground flex items-center gap-1.5"
               >
                 <RotateCcw size={14} />
-                {t('logs.reset')}
+                {t('settings.logs.reset')}
               </button>
               <button
                 onClick={() => void handleOpenLogsDirectory()}
                 className="h-9 px-3 rounded-lg border border-border bg-card hover:bg-muted transition-colors text-sm text-foreground flex items-center gap-1.5"
               >
                 <FolderOpen size={14} />
-                {t('logs.openDirectory')}
+                {t('settings.logs.openDirectory')}
               </button>
               <button
                 onClick={() => void handleExportLogs()}
                 className="h-9 px-3 rounded-lg bg-foreground text-background hover:bg-foreground/90 transition-colors text-sm font-medium flex items-center gap-1.5"
               >
                 <Download size={14} />
-                {t('logs.exportLogs')}
+                {t('settings.logs.exportLogs')}
               </button>
             </div>
           </div>
@@ -5390,7 +5910,7 @@ function LogsSection() {
         <div className="flex-1 min-h-0 rounded-2xl border border-border bg-card shadow-sm overflow-hidden flex flex-col">
           <div className="flex items-center justify-between px-4 py-3 border-b border-border flex-shrink-0">
             <div>
-              <p className="text-sm font-semibold text-foreground">{t('logs.title')}</p>
+              <p className="text-sm font-semibold text-foreground">{t('settings.logs.title')}</p>
             </div>
             {(loadingLogs || (followMode && entries.length === 0)) && (
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -5405,7 +5925,7 @@ function LogsSection() {
               <div className="flex flex-col items-center justify-center py-16 text-center px-6">
                 <FileText size={28} className="text-muted-foreground mb-3" />
                 <p className="text-sm font-medium text-foreground">
-                  {query.trim() ? t('logs.searchPlaceholder') : t('logs.title')}
+                  {query.trim() ? t('settings.logs.searchPlaceholder') : t('settings.logs.title')}
                 </p>
               </div>
             ) : viewMode === 'raw' ? (
@@ -5477,6 +5997,280 @@ function LogsSection() {
   )
 }
 
+// ─── Quick-launcher hotkey capture ─────────────────────────────────────────
+//
+// `HotkeyInput` is a click-to-record hotkey field used by the
+// 快捷助手 settings card. Clicking the chip enters capture mode; the
+// next key combo with at least one modifier is converted to an
+// Electron accelerator string (e.g. `"Alt+Space"`) and surfaced via
+// `onChange`. Escape cancels without changing the value.
+//
+// Visual style mirrors the reference screenshot — modifier symbols
+// (⌃⌥⇧⌘ on macOS) followed by the main key, rendered as inline glyphs
+// inside a rounded border. While recording, a `Keyboard` icon
+// floats on the right of the chip as a "press a combination" hint.
+
+const IS_MAC = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)
+
+const MODIFIER_SYMBOLS: Record<string, string> = {
+  Control: '⌃',
+  Ctrl: '⌃',
+  Alt: IS_MAC ? '⌥' : 'Alt',
+  Option: '⌥',
+  Shift: '⇧',
+  Meta: '⌘',
+  Command: '⌘',
+  Cmd: '⌘',
+  CommandOrControl: IS_MAC ? '⌘' : 'Ctrl',
+  CmdOrCtrl: IS_MAC ? '⌘' : 'Ctrl',
+  Super: IS_MAC ? '⌘' : 'Win',
+}
+
+const KEY_SYMBOLS: Record<string, string> = {
+  Return: '↩',
+  Enter: '↩',
+  Tab: '⇥',
+  Backspace: '⌫',
+  Delete: '⌦',
+  Escape: 'Esc',
+  Up: '↑',
+  Down: '↓',
+  Left: '←',
+  Right: '→',
+  PageUp: 'PgUp',
+  PageDown: 'PgDn',
+  Home: 'Home',
+  End: 'End',
+  Space: 'Space',
+}
+
+const MODIFIER_ORDER = ['Control', 'Ctrl', 'Alt', 'Option', 'Shift', 'Meta', 'Command', 'Cmd', 'CommandOrControl', 'CmdOrCtrl', 'Super']
+
+function isModifierToken(token: string): boolean {
+  return MODIFIER_ORDER.includes(token)
+}
+
+/** Parse `"Alt+Shift+K"` → `{ modifiers: ['Alt','Shift'], key: 'K' }`. */
+function parseAccelerator(accel: string): { modifiers: string[]; key: string } {
+  if (!accel) return { modifiers: [], key: '' }
+  const parts = accel.split('+').map((p) => p.trim()).filter(Boolean)
+  const modifiers: string[] = []
+  let key = ''
+  for (const part of parts) {
+    if (isModifierToken(part)) modifiers.push(part)
+    else key = part
+  }
+  return { modifiers, key }
+}
+
+/** Convert a DOM KeyboardEvent into an Electron-compatible accelerator. */
+function eventToAccelerator(event: KeyboardEvent): string | null {
+  // Skip lone modifier presses — we wait until the user pairs at
+  // least one modifier with a non-modifier key.
+  if (['Control', 'Shift', 'Alt', 'Meta'].includes(event.key)) return null
+
+  const modifiers: string[] = []
+  if (event.metaKey) modifiers.push('Command')
+  if (event.ctrlKey) modifiers.push('Control')
+  if (event.altKey) modifiers.push('Alt')
+  if (event.shiftKey) modifiers.push('Shift')
+
+  let key: string | null = null
+  const k = event.key
+  if (k === ' ' || event.code === 'Space') key = 'Space'
+  else if (k === 'ArrowUp') key = 'Up'
+  else if (k === 'ArrowDown') key = 'Down'
+  else if (k === 'ArrowLeft') key = 'Left'
+  else if (k === 'ArrowRight') key = 'Right'
+  else if (k === 'Enter') key = 'Return'
+  else if (k === 'Tab') key = 'Tab'
+  else if (k === 'Backspace') key = 'Backspace'
+  else if (k === 'Delete') key = 'Delete'
+  else if (/^F\d{1,2}$/.test(k)) key = k
+  else if (k.length === 1) key = k.toUpperCase()
+
+  if (!key) return null
+  // Require at least one modifier — bare single keys would conflict
+  // with normal typing once registered as a global accelerator.
+  if (modifiers.length === 0) return null
+  return [...modifiers, key].join('+')
+}
+
+function renderToken(token: string, dim: boolean): React.ReactNode {
+  const sym = MODIFIER_SYMBOLS[token] || KEY_SYMBOLS[token] || token
+  return (
+    <span
+      key={token}
+      className={cn(
+        'inline-flex items-center justify-center text-[15px] font-semibold leading-none transition-colors',
+        dim ? 'text-muted-foreground/40' : 'text-primary',
+      )}
+    >
+      {sym}
+    </span>
+  )
+}
+
+// Canonical modifier slots shown inside every HotkeyInput. We always
+// render all four so the user can see at a glance which modifiers are
+// part of the current hotkey (highlighted) vs available but unused
+// (dimmed). Matches the Alfred-style affordance in the design
+// reference. Order follows the macOS convention (⌃⌥⇧⌘); on
+// Windows / Linux the symbols fall back to their text labels via the
+// MODIFIER_SYMBOLS table.
+const MODIFIER_SLOTS: Array<{ token: string; matches: (mods: string[]) => boolean }> = [
+  { token: 'Control', matches: (m) => m.includes('Control') || m.includes('Ctrl') },
+  { token: 'Alt',     matches: (m) => m.includes('Alt') || m.includes('Option') },
+  { token: 'Shift',   matches: (m) => m.includes('Shift') },
+  { token: 'Command', matches: (m) => m.includes('Command') || m.includes('Cmd') || m.includes('Meta') || m.includes('CommandOrControl') || m.includes('CmdOrCtrl') || m.includes('Super') },
+]
+
+function HotkeyInput({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string
+  onChange: (next: string) => void
+  disabled?: boolean
+}) {
+  const { t } = useTranslation()
+  const [capturing, setCapturing] = useState(false)
+  const ref = useRef<HTMLButtonElement | null>(null)
+  const { modifiers, key } = parseAccelerator(value)
+
+  useEffect(() => {
+    if (!capturing) return
+    const onKey = (event: KeyboardEvent) => {
+      // Swallow the combo so it doesn't trigger app-level shortcuts
+      // (e.g. Cmd+, opens Settings) while the user is recording.
+      event.preventDefault()
+      event.stopPropagation()
+      if (event.key === 'Escape') {
+        setCapturing(false)
+        return
+      }
+      const accel = eventToAccelerator(event)
+      if (!accel) return
+      onChange(accel)
+      setCapturing(false)
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) {
+        setCapturing(false)
+      }
+    }
+    window.addEventListener('keydown', onKey, { capture: true })
+    window.addEventListener('pointerdown', onPointerDown)
+    return () => {
+      window.removeEventListener('keydown', onKey, { capture: true })
+      window.removeEventListener('pointerdown', onPointerDown)
+    }
+  }, [capturing, onChange])
+
+  return (
+    <button
+      ref={ref}
+      type="button"
+      disabled={disabled}
+      onClick={(e) => {
+        e.stopPropagation()
+        if (disabled) return
+        setCapturing(true)
+      }}
+      aria-pressed={capturing}
+      aria-label={capturing
+        ? t('settings.launcher.hotkey.capturingAria')
+        : t('settings.launcher.hotkey.idleAria', { value: value || t('settings.launcher.hotkey.unset') })}
+      className={cn(
+        'relative inline-flex min-w-[180px] items-center gap-1.5 rounded-[8px] border px-3 py-1.5 text-left transition-colors',
+        'bg-card text-foreground',
+        capturing
+          ? 'border-primary ring-2 ring-primary/20'
+          : 'border-border hover:border-primary/40',
+        disabled && 'cursor-not-allowed opacity-50',
+      )}
+    >
+      <span className="flex items-center gap-1.5">
+        {/* Always render the four modifier slots so the user can see
+            which modifiers are part of the current hotkey (lit) vs
+            available but unused (dimmed). Matching is order-insensitive
+            so e.g. `"Shift+Alt+K"` correctly highlights ⌥ + ⇧. */}
+        {MODIFIER_SLOTS.map(({ token, matches }) => renderToken(token, !matches(modifiers)))}
+        <span className="mx-1 inline-block h-3 w-px bg-border" aria-hidden="true" />
+        {key
+          ? renderToken(key, false)
+          : (
+            <span className="text-[12px] text-muted-foreground/70">
+              {capturing ? t('settings.launcher.hotkey.pressKeys') : '—'}
+            </span>
+          )
+        }
+      </span>
+      <span className="ml-auto flex items-center pl-2">
+        {capturing ? (
+          <Keyboard size={14} className="animate-pulse text-primary" aria-hidden="true" />
+        ) : (
+          <Keyboard size={14} className="text-muted-foreground/50" aria-hidden="true" />
+        )}
+      </span>
+    </button>
+  )
+}
+
+// ─── Launcher Section ──────────────────────────────────────────────────────
+//
+// Standalone settings page for the Alfred-style quick launcher.
+// Owns `launcher.enabled` + `launcher.hotkey` in `harnessclaw.json`.
+// The main process re-applies these on every config save so toggling
+// the switch or rebinding the hotkey takes effect without a restart.
+
+function LauncherSection() {
+  const { t } = useTranslation()
+  const { config, loading, updateConfig } = useAppConfig()
+  const launcher = (config?.launcher || {}) as { enabled?: boolean; hotkey?: string }
+  const launcherEnabled = launcher.enabled !== false
+  const launcherHotkey = typeof launcher.hotkey === 'string' && launcher.hotkey.trim().length > 0
+    ? launcher.hotkey.trim()
+    : 'Alt+Space'
+
+  const handleEnabledChange = (next: boolean) => {
+    updateConfig({ launcher: { ...launcher, enabled: next, hotkey: launcherHotkey } })
+  }
+
+  const handleHotkeyChange = (next: string) => {
+    updateConfig({ launcher: { ...launcher, enabled: launcherEnabled, hotkey: next } })
+  }
+
+  if (loading) {
+    return <div className="flex items-center justify-center py-20"><Loader2 size={20} className="animate-spin text-muted-foreground" /></div>
+  }
+
+  return (
+    <div>
+      <SectionHeader icon={Keyboard} title={t('settings.launcher.header.title')} subtitle={t('settings.launcher.header.subtitle')} />
+      <GroupCard title={t('settings.launcher.group.basic')}>
+        <SettingRow
+          label={t('settings.launcher.enabled.label')}
+          description={t('settings.launcher.enabled.desc')}
+        >
+          <Toggle checked={launcherEnabled} onChange={handleEnabledChange} />
+        </SettingRow>
+        <SettingRow
+          label={t('settings.launcher.hotkey.label')}
+          description={t('settings.launcher.hotkey.desc')}
+        >
+          <HotkeyInput
+            value={launcherHotkey}
+            onChange={handleHotkeyChange}
+            disabled={!launcherEnabled}
+          />
+        </SettingRow>
+      </GroupCard>
+    </div>
+  )
+}
+
 // ─── Software Section ──────────────────────────────────────────────────────
 
 function SoftwareSection() {
@@ -5544,9 +6338,9 @@ function SoftwareSection() {
 
 // ─── Nav ───────────────────────────────────────────────────────────────────
 
-type SectionKey = 'connection' | 'auth' | 'models' | 'agents' | 'channels' | 'tools' | 'ui' | 'storage' | 'logs' | 'updates' | 'software'
+type SectionKey = 'connection' | 'auth' | 'models' | 'agents' | 'channels' | 'search' | 'tools' | 'ui' | 'storage' | 'logs' | 'updates' | 'software' | 'launcher'
 
-const FULL_WIDTH_SECTIONS = new Set<SectionKey>(['models', 'logs'])
+const FULL_WIDTH_SECTIONS = new Set<SectionKey>(['models', 'search', 'logs'])
 
 export function SettingsPage() {
   const { t } = useTranslation()
@@ -5567,6 +6361,7 @@ export function SettingsPage() {
         { key: 'connection', icon: Wifi, label: t('settings.nav.connection') },
         { key: 'models', icon: Cpu, label: t('settings.nav.models') },
         { key: 'agents', icon: Bot, label: t('settings.nav.agents') },
+        { key: 'search', icon: Search, label: t('settings.nav.search') },
         { key: 'tools', icon: Wrench, label: t('settings.nav.tools') },
       ],
     },
@@ -5574,6 +6369,7 @@ export function SettingsPage() {
       title: t('settings.nav.appConfig'),
       items: [
         { key: 'software', icon: SlidersHorizontal, label: t('settings.nav.software') },
+        { key: 'launcher', icon: Keyboard, label: t('settings.nav.launcher') },
         { key: 'logs', icon: FileText, label: t('settings.nav.logs') },
         { key: 'ui', icon: Palette, label: t('settings.nav.ui') },
         { key: 'storage', icon: HardDrive, label: t('settings.nav.storage') },
@@ -5631,6 +6427,7 @@ export function SettingsPage() {
         {FULL_WIDTH_SECTIONS.has(active) ? (
           <>
             {active === 'models' && <ModelSection onNavigateToAgents={handleNavigateToAgents} />}
+            {active === 'search' && <SearchSection />}
             {active === 'logs' && <LogsSection />}
           </>
         ) : (
@@ -5645,6 +6442,7 @@ export function SettingsPage() {
             {active === 'tools' && <ToolsSection />}
             {active === 'updates' && <UpdateSection />}
             {active === 'software' && <SoftwareSection />}
+            {active === 'launcher' && <LauncherSection />}
             {active === 'ui' && <UISection />}
             {active === 'storage' && <StorageSection />}
           </div>

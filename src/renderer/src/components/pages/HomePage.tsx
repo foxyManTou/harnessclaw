@@ -14,6 +14,8 @@ import {
   type SelectedSkillChip,
 } from '../common/SkillComposerInput'
 import { PastedBlocksBar, usePastedBlocks } from '../common/PastedBlocksBar'
+import { FilePreviewModal } from '../attachments/FilePreviewModal'
+import type { FilePreviewData } from './ChatPage'
 
 type AttachmentItem = LocalAttachmentItem
 
@@ -43,6 +45,10 @@ export function HomePage() {
   // v1.14: opt-in Plan mode pin for the upcoming turn. When false the engine
   // picks ReAct/Plan automatically via its ModeSelector heuristic.
   const [planMode, setPlanMode] = useState(false)
+  // 附件预览抽屉的 state。点击 AttachmentPreviewPanel 里的卡片会先调
+  // window.files.read 把内容/二进制标记拿回来，然后塞进 filePreview，
+  // FilePreviewDrawer 接到非 null 值即显示。
+  const [filePreview, setFilePreview] = useState<FilePreviewData | null>(null)
   const pasted = usePastedBlocks()
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const navigate = useNavigate()
@@ -211,7 +217,11 @@ export function HomePage() {
           <div className="p-5 sm:p-6">
             {pasted.blocks.length > 0 && (
               <div className="mb-3">
-                <PastedBlocksBar blocks={pasted.blocks} onRemove={pasted.removeBlock} />
+                <PastedBlocksBar
+                  blocks={pasted.blocks}
+                  onRemove={pasted.removeBlock}
+                  onUpdate={pasted.updateBlock}
+                />
               </div>
             )}
             <SkillComposerInput
@@ -231,6 +241,33 @@ export function HomePage() {
             <AttachmentPreviewPanel
               attachments={attachments}
               onRemove={handleRemoveAttachment}
+              // 点击附件即开预览。预读走主进程的 files:read：图片/音频/视频
+              // 不依赖 content；docx/pdf/xlsx/pptx 走富预览；纯文本/Markdown
+              // 直接拿到字符串；其它二进制保留占位 + 导出原文件。
+              onPreview={async (attachment) => {
+                try {
+                  const result = await window.files.read(attachment.path)
+                  setFilePreview({
+                    path: result?.path || attachment.path,
+                    fileName: attachment.name || attachment.path.split(/[\\/]/).pop() || attachment.path,
+                    operation: 'read_file',
+                    content: result?.ok && typeof result.content === 'string' ? result.content : '',
+                    isBinary: result?.ok ? Boolean(result.isBinary) : false,
+                    previewKind:
+                      result?.ok && (result.previewKind === 'html' || result.previewKind === 'text')
+                        ? result.previewKind
+                        : undefined,
+                  })
+                } catch (err) {
+                  console.error('Failed to preview attachment:', err)
+                  setFilePreview({
+                    path: attachment.path,
+                    fileName: attachment.name || attachment.path,
+                    operation: 'read_file',
+                    content: '',
+                  })
+                }
+              }}
             />
 
             <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
@@ -281,6 +318,12 @@ export function HomePage() {
           </div>
         </div>
       </div>
+
+      {/* 附件预览弹窗。首页是轻量入口，不再使用与对话页相同的右侧抽屉，
+          改用 FilePreviewModal —— 居中 modal、点击遮罩或 Esc 关闭。
+          内部 createPortal 到 body，不受当前容器 overflow / transform
+          影响。 */}
+      <FilePreviewModal preview={filePreview} onClose={() => setFilePreview(null)} />
     </div>
   )
 }

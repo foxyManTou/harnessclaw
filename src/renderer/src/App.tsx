@@ -40,6 +40,36 @@ function RouteLogger() {
  *   editable element (input / textarea / contenteditable) so we don't
  *   hijack literal "," input inside the composer or settings forms.
  */
+/**
+ * Bridges the quick-launcher window with the main app. When the user
+ * submits a prompt in the Alfred-style launcher (Alt+Space), main
+ * sends `launcher:question` to this renderer; we navigate to /chat
+ * with the prompt as `initialMessage`. ChatPage's existing
+ * `pendingInitialTurn` plumbing then auto-sends it as the first turn
+ * of the new session.
+ */
+function LauncherBridge() {
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    const unsubscribe = window.launcherApi?.onQuestion?.((prompt: string) => {
+      const text = (prompt || '').trim()
+      if (!text) return
+      navigate('/chat', {
+        state: {
+          initialMessage: text,
+          initialAttachments: [],
+        },
+      })
+    })
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe()
+    }
+  }, [navigate])
+
+  return null
+}
+
 function GlobalShortcuts() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -49,17 +79,6 @@ function GlobalShortcuts() {
       const meta = event.metaKey || event.ctrlKey
       if (!meta) return
       if (event.altKey || event.shiftKey) return
-
-      // ⌘/Ctrl + N — new session: jump to the home composer. Works from
-      // any route (including text inputs) because the chord isn't a
-      // literal anyone types into a field.
-      if (event.key.toLowerCase() === 'n') {
-        event.preventDefault()
-        event.stopPropagation()
-        navigate('/', { state: { focusComposer: true } })
-        return
-      }
-
       if (event.key !== ',') return
 
       // Don't override "," typed inside a composer / input / editable.
@@ -138,6 +157,7 @@ function App() {
     <Router>
       <RouteLogger />
       <GlobalShortcuts />
+      <LauncherBridge />
       <AppLayout>
         <RoutedContent />
       </AppLayout>

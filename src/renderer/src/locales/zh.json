@@ -95,7 +95,7 @@
     },
     "capabilities": {
       "vision": "视觉",
-      "web": "联网",
+      "search": "联网",
       "reasoning": "推理",
       "tools": "工具"
     },
@@ -114,72 +114,97 @@
       "add": "添加",
       "enable": "启用",
       "disable": "停用"
+    },
+    "pricing": {
+      "currency": "币种",
+      "inputPrice": "输入价格",
+      "outputPrice": "输出价格",
+      "perMillionTokens": "/ 百万 Token"
     }
   },
-    "agents": {
-      "title": "Agent 设置",
-      "subtitle": "新建 Agent 的默认参数",
-      "searchPlaceholder": "搜索 Agent...",
-      "newAgent": "创建 Agent",
-      "empty": "还没有 Agent",
-      "emptyDesc": "创建第一个 Agent",
-      "model": "模型",
-      "generation": "生成参数",
-      "reasoningEffort": "推理强度 (留空使用模型默认)",
-      "reasoningDefault": "默认",
-      "style": "回答风格",
-      "stylePrecise": "精准",
-      "stylePreciseFull": "精准模式",
-      "stylePreciseDesc": "回答稳定、可重复，几乎每次都会给出相同的结果。",
-      "styleBalanced": "平衡",
-      "styleBalancedFull": "平衡模式",
-      "styleBalancedDesc": "准确为主，表达自然，适合日常使用。",
-      "styleFlexible": "灵活",
-      "styleFlexibleFull": "灵活模式",
-      "styleFlexibleDesc": "思路开阔，愿意提供多种角度的回答。",
-      "styleCreative": "创意",
-      "styleCreativeFull": "创意模式",
-      "styleCreativeDesc": "大胆发散，每次都有新惊喜。",
-      "morePrecise": "更精准",
-      "moreCreative": "更有创意",
-      "recommended": "推荐",
-      "suitableScenarios": "适合这些场景:",
-      "params": "Agent 调用参数",
-      "maxTokens": "单次回复的最大 Token 数（0 = 使用 endpoint 默认）",
-      "contextBudget": "上下文窗口预算 (Tokens, 0 = 不限制)",
-      "toolsAndWorkspace": "工具与工作区",
-      "maxToolIterations": "Agent 单轮最大工具调用次数",
-      "workspace": "工作目录",
-      "workspaceDesc": "Agent 的默认文件工作区路径",
-      "fallback": {
-        "addNode": "添加节点",
-        "noNodes": "没有可添加的节点",
-        "empty": "暂无兜底节点。点击右上角「添加节点」开始配置。",
-        "removeNode": "移除节点",
-        "remove": "移除"
-      },
-      "actions": {
-        "edit": "编辑",
-        "archive": "归档",
-        "delete": "删除"
-      },
-      "dialog": {
-        "title": "创建 Agent",
-        "name": "名称",
-        "namePlaceholder": "Agent 名称",
-        "emoji": "Emoji",
-        "workspace": "工作区",
-        "cancel": "取消",
-        "create": "创建"
-      }
+  "agents": {
+    "title": "Agent 设置",
+    "subtitle": "新建 Agent 的默认参数",
+    "searchPlaceholder": "搜索 Agent...",
+    "newAgent": "创建 Agent",
+    "empty": "还没有 Agent",
+    "emptyDesc": "创建第一个 Agent",
+    "model": "模型",
+    "generation": "生成参数",
+    "reasoningEffort": "推理强度 (留空使用模型默认)",
+    "reasoningDefault": "默认",
+    "style": "回答风格",
+    "stylePrecise": "精准",
+    "stylePreciseFull": "精准模式",
+    "stylePreciseDesc": "回答稳定、可重复，几乎每次都会给出相同的结果。",
+    "styleBalanced": "平衡",
+    "styleBalancedFull": "平衡模式",
+    "styleBalancedDesc": "准确为主，表达自然，适合日常使用。",
+    "styleFlexible": "灵活",
+    "styleFlexibleFull": "灵活模式",
+    "styleFlexibleDesc": "思路开阔，愿意提供多种角度的回答。",
+    "styleCreative": "创意",
+    "styleCreativeFull": "创意模式",
+    "styleCreativeDesc": "大胆发散，每次都有新惊喜。",
+    "morePrecise": "更精准",
+    "moreCreative": "更有创意",
+    "recommended": "推荐",
+    "suitableScenarios": "适合这些场景:",
+    "params": "Agent 调用参数",
+    "maxTokens": "单次回复的最大 Token 数（0 = 使用 endpoint 默认）",
+    "contextBudget": "上下文窗口预算 (Tokens, 0 = 不限制)",
+    "toolsAndWorkspace": "工具与工作区",
+    "maxToolIterations": "Agent 单轮最大工具调用次数",
+    "workspace": "工作目录",
+    "workspaceDesc": "Agent 的默认文件工作区路径",
+    "fallback": {
+      "addNode": "添加节点",
+      "noNodes": "没有可添加的节点",
+      "empty": "暂无兜底节点。点击右上角「添加节点」开始配置。",
+      "removeNode": "移除节点",
+      "remove": "移除"
     },
+    "actions": {
+      "edit": "编辑",
+      "archive": "归档",
+      "delete": "删除"
+    },
+    "dialog": {
+      "title": "创建 Agent",
+      "name": "名称",
+      "namePlaceholder": "Agent 名称",
+      "emoji": "Emoji",
+      "workspace": "工作区",
+      "cancel": "取消",
+      "create": "创建"
+    }
+  },
   "xlab": {
     "title": "X·LAB",
     "description": "实验场。即将上线的实验性功能与早期预览会陆续在这里出现，敬请期待。"
   },
   "skills": {
     "title": "技能",
-    "market": "Skill 市场",
+    "market": {
+      "title": "Skill 市场",
+      "back": "返回 Skill",
+      "refreshStartFailed": "刷新任务启动失败",
+      "refreshProgress": "刷新完成：{{success}}/{{total}} 个仓库成功，{{error}} 个失败",
+      "refreshSuccess": "发现结果已刷新：{{repos}} 个仓库，{{skills}} 个 skill",
+      "refreshFailed": "后台刷新失败",
+      "installed": "已安装",
+      "discovered": "发现技能",
+      "saveRepoFailed": "保存仓库失败",
+      "repoSaved": "仓库已保存，发现结果保持当前缓存",
+      "repoRemoved": "仓库已移除，发现结果保持当前缓存",
+      "skillDeleted": "{{name}} 已删除",
+      "skillInstalled": "{{name}} 已安装",
+      "skillReinstalled": "{{name}} 已重新安装",
+      "installFailed": "安装失败",
+      "deleteFailed": "删除失败",
+      "enterUrlFirst": "先填写 GitHub 仓库地址",
+      "closeMarket": "关闭 skill 市场"
+    },
     "back": "返回 Skill",
     "manage": "管理仓库",
     "refresh": "刷新发现",
@@ -217,26 +242,6 @@
     "enabledRepos": "已启用仓库",
     "discoveredCount": "已发现技能",
     "searchMarketPlaceholder": "搜索技能市场...",
-    "market": {
-      "title": "Skill 市场",
-      "back": "返回 Skill",
-      "refreshStartFailed": "刷新任务启动失败",
-      "refreshProgress": "刷新完成：{{success}}/{{total}} 个仓库成功，{{error}} 个失败",
-      "refreshSuccess": "发现结果已刷新：{{repos}} 个仓库，{{skills}} 个 skill",
-      "refreshFailed": "后台刷新失败",
-      "installed": "已安装",
-      "discovered": "发现技能",
-      "saveRepoFailed": "保存仓库失败",
-      "repoSaved": "仓库已保存，发现结果保持当前缓存",
-      "repoRemoved": "仓库已移除，发现结果保持当前缓存",
-      "skillDeleted": "{{name}} 已删除",
-      "skillInstalled": "{{name}} 已安装",
-      "skillReinstalled": "{{name}} 已重新安装",
-      "installFailed": "安装失败",
-      "deleteFailed": "删除失败",
-      "enterUrlFirst": "先填写 GitHub 仓库地址",
-      "closeMarket": "关闭 skill 市场"
-    },
     "repo": {
       "title": "Skill 仓库",
       "desc": "启用后的仓库会参与发现。刷新发现只会更新远端仓库索引，不会动你的原始仓库；需要限制扫描范围时，可填写扫描路径。代理仅作用于 skill 仓库的拉取与刷新。",
@@ -287,7 +292,7 @@
     "subtitle": "查看历史会话，或继续最近的上下文。",
     "searchPlaceholder": "搜索对话...",
     "exitMultiSelect": "退出多选",
-    "enterMultiSelect": "进入多选",
+    "enterMultiSelect": "多选",
     "newSession": "新建对话",
     "loading": "正在加载对话...",
     "noHistory": "还没有对话记录",
@@ -493,8 +498,6 @@
       "routedToPrefix": "已路由到",
       "totalDuration": "总耗时 {{time}}",
       "allMembers": "全部成员",
-      "newMember": "新成员",
-      "member": "成员",
       "waitingResults": "等待更多处理结果…",
       "serviceContinuing": "服务仍在继续",
       "processRecords": "{{n}} 条过程记录",
@@ -524,7 +527,6 @@
       "subagentStartedShort": "子任务启动",
       "subagentEndFailed": "子任务生命周期结束，状态失败",
       "subagentEnd": "子任务生命周期结束",
-      "requestFailed": "请求失败",
       "loadFailed": "加载失败",
       "apiNotFound": "管理 API 未找到（请确认引擎版本 ≥ 2026-05-14）"
     },
@@ -562,7 +564,9 @@
       "readLimit": "展示读取结果，调用限制为 {{n}} 行",
       "writeContent": "展示写入文件时提交的内容",
       "noContent": "没有可展示的文件内容",
-      "noContentDesc": "这个工具调用没有返回可预览的文本。"
+      "noContentDesc": "这个工具调用没有返回可预览的文本。",
+      "binaryTitle": "二进制文件，无法直接预览",
+      "binaryDesc": "该格式（如 .docx / .pdf / .xlsx 等）不是 UTF-8 文本，点击右上角“导出”可保存原始文件。"
     },
     "web": {
       "refresh": "刷新",
@@ -671,7 +675,8 @@
       "modelError": "上游错误",
       "contractFail": "契约未达",
       "dependencyFail": "子任务失败",
-      "internal": "内部错误"
+      "internal": "内部错误",
+      "unsupportedModality": "模型不支持该输入"
     },
     "taskStatus": {
       "inProgress": "进行中",
@@ -784,9 +789,11 @@
       "connection": "连接设置",
       "models": "模型配置",
       "agents": "Agent 设置",
+      "search": "搜索配置",
       "tools": "工具配置",
       "appConfig": "应用配置",
       "software": "软件设置",
+      "launcher": "快捷助手",
       "logs": "日志",
       "ui": "UI 设置",
       "storage": "数据与存储",
@@ -913,9 +920,9 @@
       "timeout": "请求超时",
       "requestFailed": "请求失败：{{error}}",
       "noModelsInRegistry": "注册表未返回任何模型",
-    "noModelsForProvider": "注册表中没有 {{name}} 的模型",
-    "apiNotFound": "管理 API 未找到（请确认引擎版本 ≥ 2026-05-14）",
-    "editModel": "编辑模型",
+      "noModelsForProvider": "注册表中没有 {{name}} 的模型",
+      "apiNotFound": "管理 API 未找到（请确认引擎版本 ≥ 2026-05-14）",
+      "editModel": "编辑模型",
       "addModel": "添加模型",
       "modelIdLabel": "模型 ID",
       "modelIdHint": "模型在服务端的唯一标识，必填",
@@ -1012,273 +1019,336 @@
       }
     },
     "welcome": {
-    "greeting": "欢迎开启 HarnessClaw",
-    "saveError": "保存配置失败",
-    "back": "返回",
-    "next": "下一步",
-    "finish": "完成并开启",
-    "submitting": "正在初始化...",
-    "stages": {
-      "emma": "认识 emma",
-      "emmaSubtitle": "你的全能智能助理",
-      "engine": "选择引擎",
-      "engineSubtitle": "选择一个主力 LLM 服务作为核心大脑",
-      "connection": "连接参数",
-      "profile": "预设风格"
-    },
-    "modelIdHint": "例如 gpt-4o-mini、claude-sonnet-4 等。",
-    "engineOptions": {
-      "openaiDetail": "支持 GPT-4o, GPT-4o-mini 等。支持兼容 OpenAI 协议的转发地址。",
-      "anthropicDetail": "支持 Claude 3.5 Sonnet, Claude 3 Opus 等原生 API。"
-    },
-    "profileOptions": {
-      "devTitle": "研发专家",
-      "devDetail": "专注代码、调试与系统架构。默认开启高推理强度。",
-      "researchTitle": "研究助理",
-      "researchDetail": "擅长资料搜集、长文摘要与论文分析。均衡的调用策略。",
-      "opsTitle": "效率达人",
-      "opsDetail": "快速处理日常事务、日程同步与数据整理。轻量化调用。"
-    },
-    "prompts": {
-      "categories": {
-        "dev": "研发",
-        "research": "研究",
-        "writing": "写作",
-        "data": "数据",
-        "life": "生活",
-        "daily": "日常"
+      "greeting": "欢迎开启 HarnessClaw",
+      "saveError": "保存配置失败",
+      "back": "返回",
+      "next": "下一步",
+      "finish": "完成并开启",
+      "submitting": "正在初始化...",
+      "stages": {
+        "emma": "认识 emma",
+        "emmaSubtitle": "你的全能智能助理",
+        "engine": "选择引擎",
+        "engineSubtitle": "选择一个主力 LLM 服务作为核心大脑",
+        "connection": "连接参数",
+        "profile": "预设风格"
       },
-      "items": {
-        "dev1": "帮我把这段函数重构得更易读，并补充单元测试。",
-        "dev2": "排查这段报错日志，定位最可能的根因并给出修复方案。",
-        "dev3": "审视这个 PR 的设计与边界，列出潜在风险点。",
-        "dev4": "给这个接口加上限流 and 重试，并写好对应的单测。",
-        "res1": "搜索最近一周关于 RAG 的新论文，做一份要点摘要。",
-        "res2": "对比 3 家头部向量数据库的架构与适用场景。",
-        "res3": "梳理 Agent 评测领域的主流 benchmark 和它们的差异。",
-        "res4": "帮我跟踪这位作者最近半年发表的所有论文。",
-        "wri1": "为下周产品发布会写一份 300 字的预热推文。",
-        "wri2": "把这份技术文档改写成给非技术同事的版本。",
-        "wri3": "给这个开源项目写一份简洁有力的 README 介绍。",
-        "wri4": "把这次复盘整理成一份对外可发的故事化稿件。",
-        "dat1": "分析这份 CSV 中的订单数据，给出复购率和异常值。",
-        "dat2": "帮我把这份日志拆字段，做出每小时调用量的趋势图。",
-        "dat3": "看一下这份 A/B 实验结果，给出统计显著性结论。",
-        "dat4": "从这堆用户反馈里聚类出 5 个最值得关注的话题。",
-        "lif1": "帮我规划这个周末两天的杭州周边亲子游行程。",
-        "lif2": "根据这周的运动和饮食记录，给我下周的调整建议。",
-        "lif3": "帮我比一下这两个航班加酒店的总性价比。",
-        "lif4": "给我列一份适合一个人安静度过的周末晚上活动清单。",
-        "dai1": "把今天的会议纪要整理成 To-do，并安排到下周日历。",
-        "dai2": "总结今天 Slack 里被 @ 的所有消息，标出需要回复的。",
-        "dai3": "把这一周的工作整理成对外可发的周报草稿。",
-        "dai4": "帮我从邮件里挑出真正需要今天处理的 3 件事。"
+      "modelIdHint": "例如 gpt-4o-mini、claude-sonnet-4 等。",
+      "engineOptions": {
+        "openaiDetail": "支持 GPT-4o, GPT-4o-mini 等。支持兼容 OpenAI 协议的转发地址。",
+        "anthropicDetail": "支持 Claude 3.5 Sonnet, Claude 3 Opus 等原生 API。"
+      },
+      "profileOptions": {
+        "devTitle": "研发专家",
+        "devDetail": "专注代码、调试与系统架构。默认开启高推理强度。",
+        "researchTitle": "研究助理",
+        "researchDetail": "擅长资料搜集、长文摘要与论文分析。均衡的调用策略。",
+        "opsTitle": "效率达人",
+        "opsDetail": "快速处理日常事务、日程同步与数据整理。轻量化调用。"
+      },
+      "prompts": {
+        "categories": {
+          "dev": "研发",
+          "research": "研究",
+          "writing": "写作",
+          "data": "数据",
+          "life": "生活",
+          "daily": "日常"
+        },
+        "items": {
+          "dev1": "帮我把这段函数重构得更易读，并补充单元测试。",
+          "dev2": "排查这段报错日志，定位最可能的根因并给出修复方案。",
+          "dev3": "审视这个 PR 的设计与边界，列出潜在风险点。",
+          "dev4": "给这个接口加上限流 and 重试，并写好对应的单测。",
+          "res1": "搜索最近一周关于 RAG 的新论文，做一份要点摘要。",
+          "res2": "对比 3 家头部向量数据库的架构与适用场景。",
+          "res3": "梳理 Agent 评测领域的主流 benchmark 和它们的差异。",
+          "res4": "帮我跟踪这位作者最近半年发表的所有论文。",
+          "wri1": "为下周产品发布会写一份 300 字的预热推文。",
+          "wri2": "把这份技术文档改写成给非技术同事的版本。",
+          "wri3": "给这个开源项目写一份简洁有力的 README 介绍。",
+          "wri4": "把这次复盘整理成一份对外可发的故事化稿件。",
+          "dat1": "分析这份 CSV 中的订单数据，给出复购率和异常值。",
+          "dat2": "帮我把这份日志拆字段，做出每小时调用量的趋势图。",
+          "dat3": "看一下这份 A/B 实验结果，给出统计显著性结论。",
+          "dat4": "从这堆用户反馈里聚类出 5 个最值得关注的话题。",
+          "lif1": "帮我规划这个周末两天的杭州周边亲子游行程。",
+          "lif2": "根据这周的运动和饮食记录，给我下周的调整建议。",
+          "lif3": "帮我比一下这两个航班加酒店的总性价比。",
+          "lif4": "给我列一份适合一个人安静度过的周末晚上活动清单。",
+          "dai1": "把今天的会议纪要整理成 To-do，并安排到下周日历。",
+          "dai2": "总结今天 Slack 里被 @ 的所有消息，标出需要回复的。",
+          "dai3": "把这一周的工作整理成对外可发的周报草稿。",
+          "dai4": "帮我从邮件里挑出真正需要今天处理的 3 件事。"
+        }
+      }
+    },
+    "plan": {
+      "buttonLabel": "执行计划",
+      "dialogTitle": "执行计划",
+      "taskPlan": "任务计划",
+      "close": "关闭",
+      "noSteps": "暂无步骤",
+      "dependsOn": "依赖 {{deps}}",
+      "status": {
+        "running": "运行中",
+        "dispatched": "已派发",
+        "completed": "已完成",
+        "failed": "失败",
+        "skipped": "已跳过",
+        "pending": "待执行"
+      },
+      "summary": {
+        "completed": "计划已完成 · {{completed}}/{{total}} 步成功",
+        "failed": "计划失败 · {{failed}} 步失败、{{skipped}} 步跳过",
+        "running": "运行中 · {{completed}}/{{total}} 已完成",
+        "progress": "已完成 {{completed}}/{{total}} 步",
+        "waiting": "计划已批准，等待派发 · 共 {{total}} 步"
+      },
+      "draft": {
+        "title": "执行计划草案",
+        "goalLabel": "目标：",
+        "noSteps": "没有步骤，可以点击下方「+ 添加步骤」补充。",
+        "stepPlaceholder": "步骤描述",
+        "newStep": "新步骤",
+        "deleteStepAria": "删除步骤",
+        "addStep": "添加步骤",
+        "regenerate": "重新生成",
+        "reject": "拒绝",
+        "execute": "开始执行"
+      }
+    },
+    "stats": {
+      "title": "统计",
+      "dialogTitle": "会话统计",
+      "refresh": "刷新统计",
+      "close": "关闭",
+      "noData": "暂无统计数据 — 当前会话还未产生 LLM 调用",
+      "fetchError": "无法获取统计数据：{{error}}",
+      "fetchErrorHint": "请稍后重试",
+      "contextWindow": "上下文窗口",
+      "remaining": "剩余",
+      "buckets": {
+        "input": "输入",
+        "cache": "缓存",
+        "output": "输出",
+        "thinking": "思考",
+        "includingCache": "含缓存 {{n}}",
+        "percentOfInput": "占输入 {{percent}}%"
+      },
+      "cards": {
+        "totalTokens": "总 token",
+        "inputTokens": "输入 token",
+        "outputTokens": "输出 token",
+        "avgLatency": "平均延迟",
+        "cacheHit": "缓存命中 {{percent}}%",
+        "includingThinking": "含思考 {{n}}",
+        "ttft": "首 token {{latency}}",
+        "cacheSaved": "缓存省 {{cost}}"
+      },
+      "breakdown": {
+        "title": "子 agent 分解",
+        "agent": "Agent",
+        "input": "输入",
+        "output": "输出",
+        "contribution": "贡献占比",
+        "noSubagents": "暂无子 agent 数据",
+        "mainBadge": "主"
+      }
+    },
+    "attachments": {
+      "removeAria": "删除文件 {{name}}"
+    },
+    "pasted": {
+      "label": "粘贴",
+      "lines": "{{n}} 行",
+      "removeAria": "移除粘贴内容",
+      "previewTitle": "粘贴内容预览",
+      "closeAria": "关闭预览"
+    },
+    "ui": {
+      "title": "UI 设置",
+      "subtitle": "界面显示偏好",
+      "appearance": "外观",
+      "theme": "主题",
+      "themeDesc": "选择界面颜色主题",
+      "themeLight": "浅色",
+      "themeDark": "深色",
+      "themeSystem": "跟随系统",
+      "fontSize": "字体大小",
+      "fontSizeDesc": "调整界面文字大小",
+      "fontSizeSmall": "小",
+      "fontSizeMedium": "中",
+      "fontSizeLarge": "大",
+      "language": "语言",
+      "languageDesc": "界面显示语言",
+      "languageZh": "中文",
+      "languageEn": "English",
+      "editor": "代码编辑器",
+      "codeTheme": "代码主题",
+      "codeThemeDesc": "代码块的语法高亮风格",
+      "animation": "动画效果",
+      "animationDesc": "启用界面过渡和微交互动画",
+      "viewAvatar": "查看头像：{{name}}"
+    },
+    "tools": {
+      "title": "工具配置",
+      "subtitle": "搜索、执行与 MCP",
+      "iflySearch": {
+        "label": "启用 iFly Search",
+        "desc": "同步到 HarnessClaw Engine 的 tools.web_search 模块",
+        "apiKey": "API Key",
+        "apiSecret": "API Secret",
+        "appId": "App ID",
+        "host": "Host",
+        "hostDesc": "iFly Search 服务 Host",
+        "path": "Path",
+        "pathDesc": "iFly Search 请求 Path",
+        "limit": "Limit",
+        "limitDesc": "每次请求返回的最大条数"
+      },
+      "tavilySearch": {
+        "label": "启用 Tavily Search",
+        "desc": "同步到 HarnessClaw Engine 的 tools.tavily_search 模块",
+        "apiKey": "API Key",
+        "console": "打开 Tavily 控制台",
+        "limit": "最大结果数",
+        "limitDesc": "每次 Tavily Search 请求返回的最大条数"
+      },
+      "exec": {
+        "title": "命令执行",
+        "timeout": "超时时间",
+        "timeoutDesc": "执行命令的最大等待秒数",
+        "pathAppend": "PATH 追加",
+        "pathAppendDesc": "追加到 PATH 环境变量的路径",
+        "restrictWorkspace": "限制工作区",
+        "restrictWorkspaceDesc": "仅允许在 workspace 目录中执行命令"
+      },
+      "mcp": {
+        "title": "MCP Server",
+        "noServers": "暂无 MCP Server 配置",
+        "configured": "已配置 {{count}} 个 MCP Server"
+      }
+    },
+    "storage": {
+      "title": "数据与存储",
+      "subtitle": "本地文件与缓存管理",
+      "dbPath": "数据库路径",
+      "dbPathDesc": "本地 SQLite 数据库文件位置",
+      "dbShowInFolder": "在文件管理器中显示数据库文件",
+      "logsPath": "日志路径",
+      "logsPathDesc": "系统运行日志保存目录",
+      "cacheSize": "缓存大小",
+      "cacheSizeDesc": "应用临时缓存占用的磁盘空间",
+      "clearCache": "清空缓存",
+      "export": {
+        "title": "数据导出",
+        "db": "导出数据库",
+        "dbDesc": "将所有会话导出为 JSON 或 Markdown",
+        "logs": "导出日志",
+        "logsDesc": "导出应用运行日志",
+        "config": "导出配置",
+        "configDesc": "导出全部设置为配置文件",
+        "success": "已导出到 {{path}}",
+        "failed": "导出失败",
+        "openFailed": "打开目录失败"
+      }
+    },
+    "logs": {
+      "title": "系统日志",
+      "subtitle": "统一查看 latest.log，等级仅用于筛选当前展示，不会更改日志记录等级（请前往「软件设置」调整）。",
+      "searchPlaceholder": "搜索消息、模块或元数据",
+      "followModeOn": "跟随中",
+      "followModeOff": "已暂停",
+      "directoryLabel": "日志目录：{{path}}",
+      "openDirectory": "打开目录",
+      "exportLogs": "导出日志",
+      "reset": "重置",
+      "copy": "复制",
+      "copied": "已复制",
+      "levels": {
+        "fatal": "致命",
+        "error": "错误",
+        "warn": "警告",
+        "info": "标准",
+        "debug": "调试",
+        "trace": "追踪"
+      },
+      "viewModes": {
+        "parsed": "解析",
+        "raw": "原始"
+      },
+      "notices": {
+        "openDirSuccess": "已打开日志目录：{{path}}",
+        "openDirFailed": "打开日志目录失败。",
+        "exportSuccess": "日志已导出到：{{path}}",
+        "exportFailed": "导出日志失败。"
+      }
+    },
+    "search": {
+      "errors": {
+        "loadFailed": "无法加载工具配置",
+        "invalidConfig": "凭证字段未填写完整，请补全后再启用",
+        "notRegistered": "该工具未注册，可能是引擎版本不匹配",
+        "hotReloadFailed": "热生效失败，请稍后重试或重启服务",
+        "persistFailed": "保存到配置文件失败 —— 内存状态已回滚",
+        "registryMissing": "工具未在启动时注册，请重启服务",
+        "badRequest": "请求参数错误",
+        "networkError": "无法连接到本地服务，请确认 HarnessClaw 已启动",
+        "timeout": "请求超时，请稍后重试",
+        "generic": "{{code}}: 操作失败",
+        "requestFailed": "请求失败: {{detail}}"
+      },
+      "toast": {
+        "enabled": "已启用",
+        "disabled": "已停用",
+        "noChanges": "没有需要保存的修改",
+        "savedAndApplied": "已保存并热生效"
+      },
+      "ui": {
+        "reload": "重新加载",
+        "searchPlaceholder": "搜索服务...",
+        "pendingConfig": "待配置",
+        "unsavedChanges": "有未保存的修改",
+        "noMatch": "没有匹配的搜索服务",
+        "effective": "已生效",
+        "notEnabled": "未启用",
+        "visitWebsite": "访问官网",
+        "saving": "保存中",
+        "save": "保存"
+      },
+      "fields": {
+        "apiKeyPlaceholder": "输入 API Key",
+        "getKeyHere": "点击这里获取密钥",
+        "iflyConsoleHint": "需要前往讯飞开放平台控制台",
+        "tavilyConsoleHint": "需要前往 Tavily 控制台",
+        "maxResults": "最大结果数",
+        "maxResultsDesc": "每次请求返回的最大条数",
+        "tavilyMaxResultsDesc": "每次 Tavily Search 请求返回的最大条数"
+      }
+    },
+    "launcher": {
+      "header": {
+        "title": "快捷助手",
+        "subtitle": "全局快捷键唤出输入条，输入问题直接进入新对话"
+      },
+      "group": {
+        "basic": "基础配置"
+      },
+      "enabled": {
+        "label": "启动",
+        "desc": "开启后可通过全局快捷键随时呼出快捷助手输入框，输入问题直接进入新对话。"
+      },
+      "hotkey": {
+        "label": "快捷键",
+        "desc": "点击右侧输入框，再按下组合键以修改。建议组合键中包含至少一个修饰键（⌘/⌃/⌥/⇧）。",
+        "capturingAria": "正在录制快捷键，按下组合键",
+        "idleAria": "当前快捷键 {{value}}，点击修改",
+        "unset": "未设置",
+        "pressKeys": "按下组合键…"
       }
     }
   },
-  "plan": {
-    "buttonLabel": "执行计划",
-    "dialogTitle": "执行计划",
-    "taskPlan": "任务计划",
-    "close": "关闭",
-    "noSteps": "暂无步骤",
-    "dependsOn": "依赖 {{deps}}",
-    "status": {
-      "running": "运行中",
-      "dispatched": "已派发",
-      "completed": "已完成",
-      "failed": "失败",
-      "skipped": "已跳过",
-      "pending": "待执行"
-    },
-    "summary": {
-      "completed": "计划已完成 · {{completed}}/{{total}} 步成功",
-      "failed": "计划失败 · {{failed}} 步失败、{{skipped}} 步跳过",
-      "running": "运行中 · {{completed}}/{{total}} 已完成",
-      "progress": "已完成 {{completed}}/{{total}} 步",
-      "waiting": "计划已批准，等待派发 · 共 {{total}} 步"
-    },
-    "draft": {
-      "title": "执行计划草案",
-      "goalLabel": "目标：",
-      "noSteps": "没有步骤，可以点击下方「+ 添加步骤」补充。",
-      "stepPlaceholder": "步骤描述",
-      "newStep": "新步骤",
-      "deleteStepAria": "删除步骤",
-      "addStep": "添加步骤",
-      "regenerate": "重新生成",
-      "reject": "拒绝",
-      "execute": "开始执行"
-    }
-  },
-  "stats": {
-    "title": "统计",
-    "dialogTitle": "会话统计",
-    "refresh": "刷新统计",
-    "close": "关闭",
-    "noData": "暂无统计数据 — 当前会话还未产生 LLM 调用",
-    "fetchError": "无法获取统计数据：{{error}}",
-    "fetchErrorHint": "请稍后重试",
-    "contextWindow": "上下文窗口",
-    "remaining": "剩余",
-    "buckets": {
-      "input": "输入",
-      "cache": "缓存",
-      "output": "输出",
-      "thinking": "思考",
-      "includingCache": "含缓存 {{n}}",
-      "percentOfInput": "占输入 {{percent}}%"
-    },
-    "cards": {
-      "totalTokens": "总 token",
-      "inputTokens": "输入 token",
-      "outputTokens": "输出 token",
-      "avgLatency": "平均延迟",
-      "cacheHit": "缓存命中 {{percent}}%",
-      "includingThinking": "含思考 {{n}}",
-      "ttft": "首 token {{latency}}",
-      "cacheSaved": "缓存省 {{cost}}"
-    },
-    "breakdown": {
-      "title": "子 agent 分解",
-      "agent": "Agent",
-      "input": "输入",
-      "output": "输出",
-      "contribution": "贡献占比",
-      "noSubagents": "暂无子 agent 数据",
-      "mainBadge": "主"
-    }
-  },
-  "attachments": {
-    "removeAria": "删除文件 {{name}}"
-  },
-  "pasted": {
-    "label": "粘贴",
-    "lines": "{{n}} 行",
-    "removeAria": "移除粘贴内容",
-    "previewTitle": "粘贴内容预览",
-    "closeAria": "关闭预览"
-  },
-  "ui": {
-    "title": "UI 设置",
-    "subtitle": "界面显示偏好",
-    "appearance": "外观",
-    "theme": "主题",
-    "themeDesc": "选择界面颜色主题",
-    "themeLight": "浅色",
-    "themeDark": "深色",
-    "themeSystem": "跟随系统",
-    "fontSize": "字体大小",
-    "fontSizeDesc": "调整界面文字大小",
-    "fontSizeSmall": "小",
-    "fontSizeMedium": "中",
-    "fontSizeLarge": "大",
-    "language": "语言",
-    "languageDesc": "界面显示语言",
-    "languageZh": "中文",
-    "languageEn": "English",
-    "editor": "代码编辑器",
-    "codeTheme": "代码主题",
-    "codeThemeDesc": "代码块的语法高亮风格",
-    "animation": "动画效果",
-    "animationDesc": "启用界面过渡和微交互动画",
-    "viewAvatar": "查看头像：{{name}}"
-  },
-  "tools": {
-    "title": "工具配置",
-    "subtitle": "搜索、执行与 MCP",
-    "iflySearch": {
-      "label": "启用 iFly Search",
-      "desc": "同步到 HarnessClaw Engine 的 tools.web_search 模块",
-      "apiKey": "API Key",
-      "apiSecret": "API Secret",
-      "appId": "App ID",
-      "host": "Host",
-      "hostDesc": "iFly Search 服务 Host",
-      "path": "Path",
-      "pathDesc": "iFly Search 请求 Path",
-      "limit": "Limit",
-      "limitDesc": "每次请求返回的最大条数"
-    },
-    "tavilySearch": {
-      "label": "启用 Tavily Search",
-      "desc": "同步到 HarnessClaw Engine 的 tools.tavily_search 模块",
-      "apiKey": "API Key",
-      "console": "打开 Tavily 控制台",
-      "limit": "最大结果数",
-      "limitDesc": "每次 Tavily Search 请求返回的最大条数"
-    },
-    "exec": {
-      "title": "命令执行",
-      "timeout": "超时时间",
-      "timeoutDesc": "执行命令的最大等待秒数",
-      "pathAppend": "PATH 追加",
-      "pathAppendDesc": "追加到 PATH 环境变量的路径",
-      "restrictWorkspace": "限制工作区",
-      "restrictWorkspaceDesc": "仅允许在 workspace 目录中执行命令"
-    },
-    "mcp": {
-      "title": "MCP Server",
-      "noServers": "暂无 MCP Server 配置",
-      "configured": "已配置 {{count}} 个 MCP Server"
-    }
-  },
-  "storage": {
-    "title": "数据与存储",
-    "subtitle": "本地文件与缓存管理",
-    "dbPath": "数据库路径",
-    "dbPathDesc": "本地 SQLite 数据库文件位置",
-    "dbShowInFolder": "在文件管理器中显示数据库文件",
-    "logsPath": "日志路径",
-    "logsPathDesc": "系统运行日志保存目录",
-    "cacheSize": "缓存大小",
-    "cacheSizeDesc": "应用临时缓存占用的磁盘空间",
-    "clearCache": "清空缓存",
-    "export": {
-      "title": "数据导出",
-      "db": "导出数据库",
-      "dbDesc": "将所有会话导出为 JSON 或 Markdown",
-      "logs": "导出日志",
-      "logsDesc": "导出应用运行日志",
-      "config": "导出配置",
-      "configDesc": "导出全部设置为配置文件",
-      "success": "已导出到 {{path}}",
-      "failed": "导出失败",
-      "openFailed": "打开目录失败"
-    }
-  },
-  "logs": {
-    "title": "系统日志",
-    "subtitle": "统一查看 latest.log，等级仅用于筛选当前展示，不会更改日志记录等级（请前往「软件设置」调整）。",
-    "searchPlaceholder": "搜索消息、模块或元数据",
-    "followModeOn": "跟随中",
-    "followModeOff": "已暂停",
-    "directoryLabel": "日志目录：{{path}}",
-    "openDirectory": "打开目录",
-    "exportLogs": "导出日志",
-    "reset": "重置",
-    "copy": "复制",
-    "copied": "已复制",
-    "levels": {
-      "fatal": "致命",
-      "error": "错误",
-      "warn": "警告",
-      "info": "标准",
-      "debug": "调试",
-      "trace": "追踪"
-    },
-    "viewModes": {
-      "parsed": "解析",
-      "raw": "原始"
-    },
-    "notices": {
-      "openDirSuccess": "已打开日志目录：{{path}}",
-      "openDirFailed": "打开日志目录失败。",
-      "exportSuccess": "日志已导出到：{{path}}",
-      "exportFailed": "导出日志失败。"
-    }
-  }
-},
   "welcome": {
     "greeting": "很高兴认识你",
     "stages": {
@@ -1291,8 +1361,16 @@
     },
     "engineOptions": {
       "openaiDetail": "接入 OpenAI 官方 API 或兼容其模型命名与网关配置的账户。",
-      "anthropicDetail": "接入 Anthropic 官方 API，作为 Claude 系列模型的默认入口。"
+      "anthropicDetail": "接入 Anthropic 官方 API，作为 Claude 系列模型的默认入口。",
+      "xunfeiDetail": "接入科大讯飞 Spark，适合中文场景与国内开发者生态。",
+      "googleDetail": "通过 gemini 协议接入 Google Generative Language，使用 Gemini 系列模型。",
+      "deepseekDetail": "接入 DeepSeek 的 OpenAI 兼容 API，代码与推理性价比高。",
+      "zhipuDetail": "通过 OpenAI 兼容网关接入智谱 GLM，支持 GLM-4 等系列。",
+      "moonshotDetail": "通过 OpenAI 兼容 API 接入 Moonshot Kimi，适合长上下文对话。",
+      "minimaxDetail": "通过 OpenAI 兼容 API 接入 MiniMax，支持 abab 系列模型。",
+      "customDetail": "自定义网关：自行设置 Base URL、Key 以及协议（OpenAI 或 Anthropic）。"
     },
+    "protocolLabel": "协议",
     "profileOptions": {
       "devTitle": "研发与自动化运维",
       "devDetail": "偏长链路执行，默认开启更高工具迭代上限。",
@@ -1300,6 +1378,43 @@
       "researchDetail": "偏多轮检索和整理，保持中等推理强度。",
       "opsTitle": "复杂日常工作流",
       "opsDetail": "偏稳定协作和批量处理，保持简洁默认值。"
+    },
+    "modelIdHint": "请填写所选服务商支持的模型 ID，例如 gpt-4o-mini 或 claude-sonnet-4。",
+    "prompts": {
+      "categories": {
+        "dev": "研发",
+        "research": "研究",
+        "writing": "写作",
+        "data": "数据",
+        "life": "生活",
+        "daily": "日常"
+      },
+      "items": {
+        "dev1": "帮我审查这段代码的性能瓶颈",
+        "dev2": "把这个 Python 脚本改写成 TypeScript",
+        "dev3": "为这个 API 写一组单元测试",
+        "dev4": "部署一个最小可用的容器化服务",
+        "res1": "汇总最近 30 天关于 LLM 评测的新论文",
+        "res2": "对比三款主流向量数据库的优劣",
+        "res3": "列出竞品的核心功能差异",
+        "res4": "把这段会议记录整理成要点",
+        "wri1": "把这段技术稿改写得更通俗易懂",
+        "wri2": "帮我写一封产品上线公告邮件",
+        "wri3": "给这篇博客拟三个吸引人的标题",
+        "wri4": "把这些要点整理成 200 字的演讲稿",
+        "dat1": "帮我找出这份 CSV 中的异常值",
+        "dat2": "写一段 SQL 统计上个月的活跃用户",
+        "dat3": "把这些日志聚合成可视化图表",
+        "dat4": "清洗这份数据并补全缺失字段",
+        "lif1": "帮我规划一次三天的城市周边游",
+        "lif2": "列一份本周的健康早餐方案",
+        "lif3": "给我一份 30 分钟的居家锻炼计划",
+        "lif4": "推荐几本最近高分的非虚构图书",
+        "dai1": "把今天的待办整理成时间块",
+        "dai2": "帮我起草一封请假邮件",
+        "dai3": "提醒我每周五归档项目进度",
+        "dai4": "把这段语音笔记转写成会议摘要"
+      }
     },
     "back": "上一步",
     "next": "下一步",

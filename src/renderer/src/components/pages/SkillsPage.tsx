@@ -308,7 +308,7 @@ export function SkillsPage() {
             className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
           >
             <PackagePlus size={13} />
-            {t('skills.market')}
+            {t('skills.market.title')}
           </button>
           <div className="relative">
             <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
@@ -537,6 +537,7 @@ function SkillMarketOverlay({
   onClose: () => void
   onInstalledChange: () => Promise<void>
 }) {
+  const { t } = useTranslation()
   const [repositories, setRepositories] = useState<SkillRepository[]>([])
   const [discoveredSkills, setDiscoveredSkills] = useState<DiscoveredSkill[]>([])
   const [marketLoading, setMarketLoading] = useState(true)
@@ -1160,6 +1161,7 @@ function RepositorySettingsModal({
   onToggleRepository: (repository: SkillRepository) => void
   onRemoveRepository: (repositoryId: string) => void
 }) {
+  const { t, i18n } = useTranslation()
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const hasAdvancedValues = !!repoForm.id
     || repoForm.branch.trim() !== 'main'

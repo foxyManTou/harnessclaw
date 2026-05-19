@@ -1,4 +1,4 @@
-import { memo, useState, useRef, useEffect, useCallback, useMemo, useId, useSyncExternalStore, useContext, createContext, type ReactNode, type RefObject, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { memo, useState, useRef, useEffect, useCallback, useMemo, useId, useSyncExternalStore, useContext, createContext, type RefObject, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { useLocation, useNavigate } from 'react-router-dom'
@@ -11,11 +11,12 @@ import {
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { visit, SKIP } from 'unist-util-visit'
-import { cn } from '@/lib/utils'
+import { cn, localFileUrl } from '@/lib/utils'
 import {
   AttachmentPreviewPanel,
   type LocalAttachmentItem,
 } from '../attachments/AttachmentPreviewPanel'
+import { FilePreviewModal } from '../attachments/FilePreviewModal'
 import {
   buildSkillComposerPayload,
   SkillComposerInput,
@@ -23,12 +24,14 @@ import {
 } from '../common/SkillComposerInput'
 import { useAppConfig } from '@/hooks/useEngineConfig'
 import { getProjectDisplayDescription, getProjectDisplayName } from '@/lib/projectDisplay'
+import { useActiveModelCapabilities } from '@/hooks/useActiveModelCapabilities'
 import { PastedBlocksBar, usePastedBlocks } from '../common/PastedBlocksBar'
 import { PlanDraftCard, type PlanDraftStep } from '../common/PlanDraftCard'
 import { PlanStatusButton } from '../common/PlanStatusButton'
 import { SessionStatsButton } from '../common/SessionStatsButton'
 import { AvatarLightbox } from '../common/AvatarLightbox'
 import { ConfirmDeleteSessionDialog } from '../common/ConfirmDeleteSessionDialog'
+import { SystemNoticeModal, type SystemNotice } from '../common/SystemNoticeModal'
 import emmaAvatar from '../../assets/sidebar-logo.png'
 import analystAvatar from '../../assets/team/analyst.png'
 import developerAvatar from '../../assets/team/developer.png'
@@ -120,21 +123,6 @@ function FilePathChip({ path, onOpen }: { path: string; onOpen: (path: string) =
       <span className="truncate max-w-[280px]">{fileName}</span>
     </button>
   )
-}
-
-function renderTextWithFilePaths(text: string, onOpen: (path: string) => void): ReactNode[] {
-  const parts: ReactNode[] = []
-  const regex = new RegExp(FILE_PATH_REGEX.source, 'g')
-  let lastIndex = 0
-  let match: RegExpExecArray | null
-  let chipIndex = 0
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index))
-    parts.push(<FilePathChip key={`fp-${chipIndex++}-${match.index}`} path={match[0]} onOpen={onOpen} />)
-    lastIndex = regex.lastIndex
-  }
-  if (lastIndex < text.length) parts.push(text.slice(lastIndex))
-  return parts
 }
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -263,12 +251,41 @@ interface SessionItem {
   updatedAt?: string
 }
 
-interface FilePreviewData {
+export interface FilePreviewData {
   path: string
   fileName: string
   operation: 'read_file' | 'write_file'
   content: string
   limit?: number
+  /**
+   * `true` when the underlying file is a binary format (e.g. .docx, .pdf,
+   * .xlsx, images) that cannot be safely round-tripped through a UTF-8
+   * string. In that case `content` is usually empty (placeholder UI) and
+   * exporting uses the original `path` as `sourcePath` so the raw bytes are
+   * copied verbatim instead of being written as garbled text.
+   */
+  isBinary?: boolean
+  /**
+   * When the main process was able to convert a binary file (docx / xlsx /
+   * pptx / pdf) into something readable, `content` is populated and this
+   * flag tells the renderer how to display it:
+   *   - 'html': dangerouslySetInnerHTML inside a prose container (docx via
+   *     mammoth, xlsx via SheetJS, pptx via the inline parser).
+   *   - 'text': render in a whitespace-preserving prose surface (pdf via
+   *     pdf-parse).
+   * `isBinary` is still set so export copies the original file bytes
+   * verbatim instead of writing the converted preview back out.
+   */
+  previewKind?: 'html' | 'text'
+  /**
+   * When the preview originated from an ArtifactRef (top-bar dropdown /
+   * in-drawer file list / inline `artifact://` link), the artifact_id is
+   * kept here so the drawer's side-list can still match this preview
+   * against the session's artifact list — `path` swaps from
+   * `artifact://art_xxx` to the cached temp-file path during fetch+read,
+   * so we can no longer match on `path` alone.
+   */
+  artifactId?: string
 }
 
 interface PermissionRequestData {
@@ -454,6 +471,14 @@ interface SessionState {
    * `plan_approved` / `response_end`.
    */
   awaitingPlanProposed?: boolean
+  /**
+   * v0.6.0 §10.9 — pending system notices (card_kind=system) that the user
+   * has not yet acknowledged. Each notice is shown as a modal that MUST be
+   * manually dismissed via "我已知晓"; we FIFO-queue them per-session so
+   * concurrent notices don't overwrite each other. Dedup is by `id` (=
+   * server's card_id, which is session-deduped upstream).
+   */
+  systemNotices?: SystemNotice[]
 }
 
 interface CollaborationCapabilities {
@@ -472,13 +497,31 @@ interface RoutedAgentInfo {
   updatedAt: number
 }
 
+interface LoadedSkillInfo {
+  name: string
+  version?: string
+  source?: string
+}
+
 interface SyncAgentState {
   agentId: string
   agentName: string
   description: string
   /** v1.12: full task prompt (≤800 runes) handed from parent to sub-agent. */
   task?: string
+  /** Runtime execution shape — sync | async. Returns "sync" for every leaf
+   *  L3 so it's nearly useless for "which worker did this" UX. */
   agentType: string
+  /** LLM-facing dispatch label: writer / researcher / analyst / developer
+   *  / freelancer / ... — empty for legacy events that didn't carry it.
+   *  Use this (not agentType) anywhere the user needs to tell workers
+   *  apart in a dashboard / list. */
+  subagentType?: string
+  /** Skills preloaded by SpawnSync (candidate) or LoadSkill (runtime) on
+   *  this agent's first turn. Empty unless the agent definition opts
+   *  into skill self-management (freelancer always; fixed L3s when they
+   *  list SearchSkill / LoadSkill in AllowedTools). */
+  loadedSkills?: LoadedSkillInfo[]
   parentAgentId: string
   status: 'running' | 'completed' | 'max_turns' | 'model_error' | 'aborted' | 'timeout' | 'error'
   durationMs?: number
@@ -724,6 +767,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   messagesEndRef,
   onScroll,
   onOpenFilePreview,
+  onPreviewUserImage,
   onOpenArtifact,
   onRespondPermission,
   onRespondAskQuestion,
@@ -743,6 +787,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
   messagesEndRef: RefObject<HTMLDivElement | null>
   onScroll: () => void
   onOpenFilePreview: (preview: FilePreviewData) => void
+  /** v1.x: 用户消息中的图片附件改走居中 FilePreviewModal（与首页一致），
+   * 不再使用右侧 FilePreviewDrawer。非图片附件仍走 onOpenFilePreview。 */
+  onPreviewUserImage: (attachment: LocalAttachmentItem) => void
   onOpenArtifact?: (artifactId: string) => void
   onRespondPermission: RespondPermissionHandler
   onRespondAskQuestion: RespondAskQuestionHandler
@@ -772,6 +819,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
               activeIntent={message.isStreaming ? currentIntent : undefined}
               hasPendingPlanDraft={!!planDraft && !planDraft.confirmed}
               onOpenFilePreview={onOpenFilePreview}
+              onPreviewUserImage={onPreviewUserImage}
               onOpenArtifact={onOpenArtifact}
               onRespondPermission={onRespondPermission}
               onRespondAskQuestion={onRespondAskQuestion}
@@ -842,6 +890,7 @@ const ConversationQuickNav = memo(function ConversationQuickNav({
   displayMessages: Message[]
   messagesViewportRef: RefObject<HTMLDivElement | null>
 }) {
+  const { t } = useTranslation()
   const userMessages = useMemo(
     () => displayMessages.filter((m) => m.role === 'user'),
     [displayMessages]
@@ -1368,6 +1417,10 @@ function buildMessagePayload(content: string, attachments: AttachmentItem[]): st
   const text = content.trim()
   if (attachments.length === 0) return text
 
+  // v1.x: 之前只把非图片附件写进 JSON 元数据块，导致切换会话后图片附件
+  // 无法从 DB 恢复（extractAttachments 拿不到它们的元信息），UI 上图片就
+  // 丢失了。现在把所有附件元数据都持久化进 JSON 块；图片的 base64 内容
+  // 仍然只通过 multimodal 通道发送，不会出现在 prompt 文本里。
   const attachmentPayload = JSON.stringify({
     version: 1,
     items: attachments.map(({ name, path, url, size, extension, kind }) => ({
@@ -1380,9 +1433,12 @@ function buildMessagePayload(content: string, attachments: AttachmentItem[]): st
     })),
   }, null, 2)
 
+  const hasImages = attachments.some((a) => a.kind === 'image')
   const instructions = [
     'Attached local files are listed below.',
-    'Use the local path or file URL with filesystem tools when you need to inspect file contents.',
+    hasImages
+      ? 'Image entries (kind = "image") are already supplied as inline multimodal content in this turn — do NOT try to re-read them with filesystem tools; use the local path or URL only for non-image files.'
+      : 'Use the local path or file URL with filesystem tools when you need to inspect file contents.',
   ].join('\n')
 
   return [
@@ -2503,6 +2559,7 @@ function getToolErrorPresentation(t: (key: string) => string, errorType?: string
     contract_fail:     { icon: '📋', label: t('chat.toolError.contractFail'),  color: 'amber'  },
     dependency_fail:   { icon: '🔗', label: t('chat.toolError.dependencyFail'), color: 'orange' },
     internal:          { icon: '⚠️', label: t('chat.toolError.internal'),  color: 'red'    },
+    unsupported_modality: { icon: '🖼', label: t('chat.toolError.unsupportedModality'), color: 'amber' },
   }
 
   if (errorType && Object.prototype.hasOwnProperty.call(presentations, errorType)) {
@@ -2709,10 +2766,16 @@ function formatArtifactSize(size?: number): string {
  */
 function SessionArtifactsButton({
   artifacts,
-  onOpenFilePreview,
+  onOpenArtifact,
 }: {
   artifacts: ArtifactRef[]
-  onOpenFilePreview: (preview: FilePreviewData) => void
+  // Receives the full ArtifactRef so the parent can wire fetch+read
+  // through the shared openArtifactPreview helper. Previously this prop
+  // was a raw onOpenFilePreview that took a FilePreviewData and the
+  // button built it from artifact.uri / preview_text, which produced a
+  // placeholder-only path (`art_xxx`) for blob artifacts since the
+  // engine no longer ships preview_text for binaries.
+  onOpenArtifact: (artifact: ArtifactRef) => void
 }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
@@ -2739,12 +2802,7 @@ function SessionArtifactsButton({
 
   const handleSelect = (artifact: ArtifactRef) => {
     setOpen(false)
-    onOpenFilePreview({
-      path: artifact.uri || artifact.artifact_id,
-      fileName: artifact.name || artifact.artifact_id,
-      operation: 'read_file',
-      content: artifact.preview_text || '',
-    })
+    onOpenArtifact(artifact)
   }
 
   return (
@@ -3144,11 +3202,99 @@ export function ChatPage() {
   const [activeSessionId, setActiveSessionId] = useState('')
   const [sessionProjectContexts, setSessionProjectContexts] = useState<Record<string, ProjectContext>>({})
   const [filePreview, setFilePreview] = useState<FilePreviewData | null>(null)
+  // 用户消息里的图片附件单独走居中 FilePreviewModal，行为对齐首页输入框
+  // 下方的附件预览（HomePage.tsx 同样把 onPreview 接到 FilePreviewModal），
+  // 避免与右侧 FilePreviewDrawer 抢占视觉焦点。
+  const [userImagePreview, setUserImagePreview] = useState<FilePreviewData | null>(null)
+  const openUserImagePreview = useCallback(async (attachment: LocalAttachmentItem) => {
+    try {
+      const result = await window.files.read(attachment.path)
+      setUserImagePreview({
+        path: result?.path || attachment.path,
+        fileName: attachment.name || attachment.path.split(/[\\/]/).pop() || attachment.path,
+        operation: 'read_file',
+        content: result?.ok && typeof result.content === 'string' ? result.content : '',
+        isBinary: result?.ok ? Boolean(result.isBinary) : false,
+        previewKind:
+          result?.ok && (result.previewKind === 'html' || result.previewKind === 'text')
+            ? result.previewKind
+            : undefined,
+      })
+    } catch (err) {
+      console.error('Failed to preview user image:', err)
+      setUserImagePreview({
+        path: attachment.path,
+        fileName: attachment.name || attachment.path,
+        operation: 'read_file',
+        content: '',
+      })
+    }
+  }, [])
   const [webPreview, setWebPreview] = useState<WebPreviewData | null>(null)
   const openWebPreview = useCallback((data: WebPreviewData) => {
     if (!data?.url || !/^https?:\/\//i.test(data.url)) return
     setWebPreview(data)
   }, [])
+
+  // openArtifactPreview is the single funnel through which every UI
+  // entry-point (top-bar dropdown, in-drawer file list, inline markdown
+  // links, ...) opens an artifact. Behaviour:
+  //
+  //   1. Immediately set a placeholder FilePreviewData so the drawer
+  //      pops up while the network round-trip is in flight.
+  //   2. window.artifacts.fetch — main process pulls bytes via
+  //      `/api/v1/artifacts/{id}/content` and writes them to
+  //      ~/.harnessclaw/artifact-cache/<session>/<id>/<fileName>.
+  //   3. window.files.read on the resulting path — same pipeline as
+  //      opening a local file: docx → mammoth → HTML, pdf → pdf-parse →
+  //      text, etc.
+  //   4. Replace the placeholder with the rich preview.
+  //
+  // Keeping this in one place fixes the historical bug where the top-bar
+  // dropdown showed `path: art_xxx` (placeholder only) while the in-drawer
+  // list showed the real file — two entry-points had drifted into two
+  // different setFilePreview shapes.
+  const openArtifactPreview = useCallback(
+    async (artifact: ArtifactRef, sessionId?: string) => {
+      if (!artifact) return
+      // artifactId is preserved on every setFilePreview below so the
+      // drawer's side-list can match this preview against the session's
+      // artifact list. Path alone isn't enough because we swap it from
+      // `artifact://art_xxx` (placeholder) to the local temp-file path
+      // (after fetch+read).
+      setFilePreview({
+        path: artifact.uri || artifact.artifact_id,
+        fileName: artifact.name || artifact.artifact_id,
+        operation: 'read_file',
+        content: artifact.preview_text || '',
+        artifactId: artifact.artifact_id,
+      })
+      try {
+        const fetchRes = await window.artifacts.fetch(artifact.artifact_id, sessionId)
+        if (!fetchRes.ok) {
+          console.error('artifact fetch failed:', fetchRes.error)
+          return
+        }
+        const readRes = await window.files.read(fetchRes.path)
+        setFilePreview({
+          path: fetchRes.path,
+          fileName: fetchRes.fileName || artifact.name || artifact.artifact_id,
+          operation: 'read_file',
+          content:
+            readRes?.ok && typeof readRes.content === 'string' ? readRes.content : '',
+          isBinary: readRes?.ok ? Boolean(readRes.isBinary) : false,
+          previewKind:
+            readRes?.ok && (readRes.previewKind === 'html' || readRes.previewKind === 'text')
+              ? readRes.previewKind
+              : undefined,
+          artifactId: artifact.artifact_id,
+        })
+      } catch (err) {
+        console.error('artifact preview pipeline failed:', err)
+      }
+    },
+    [],
+  )
   // User-configurable behavior for plain http(s) link clicks inside assistant
   // markdown messages. Persisted in app config under `ui.linkOpenBehavior`.
   // Default is `'drawer'` — clicking a link opens the in-app WebPreviewDrawer
@@ -3169,6 +3315,11 @@ export function ChatPage() {
   const [sendBurstActive, setSendBurstActive] = useState(false)
   const [dropBurstActive, setDropBurstActive] = useState(false)
   const pasted = usePastedBlocks()
+  // Active model's resolved supports — used to gate image attachments
+  // before sending. Loads asynchronously on mount; until then we treat
+  // the model as vision-less to err on the side of caution (the gate
+  // never fails closed for text-only sends).
+  const modelCaps = useActiveModelCapabilities()
   const messagesViewportRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null)
@@ -3236,10 +3387,84 @@ export function ChatPage() {
     return resolvedSessionId
   }, [navigate, routeProjectContext])
 
-  const sendInitialMessage = useCallback((sid: string, text: string, initialFiles: AttachmentItem[] = [], coordinatorMode?: 'react' | 'plan', planConfirmation?: 'required') => {
+  const sendInitialMessage = useCallback(async (sid: string, text: string, initialFiles: AttachmentItem[] = [], coordinatorMode?: 'react' | 'plan', planConfirmation?: 'required') => {
     pendingInitialTurn.current = null
     const trimmedText = text.trim()
-    const payload = buildMessagePayload(trimmedText, initialFiles)
+
+    // Same multimodal split as handleSend: images go through the wire
+    // content[] array as proper image blocks, non-image attachments
+    // stay on the legacy JSON-text path inside buildMessagePayload.
+    // Skipping this here is what made the launcher-screen "first send"
+    // path silently strip images on 5/19.
+    const imageFiles = initialFiles.filter((a) => a.kind === 'image')
+    const otherFiles = initialFiles.filter((a) => a.kind !== 'image')
+
+    // Vision gate. modelCaps may still be loading on a fast first send;
+    // when it is, we err on the side of letting the message through and
+    // rely on the server-side multimodal.Gate (which always runs) to
+    // catch incompatible model + image combinations.
+    if (imageFiles.length > 0 && !modelCaps.loading && !modelCaps.supports.vision) {
+      const noticeAt = Date.now()
+      ensureLocalSession(sid)
+      updateSession(sid, (prev) => ({
+        ...prev,
+        messages: [
+          ...prev.messages,
+          {
+            id: `cap-${noticeAt}`,
+            role: 'assistant',
+            content: '',
+            timestamp: noticeAt,
+            systemNotice: {
+              kind: 'error',
+              title: '当前模型不支持图片输入',
+              message: `模型 ${modelCaps.modelKey || '(未配置)'} 没有 vision 能力，无法识别附带的图片。`,
+              hint: '请在右上角切换到具备多模态能力的模型（如 Claude Opus 4.7 或 GPT-5.5）后重试。',
+            },
+          },
+        ],
+      }))
+      setInput('')
+      setAttachments([])
+      return
+    }
+
+    // Read each image to base64 + sniffed MIME. Limit (10MB) and MIME
+    // whitelist enforced in main.
+    const wireImages: Array<{ mime: string; base64: string }> = []
+    for (const att of imageFiles) {
+      if (!att.path) continue
+      const res = await window.files.readBase64(att.path)
+      if (!res.ok) {
+        const failAt = Date.now()
+        ensureLocalSession(sid)
+        updateSession(sid, (prev) => ({
+          ...prev,
+          messages: [
+            ...prev.messages,
+            {
+              id: `img-${failAt}`,
+              role: 'assistant',
+              content: '',
+              timestamp: failAt,
+              systemNotice: {
+                kind: 'error',
+                title: `读取图片失败：${att.name}`,
+                message: res.message || res.error,
+                hint: '支持 PNG / JPEG / GIF / WebP / PDF，最大 10MB。',
+              },
+            },
+          ],
+        }))
+        setInput('')
+        setAttachments([])
+        return
+      }
+      wireImages.push({ mime: res.mime, base64: res.data })
+    }
+
+    // Non-image attachments go through the legacy JSON-text path.
+    const payload = buildMessagePayload(trimmedText, otherFiles)
     setInput('')
     setAttachments([])
     ensureLocalSession(sid)
@@ -3261,11 +3486,16 @@ export function ChatPage() {
         timestamp: Date.now(),
       }],
     }))
-    const sendOptions = (coordinatorMode || planConfirmation)
-      ? { coordinatorMode, planConfirmation }
-      : undefined
+    const sendOptions: { coordinatorMode?: 'react' | 'plan'; planConfirmation?: 'required'; images?: typeof wireImages } | undefined =
+      (coordinatorMode || planConfirmation || wireImages.length > 0)
+        ? {
+            ...(coordinatorMode ? { coordinatorMode } : {}),
+            ...(planConfirmation ? { planConfirmation } : {}),
+            ...(wireImages.length > 0 ? { images: wireImages } : {}),
+          }
+        : undefined
     void window.harnessclaw.send(payload, sid, sendOptions)
-  }, [ensureLocalSession, updateSession])
+  }, [ensureLocalSession, updateSession, modelCaps])
 
   const respondPermission = useCallback(async (requestId: string, approved: boolean, scope: 'once' | 'session') => {
     if (!requestId) return
@@ -3445,7 +3675,7 @@ export function ChatPage() {
         msgCount,
         firstMsg,
         title,
-        label: getConversationLabel(title, firstMsg),
+        label: getConversationLabel(t, title, firstMsg),
       }
     })
   }, [sessionMap, sessions, dbSessions])
@@ -4058,6 +4288,27 @@ export function ChatPage() {
                 ? event.task
                 : prev.syncAgents[agentId]?.task,
               agentType: typeof event.agent_type === 'string' ? event.agent_type : prev.syncAgents[agentId]?.agentType || 'sync',
+              // Hybrid blob store + skill-aware spawn (engine 2026-05):
+              // subagent_type carries the LLM-facing worker label
+              // (writer / freelancer / ...) so the stats / panel can
+              // actually tell agents apart. loaded_skills surfaces the
+              // skills preloaded on this agent's first turn — chips
+              // render in the agent card under the task line.
+              subagentType: typeof event.subagent_type === 'string'
+                ? event.subagent_type
+                : prev.syncAgents[agentId]?.subagentType,
+              loadedSkills: Array.isArray(event.loaded_skills)
+                ? (event.loaded_skills as unknown[])
+                    .filter((s): s is { name: string } => !!s && typeof s === 'object' && typeof (s as Record<string, unknown>).name === 'string')
+                    .map((s) => {
+                      const r = s as Record<string, unknown>
+                      return {
+                        name: String(r.name),
+                        version: typeof r.version === 'string' ? r.version : undefined,
+                        source: typeof r.source === 'string' ? r.source : undefined,
+                      }
+                    })
+                : prev.syncAgents[agentId]?.loadedSkills,
               parentAgentId: typeof event.parent_agent_id === 'string' ? event.parent_agent_id : prev.syncAgents[agentId]?.parentAgentId || 'main',
               status: 'running',
               deniedTools: [],
@@ -4612,6 +4863,44 @@ export function ChatPage() {
             fromSubagent: false,
           },
         }))
+        break
+      }
+
+      case 'system_notice': {
+        // v0.6.0 §10.9 — card_kind=system: framework-level system prompt
+        // (e.g. "搜索能力不可用"). The server already dedups per session, but
+        // we also dedup by `card_id` defensively in case the same card is
+        // replayed on reconnect. The notice is queued and rendered as a
+        // modal the user MUST manually acknowledge via "我已知晓".
+        //
+        // v0.6.1: `topic` is the stable machine-readable classification.
+        // Route business logic (deeplink / telemetry) off `topic`, NOT off
+        // `title` / `summary`. Unknown topics still render as a generic
+        // system card (forward-compat clause).
+        const sid = eventSessionId!
+        if (!sid) break
+        const id = typeof event.card_id === 'string' && event.card_id
+          ? event.card_id
+          : `system-${Date.now()}`
+        const topic = typeof event.topic === 'string' ? event.topic : ''
+        const title = typeof event.title === 'string' && event.title
+          ? event.title
+          : '系统提示'
+        const summary = typeof event.summary === 'string' ? event.summary : ''
+        const actionHint = typeof event.action_hint === 'string' ? event.action_hint : ''
+        const icon = typeof event.icon === 'string' ? event.icon : 'info'
+        const severity = typeof event.severity === 'string' ? event.severity : 'info'
+        updateSession(sid, (prev) => {
+          const existing = prev.systemNotices || []
+          if (existing.some((n) => n.id === id)) return prev
+          return {
+            ...prev,
+            systemNotices: [
+              ...existing,
+              { id, topic, title, summary, actionHint, icon, severity },
+            ],
+          }
+        })
         break
       }
 
@@ -5488,14 +5777,89 @@ export function ChatPage() {
   const handleHarnessclawEventRef = useRef(handleHarnessclawEvent)
   handleHarnessclawEventRef.current = handleHarnessclawEvent
 
-  const handleSend = () => {
+  const handleSend = async () => {
     const message = composerPayload
     if ((!message && attachments.length === 0 && pasted.blocks.length === 0) || activeSession.isProcessing) return
 
     const sid = activeSessionId || ensureLocalSession(undefined, activeProjectContext || null)
 
+    // Split attachments into image-typed (which flow through the
+    // multimodal wire content[] path) vs non-image (legacy
+    // JSON-text-block path inside buildMessagePayload). Image
+    // attachments are NEVER appended to the prompt text — they go on
+    // the wire as proper image content blocks via the new images
+    // option to window.harnessclaw.send.
+    const imageAttachments = attachments.filter((a) => a.kind === 'image')
+
+    // Pre-send capability gate. The server runs the same check
+    // (multimodal.Gate in the router) and will reject with an
+    // unsupported_modality error frame, but checking client-side
+    // gives instant UX and prevents a pointless WebSocket round-trip.
+    // We skip the gate while caps are still loading (modelCaps.loading)
+    // so a fast user doesn't see false positives on app start.
+    if (imageAttachments.length > 0 && !modelCaps.loading && !modelCaps.supports.vision) {
+      const noticeAt = Date.now()
+      updateSession(sid, (prev) => ({
+        ...prev,
+        messages: [
+          ...prev.messages,
+          {
+            id: `cap-${noticeAt}`,
+            role: 'assistant',
+            content: '',
+            timestamp: noticeAt,
+            systemNotice: {
+              kind: 'error',
+              title: '当前模型不支持图片输入',
+              message: `模型 ${modelCaps.modelKey || '(未配置)'} 没有 vision 能力，无法识别附带的图片。`,
+              hint: '请在右上角切换到具备多模态能力的模型（如 Claude Opus 4.7 或 GPT-5.5）后重试。',
+            },
+          },
+        ],
+      }))
+      return
+    }
+
+    // Read each image to base64 + sniffed MIME via the main-process
+    // IPC. Hard limit (10 MB / file) and MIME whitelist are enforced
+    // in main; we surface failures inline so the user knows which
+    // file blew up rather than silently dropping them.
+    const wireImages: Array<{ mime: string; base64: string }> = []
+    for (const att of imageAttachments) {
+      if (!att.path) continue
+      const res = await window.files.readBase64(att.path)
+      if (!res.ok) {
+        const failAt = Date.now()
+        updateSession(sid, (prev) => ({
+          ...prev,
+          messages: [
+            ...prev.messages,
+            {
+              id: `img-${failAt}`,
+              role: 'assistant',
+              content: '',
+              timestamp: failAt,
+              systemNotice: {
+                kind: 'error',
+                title: `读取图片失败：${att.name}`,
+                message: res.message || res.error,
+                hint: '支持 PNG / JPEG / GIF / WebP / PDF，最大 10MB。',
+              },
+            },
+          ],
+        }))
+        return
+      }
+      wireImages.push({ mime: res.mime, base64: res.data })
+    }
+
     const pastedSuffix = pasted.buildPastedSuffix()
     const fullMessage = [message, pastedSuffix].filter(Boolean).join('\n\n')
+    // v1.x: 把所有附件（包括图片）的元数据都写进 prompt 末尾的 JSON 块，
+    // 让重新打开会话时 extractAttachments 能恢复出完整的附件列表（图片
+    // 不再丢失）。图片实际内容仍然只在 wire 上以 multimodal content 块
+    // 发送，不会出现在 prompt 文本里；元数据里携带 `kind:"image"` 让模型
+    // 知道这些条目已经内联提供，不必再用文件工具去读。
     const payload = buildMessagePayload(fullMessage, attachments)
     const attachedFiles = [...attachments]
 
@@ -5561,7 +5925,8 @@ export function ChatPage() {
     }))
     // Await the IPC so that an explicit `false` (e.g. transport-not-open
     // thrown inside the main process) immediately clears the thinking state.
-    void window.harnessclaw.send(payload, sid).then((ok) => {
+    const sendOptions = wireImages.length > 0 ? { images: wireImages } : undefined
+    void window.harnessclaw.send(payload, sid, sendOptions).then((ok) => {
       if (ok) return
       const errorAt = Date.now()
       const pendingAssistantId = pendingAssistantIds.current[sid]
@@ -5791,7 +6156,9 @@ export function ChatPage() {
                     produced artifacts; click an item → preview drawer. */}
                 <SessionArtifactsButton
                   artifacts={sessionArtifacts}
-                  onOpenFilePreview={setFilePreview}
+                  onOpenArtifact={(artifact) => {
+                    void openArtifactPreview(artifact, activeSessionId)
+                  }}
                 />
                 {/* Session-level stats popover (context window utilization,
                     cost, tokens, latency, per sub-agent breakdown).
@@ -5887,15 +6254,11 @@ export function ChatPage() {
                 messagesEndRef={messagesEndRef}
                 onScroll={updateScrollState}
                 onOpenFilePreview={setFilePreview}
+                onPreviewUserImage={openUserImagePreview}
                 onOpenArtifact={(artifactId) => {
                   const artifact = sessionArtifacts.find((a) => a.artifact_id === artifactId)
                   if (!artifact) return
-                  setFilePreview({
-                    path: artifact.uri || artifact.artifact_id,
-                    fileName: artifact.name || artifact.artifact_id,
-                    operation: 'read_file',
-                    content: artifact.preview_text || '',
-                  })
+                  void openArtifactPreview(artifact, activeSessionId)
                 }}
                 onRespondPermission={respondPermission}
                 onRespondAskQuestion={respondAskQuestion}
@@ -6087,7 +6450,12 @@ export function ChatPage() {
                   <div className="p-3 sm:p-3.5">
                     {pasted.blocks.length > 0 && (
                       <div className="mb-2">
-                        <PastedBlocksBar blocks={pasted.blocks} onRemove={pasted.removeBlock} removable={!activeSession.isProcessing} />
+                        <PastedBlocksBar
+                          blocks={pasted.blocks}
+                          onRemove={pasted.removeBlock}
+                          onUpdate={activeSession.isProcessing ? undefined : pasted.updateBlock}
+                          removable={!activeSession.isProcessing}
+                        />
                       </div>
                     )}
                     <SkillComposerInput
@@ -6112,6 +6480,34 @@ export function ChatPage() {
                       attachments={attachments}
                       onRemove={handleRemoveAttachment}
                       removable={!activeSession.isProcessing}
+                      // 点击附件即打开预览抽屉。先用 window.files.read 在主进程
+                      // 把内容转好（docx → HTML、pdf → 文本、纯文本直读、二进制
+                      // 占位 + isBinary），失败时也填一个空 preview 让用户至少
+                      // 看到文件名/路径。
+                      onPreview={async (attachment) => {
+                        try {
+                          const result = await window.files.read(attachment.path)
+                          setFilePreview({
+                            path: result?.path || attachment.path,
+                            fileName: attachment.name || attachment.path.split(/[\\/]/).pop() || attachment.path,
+                            operation: 'read_file',
+                            content: result?.ok && typeof result.content === 'string' ? result.content : '',
+                            isBinary: result?.ok ? Boolean(result.isBinary) : false,
+                            previewKind:
+                              result?.ok && (result.previewKind === 'html' || result.previewKind === 'text')
+                                ? result.previewKind
+                                : undefined,
+                          })
+                        } catch (err) {
+                          console.error('Failed to preview attachment:', err)
+                          setFilePreview({
+                            path: attachment.path,
+                            fileName: attachment.name || attachment.path,
+                            operation: 'read_file',
+                            content: '',
+                          })
+                        }
+                      }}
                     />
                     <div className="mt-2 flex items-center justify-between gap-3">
                       <button
@@ -6162,18 +6558,37 @@ export function ChatPage() {
         onClose={() => setFilePreview(null)}
         artifacts={sessionArtifacts}
         onSelectArtifact={(artifact) => {
-          // Mirror the builder used by the top-bar artifact dropdown so the
-          // drawer stays consistent whether the user enters via the dropdown
-          // or via this in-drawer file list.
-          setFilePreview({
-            path: artifact.uri || artifact.artifact_id,
-            fileName: artifact.name || artifact.artifact_id,
-            operation: 'read_file',
-            content: artifact.preview_text || '',
-          })
+          void openArtifactPreview(artifact, activeSessionId)
         }}
       />
+      {/* 用户消息里的图片附件改用居中 FilePreviewModal（首页输入框预览同款），
+          内部 createPortal 到 body，不受当前容器 overflow/transform 影响。 */}
+      <FilePreviewModal preview={userImagePreview} onClose={() => setUserImagePreview(null)} />
       <WebPreviewDrawer preview={webPreview} onClose={() => setWebPreview(null)} />
+      {/* v0.6.0 §10.9 — framework system notice (card_kind=system). Renders
+          the head of the active session's notice queue as a modal the user
+          MUST manually acknowledge. Dismissing pops the head; the next
+          queued notice (if any) takes its place. */}
+      <SystemNoticeModal
+        notice={(activeSession.systemNotices || [])[0] || null}
+        queueDepth={Math.max(0, (activeSession.systemNotices?.length || 0) - 1)}
+        onAcknowledge={(id) => {
+          if (!activeSessionId) return
+          updateSession(activeSessionId, (prev) => ({
+            ...prev,
+            systemNotices: (prev.systemNotices || []).filter((n) => n.id !== id),
+          }))
+        }}
+        onNavigateDeeplink={(deeplink) => {
+          // v0.6.1 §10.9 — route business-logic affordances off the stable
+          // `topic`-derived deeplink, NOT off the notice text. Current map:
+          //   `settings:<section>` → /settings with initialSection=<section>.
+          if (deeplink.startsWith('settings:')) {
+            const section = deeplink.slice('settings:'.length)
+            navigate('/settings', { state: { initialSection: section } })
+          }
+        }}
+      />
     </div>
     </LinkOpenBehaviorContext.Provider>
     </WebPreviewContext.Provider>
@@ -6402,12 +6817,63 @@ function TaskPromptExpander({ prompt }: { prompt: string }) {
   )
 }
 
+/**
+ * 用户消息正文渲染器：超过 8 行的输入会被折叠成约 8 行高，并在底部用
+ * mask-image 渐隐（与侧边栏「最近对话」靠近底部的 fade 同款），紧贴下方
+ * 的「展开 / 收起」按钮自然衔接被遮掩的尾部。≤8 行的消息原样渲染。
+ *
+ * 这里只按显式换行符计数（split('\n')），不试图测量软换行；对绝大多数
+ * 「贴入多行段落」的场景已经够用，复杂度也最低。
+ */
+const USER_MESSAGE_FOLD_LINES = 8
+function UserMessageText({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const lineCount = useMemo(() => text.split('\n').length, [text])
+  const tooLong = lineCount > USER_MESSAGE_FOLD_LINES
+
+  if (!tooLong) {
+    return <p className="whitespace-pre-wrap">{text}</p>
+  }
+
+  return (
+    <div className="flex flex-col">
+      <p
+        className={cn(
+          'whitespace-pre-wrap',
+          // 8 行 × text-sm (line-height 1.25rem) = 10rem。再补一点让 mask
+          // 的渐隐区有足够「呼吸」，避免最后一行被切得太死。
+          !expanded && 'max-h-[10.5rem] overflow-hidden user-message-fade-bottom',
+        )}
+      >
+        {text}
+      </p>
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        // 在用户气泡（深色背景）里，按钮用半透明文字保持低调，hover
+        // 时再点亮。折叠态下用负 margin 让按钮往上贴近被遮罩的尾部，
+        // 视觉上就像 fade 直接过渡到按钮所在的那一行。`self-center` 让
+        // 按钮在气泡里水平居中。
+        className={cn(
+          'self-center inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium opacity-75 transition-opacity hover:opacity-100 focus:outline-none focus-visible:opacity-100',
+          expanded ? 'mt-1.5' : '-mt-3',
+        )}
+        aria-expanded={expanded}
+      >
+        {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        <span>{expanded ? '收起' : `展开（共 ${lineCount} 行）`}</span>
+      </button>
+    </div>
+  )
+}
+
 function MessageBubble({
   message,
   syncAgents,
   activeIntent,
   hasPendingPlanDraft,
   onOpenFilePreview,
+  onPreviewUserImage,
   onOpenArtifact,
   onRespondPermission,
   onRespondAskQuestion,
@@ -6425,12 +6891,16 @@ function MessageBubble({
    * the streaming assistant message during that window. */
   hasPendingPlanDraft?: boolean
   onOpenFilePreview: (preview: FilePreviewData) => void
+  /** v1.x: 用户消息中的图片点击改走居中 FilePreviewModal（与首页一致）。
+   * 非图片附件仍走 onOpenFilePreview / openFilePathPreview。 */
+  onPreviewUserImage: (attachment: LocalAttachmentItem) => void
   onOpenArtifact?: (artifactId: string) => void
   onRespondPermission: (requestId: string, approved: boolean, scope: 'once' | 'session') => Promise<void>
   onRespondAskQuestion: RespondAskQuestionHandler
   /** v0.5.0: continue / retry / cancel decision reply for step_decision. */
   onRespondStepDecision: RespondStepDecisionHandler
 }) {
+  const { t, i18n } = useTranslation()
   const [copied, setCopied] = useState(false)
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
@@ -6601,6 +7071,12 @@ function MessageBubble({
   }
 
   const attachments = message.attachments || []
+  // 对用户消息把图片与其它附件拆开渲染：图片放在文字之前（更接近粘贴所
+  // 见即所得的预览），其它附件保留在文字之后的原位置。助手消息维持原行为，
+  // 直接合并渲染。
+  const userImageAttachments = isUser ? attachments.filter((a) => a.kind === 'image') : []
+  const userNonImageAttachments = isUser ? attachments.filter((a) => a.kind !== 'image') : []
+  const trailingAttachments = isUser ? userNonImageAttachments : attachments
   const lastVisibleActivityTs = segments.reduce((latest, seg) => Math.max(latest, seg.ts), message.timestamp)
   // While a `prompt.user` (AskUserQuestion / permission / plan_review) is
   // awaiting the user's reply, the engine's turn is parked — nothing is
@@ -6634,6 +7110,10 @@ function MessageBubble({
         fileName,
         operation: 'read_file',
         content: result?.ok && typeof result.content === 'string' ? result.content : '',
+        isBinary: result?.ok ? Boolean(result.isBinary) : false,
+        previewKind: result?.ok && (result.previewKind === 'html' || result.previewKind === 'text')
+          ? result.previewKind
+          : undefined,
       })
     } catch (error) {
       console.error('Failed to read file path:', error)
@@ -6664,7 +7144,15 @@ function MessageBubble({
       )}
     >
       {isUser ? (
-        <p className="whitespace-pre-wrap">{renderTextWithFilePaths(text, openFilePathPreview)}</p>
+        // User-typed text is shown verbatim — do NOT auto-linkify paths into
+        // FilePathChips here. Users frequently paste raw filesystem paths
+        // (e.g. `/Users/skb/Downloads/work001`) that may be directories,
+        // non-existent, or simply not intended as clickable references. The
+        // chip rendering is reserved for assistant output where the agent
+        // has explicitly produced a path it knows is openable.
+        // 超过 8 行的用户输入由 UserMessageText 折叠展示（底部 mask 渐隐 +
+        // 「展开 / 收起」按钮），≤8 行的消息走原本的纯 <p> 路径。
+        <UserMessageText text={text} />
       ) : (
         <div className={cn(
           'prose max-w-none break-words [overflow-wrap:anywhere] text-foreground prose-headings:text-foreground prose-p:text-foreground prose-strong:text-foreground prose-li:text-foreground prose-a:text-primary prose-blockquote:border-l-border prose-blockquote:text-muted-foreground prose-hr:my-4 prose-hr:border-border/70 prose-pre:max-w-full prose-pre:overflow-x-auto prose-pre:border prose-pre:border-border prose-pre:bg-muted prose-pre:text-foreground prose-code:break-all prose-code:rounded prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:text-xs prose-code:text-foreground dark:prose-invert',
@@ -6858,6 +7346,20 @@ function MessageBubble({
           </button>
         </div>
 
+        {/* 用户消息：图片附件放到文字段落之前，点击走居中 FilePreviewModal
+            （与首页输入框下方的附件预览一致），不再使用 FilePreviewDrawer。 */}
+        {isUser && userImageAttachments.length > 0 && (
+          <div className="mb-1.5 flex justify-end">
+            <div className="max-w-[420px]">
+              <AttachmentPreviewPanel
+                attachments={userImageAttachments}
+                removable={false}
+                onPreview={onPreviewUserImage}
+              />
+            </div>
+          </div>
+        )}
+
         {displaySegments.map((seg, i) => {
           if (seg.kind === 'main') {
             return (
@@ -6949,11 +7451,24 @@ function MessageBubble({
                       : depth === 2
                         ? 'ml-14'
                         : 'ml-20'
+                  const subagentTypeLabel = liveAgentState?.subagentType
+                  const loadedSkills = liveAgentState?.loadedSkills || []
                   return (
                     <div key={latestTask.taskId || `sub-${agentIdx}`} className={cn(indentClass, 'border-l-2 border-primary/20 pl-3')} data-agent-depth={depth}>
                       <div className="mb-1.5 flex items-center gap-2">
                         <AgentAvatar agentId={latestTask.taskId || latestTask.label} agentName={latestTask.label} size="sm" />
                         <span className="text-xs font-medium text-foreground/80">{latestTask.label}</span>
+                        {/* subagent_type: writer / freelancer / ... — the
+                            LLM-facing dispatch label. Useful when the
+                            agent's "label" is the codename/personality
+                            (小林) and the user wants to know what kind of
+                            worker it actually is. Hidden when missing
+                            (legacy events) or duplicate of label. */}
+                        {subagentTypeLabel && subagentTypeLabel !== latestTask.label && (
+                          <span className="inline-flex items-center rounded-full border border-border bg-background px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
+                            {subagentTypeLabel}
+                          </span>
+                        )}
                         <span className={cn(
                           'rounded-full px-1.5 py-0.5 text-[10px]',
                           visualStatus === 'failed'
@@ -6965,6 +7480,43 @@ function MessageBubble({
                           {visualStatus === 'failed' ? t('chat.asyncAgentStatus.failed') : visualStatus === 'running' ? t('chat.asyncAgentStatus.running') : t('chat.asyncAgentStatus.completed')}
                         </span>
                       </div>
+
+                      {/* Loaded skills row (engine 2026-05): freelancer or
+                          any skill-aware fixed L3 carries preloaded skills
+                          from SpawnSync (candidate) and/or runtime
+                          LoadSkill calls. Showing the chips makes the
+                          implicit skill injection visible — previously the
+                          user couldn't tell whether the agent received a
+                          skill at all. */}
+                      {loadedSkills.length > 0 && (
+                        <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+                          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                            已加载 skill
+                          </span>
+                          {loadedSkills.map((skill) => (
+                            <span
+                              key={skill.name}
+                              className={cn(
+                                'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] leading-none',
+                                skill.source === 'runtime'
+                                  ? 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-700 dark:bg-blue-950/30 dark:text-blue-300'
+                                  : 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300'
+                              )}
+                              title={
+                                skill.source === 'runtime'
+                                  ? `${skill.name} — 运行时 LoadSkill 加载`
+                                  : `${skill.name} — L2 派活时预装`
+                              }
+                            >
+                              <span>📦</span>
+                              <span>{skill.name}</span>
+                              {skill.version && (
+                                <span className="text-[9px] opacity-70">v{skill.version}</span>
+                              )}
+                            </span>
+                          ))}
+                        </div>
+                      )}
 
                       {/* v1.12: live agent.intent shimmer rendered inside the
                           sub-agent card, right under the header. Cleared when
@@ -7041,10 +7593,18 @@ function MessageBubble({
           }
         })}
 
-        {attachments.length > 0 && (
+        {trailingAttachments.length > 0 && (
           <div className={cn('mb-1.5', isUser ? 'flex justify-end' : 'flex justify-start')}>
             <div className="max-w-[420px]">
-              <AttachmentPreviewPanel attachments={attachments} removable={false} />
+              <AttachmentPreviewPanel
+                attachments={trailingAttachments}
+                removable={false}
+                // 点击附件 → 走与 read_file 工具结果一样的 openFilePathPreview，
+                // 复用 FilePreviewDrawer 内置的图片 / docx / pdf / md / 文本
+                // 分支，无需额外分发逻辑。用户消息里的图片已经在文字之前用
+                // FilePreviewModal 单独渲染，所以这里只剩非图片附件。
+                onPreview={(attachment) => void openFilePathPreview(attachment.path)}
+              />
             </div>
           </div>
         )}
@@ -7830,6 +8390,42 @@ function ToolCallCard({
               </div>
             </div>
           )}
+          {/* Generic tool output renderer — surfaces result.content when no
+              other specialized view (filePreview, search URL list,
+              artifact card) already consumed it. This is the catch-all
+              for tools like SearchSkill / LoadSkill / ListLoadedSkills
+              whose value lives entirely in the JSON output string. We
+              intentionally skip:
+                - failed status (the user_message + diagnostics block
+                  already show the error)
+                - read/write_file (FilePreviewDrawer is the proper view)
+                - search render hint (URL list above is richer)
+                - artifact render hint (ArtifactWrite emits its own card)
+              The pretty-print attempt JSON-parses & re-stringifies so
+              SearchSkill's `{"skills":[...]}` blob reads naturally; on
+              parse failure we fall back to the raw string. */}
+          {(() => {
+            if (!result?.content || status !== 'ok') return null
+            if (filePreview) return null
+            if (isSearchResult) return null
+            if (result.renderHint === 'artifact' || result.renderHint === 'artifact_view') return null
+            const raw = result.content
+            let pretty = raw
+            try {
+              const parsed = JSON.parse(raw)
+              if (parsed && typeof parsed === 'object') {
+                pretty = JSON.stringify(parsed, null, 2)
+              }
+            } catch {
+              /* not JSON — render verbatim */
+            }
+            return (
+              <div>
+                <p className="mb-1 text-[10px] text-muted-foreground">输出</p>
+                <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted p-2 text-[11px] font-mono text-foreground/80">{pretty}</pre>
+              </div>
+            )
+          })()}
           {metadataText && (
             <div>
               <p className="mb-1 text-[10px] text-muted-foreground">Metadata</p>
@@ -7857,6 +8453,7 @@ function PermissionRequestCard({
   result?: ToolActivity
   onRespondPermission: (requestId: string, approved: boolean, scope: 'once' | 'session') => Promise<void>
 }) {
+  const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const [submitting, setSubmitting] = useState<string | null>(null)
   const contentId = useId()
@@ -8007,6 +8604,7 @@ function AskUserQuestionCard({
   result?: ToolActivity
   onRespondAskQuestion: RespondAskQuestionHandler
 }) {
+  const { t } = useTranslation()
   const requestData = parseAskQuestionRequestData(request.content)
   const resultData = result ? parseAskQuestionResultData(result.content) : null
   const isResolved = !!resultData
@@ -8405,7 +9003,7 @@ function StepDecisionCard({
   )
 }
 
-function FilePreviewDrawer({
+export function FilePreviewDrawer({
   preview,
   onClose,
   artifacts,
@@ -8436,11 +9034,26 @@ function FilePreviewDrawer({
   // becomes available while the user is actually browsing artifact outputs
   // (the same drawer is reused for read_file/write_file tool previews where
   // mixing in an unrelated artifact list would be confusing).
+  //
+  // Matching priority:
+  //   1. preview.artifactId — set by openArtifactPreview when the source
+  //      is an ArtifactRef. Stable across the placeholder → temp-file
+  //      path swap that happens during fetch+read.
+  //   2. preview.path — kept for backward compat with any code path that
+  //      still calls setFilePreview directly with `path: artifact.uri`.
+  const previewArtifactId = preview?.artifactId || ''
   const activeArtifactKey = preview?.path || ''
   const matchedArtifactIndex = useMemo(() => {
-    if (!artifacts || artifacts.length === 0 || !activeArtifactKey) return -1
-    return artifacts.findIndex((a) => a.uri === activeArtifactKey || a.artifact_id === activeArtifactKey)
-  }, [artifacts, activeArtifactKey])
+    if (!artifacts || artifacts.length === 0) return -1
+    if (previewArtifactId) {
+      const byId = artifacts.findIndex((a) => a.artifact_id === previewArtifactId)
+      if (byId >= 0) return byId
+    }
+    if (!activeArtifactKey) return -1
+    return artifacts.findIndex(
+      (a) => a.uri === activeArtifactKey || a.artifact_id === activeArtifactKey,
+    )
+  }, [artifacts, previewArtifactId, activeArtifactKey])
   const canShowArtifactList = !!artifacts && artifacts.length > 1 && matchedArtifactIndex >= 0 && !!onSelectArtifact
 
   // Auto-collapse the panel when navigating to a non-artifact preview so it
@@ -8483,9 +9096,14 @@ function FilePreviewDrawer({
 
   const handleExport = async () => {
     if (!preview) return
+    // For binary files we MUST copy the original bytes from disk; sending
+    // the (empty / placeholder) `content` would write a UTF-8 text file
+    // that just looks like the docx/pdf/etc. extension but contains
+    // garbage.
     const result = await window.files.save({
       defaultFileName: preview.fileName || 'untitled.txt',
       content: preview.content || '',
+      sourcePath: preview.isBinary ? preview.path : undefined,
     })
     if (result.ok && result.path) {
       setExportNotice({ ok: true, text: t('chat.actions.exportedTo', { path: result.path }) })
@@ -8533,6 +9151,8 @@ function FilePreviewDrawer({
   const ext = preview.fileName.includes('.') ? preview.fileName.split('.').pop()!.toLowerCase() : ''
   const language = getFileLanguage(ext)
   const isImage = /^(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/.test(ext)
+  const isAudio = /^(mp3|wav|m4a|aac|flac|ogg)$/.test(ext)
+  const isVideo = /^(mp4|mov|avi|mkv|webm)$/.test(ext)
   const isMarkdown = ext === 'md' || ext === 'mdx'
 
   return createPortal(
@@ -8743,7 +9363,7 @@ function FilePreviewDrawer({
                 <button
                   type="button"
                   onClick={() => void handleExport()}
-                  disabled={!preview.content}
+                  disabled={!preview.content && !preview.isBinary}
                   className="relative z-10 flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl border border-border bg-card transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
                   aria-label={t('chat.actions.export')}
                 >
@@ -8779,23 +9399,74 @@ function FilePreviewDrawer({
         </div>
 
         <div className="min-h-0 flex-1 overflow-auto bg-background/65 p-5">
-          {!preview.content ? (
+          {/* 渲染优先级（按扩展名而非 content）：
+                1. 图片 / 音频 / 视频：原生 <img> / <audio> / <video> 直接拉
+                   file:// URL，不依赖主进程把内容读到 `content` 里。
+                2. 主进程已抽取的富预览（docx/xlsx/pptx 的 HTML、pdf 的 text）。
+                3. Markdown / 代码 / 纯文本 fallback。
+                4. 兜底：无 content 时显示二进制占位或空态提示。 */}
+          {isImage ? (
+            <div className="flex h-full items-center justify-center">
+              <img
+                src={localFileUrl(preview.path)}
+                alt={preview.fileName}
+                className="max-h-full max-w-full rounded-lg object-contain"
+              />
+            </div>
+          ) : isAudio ? (
+            <div className="flex h-full items-center justify-center">
+              <audio
+                src={localFileUrl(preview.path)}
+                controls
+                className="w-full max-w-xl"
+              />
+            </div>
+          ) : isVideo ? (
+            <div className="flex h-full items-center justify-center">
+              <video
+                src={localFileUrl(preview.path)}
+                controls
+                className="max-h-full max-w-full rounded-lg"
+              />
+            </div>
+          ) : !preview.content ? (
             <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-border bg-card/50 p-8 text-center">
               <div>
                 <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-accent">
                   <FileText size={18} className="text-primary" />
                 </div>
-                <p className="text-sm font-medium text-foreground">{t('chat.file.noContent')}</p>
-                <p className="mt-1 text-xs text-muted-foreground">{t('chat.file.noContentDesc')}</p>
+                {preview.isBinary ? (
+                  <>
+                    <p className="text-sm font-medium text-foreground">{t('chat.file.binaryTitle')}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">{t('chat.file.binaryDesc')}</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm font-medium text-foreground">{t('chat.file.noContent')}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">{t('chat.file.noContentDesc')}</p>
+                  </>
+                )}
               </div>
             </div>
-          ) : isImage ? (
-            <div className="flex h-full items-center justify-center">
-              <img
-                src={`file://${preview.path}`}
-                alt={preview.fileName}
-                className="max-h-full max-w-full rounded-lg object-contain"
+          ) : preview.previewKind === 'html' ? (
+            // 主进程已把 docx / xlsx / pptx 等转成语义化 HTML（mammoth /
+            // SheetJS / 自写 pptx 解析器），这里直接渲染。生成的 HTML 只
+            // 包含段落、标题、列表、表格、加粗、斜体、链接、内联图等常规
+            // 元素，不会注入脚本；用 prose 容器套一层让排版与 Markdown
+            // 预览保持一致，并补上 table 边框样式。
+            <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+              <div
+                className="prose max-w-none break-words text-foreground prose-headings:text-foreground prose-p:text-foreground prose-strong:text-foreground prose-li:text-foreground prose-a:text-primary prose-blockquote:border-l-border prose-blockquote:text-muted-foreground prose-hr:my-4 prose-hr:border-border/70 prose-table:border prose-table:border-border prose-th:border prose-th:border-border prose-th:bg-muted prose-th:px-2 prose-th:py-1 prose-td:border prose-td:border-border prose-td:px-2 prose-td:py-1 prose-img:rounded-lg dark:prose-invert"
+                dangerouslySetInnerHTML={{ __html: preview.content }}
               />
+            </div>
+          ) : preview.previewKind === 'text' ? (
+            // pdf-parse 抽出来的纯文本：分页符已含在文本中，用 pre-wrap
+            // 保留原始换行，prose 容器统一字号字色。
+            <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+              <pre className="whitespace-pre-wrap break-words font-sans text-[13px] leading-7 text-foreground">
+                {preview.content}
+              </pre>
             </div>
           ) : isMarkdown ? (
             <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
@@ -9058,6 +9729,7 @@ function WebPreviewDrawer({ preview, onClose }: { preview: WebPreviewData | null
 }
 
 function ThinkingIndicator({ content }: { content: string }) {
+  const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const contentId = useId()
 

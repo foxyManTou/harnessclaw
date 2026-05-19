@@ -431,6 +431,7 @@ export function ProjectWorkspacePage() {
 }
 
 function UsageChartCard() {
+  const { t } = useTranslation()
   const width = 320
   const height = 180
   const paddingTop = 14

@@ -1,19 +1,32 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowRight, Check, ChevronLeft, Loader2, Sparkles } from 'lucide-react'
+import { ArrowRight, Check, ChevronLeft, ChevronRight, Languages, Loader2, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import {
+  MANAGED_PROVIDER_KEYS,
+  PROVIDER_DEFAULT_BASES,
+  PROVIDER_DISPLAY_NAMES,
+  buildAppModelConfig,
+  createEmptyProviderConfig,
+  getEffectiveEngineType,
+  type ManagedProviderKey,
+  type ProtocolProviderKey,
+  type ProviderConfig,
+} from '@/lib/providers'
 import emmaAvatar from '../assets/sidebar-logo.png'
 
-type EngineMode = 'openai' | 'anthropic'
 type ProfileKey = 'A' | 'B' | 'C'
 type StartupOverlayState = 'checking' | 'setup' | 'hidden'
 type StageKey = 'emma' | 'engine' | 'connection' | 'profile'
 
 interface SetupDraft {
-  engineMode: EngineMode | null
+  engineMode: ManagedProviderKey | null
   apiBase: string
   apiKey: string
   modelId: string
+  // Only meaningful when engineMode === 'custom' (mirrors Settings'
+  // protocol toggle inside the custom-provider editor).
+  protocol: ProtocolProviderKey
   profile: ProfileKey | null
 }
 
@@ -61,13 +74,9 @@ function asRecord(value: unknown): ConfigRecord {
     : {}
 }
 
-function getDefaultApiBase(mode: EngineMode | null): string {
-  if (mode === 'anthropic') return 'https://api.anthropic.com'
-  return 'https://api.openai.com'
-}
-
-function getProviderKey(mode: EngineMode | null): string {
-  return mode === 'anthropic' ? 'anthropic' : 'openai'
+function getDefaultApiBase(key: ManagedProviderKey | null): string {
+  if (!key) return ''
+  return PROVIDER_DEFAULT_BASES[key] || ''
 }
 
 function getProfilePreset(profile: ProfileKey | null): {
@@ -84,68 +93,178 @@ function getProfilePreset(profile: ProfileKey | null): {
   return { workspace: `${WORKSPACE_ROOT}/operations`, maxToolIterations: 24, reasoningEffort: 'medium' }
 }
 
-function buildEngineConfig(previous: ConfigRecord, draft: SetupDraft): ConfigRecord {
-  const { providers: _legacyProviders, ...rest } = previous
-  const llm = asRecord(previous.llm)
-  const llmProviders = asRecord(llm.providers)
-  const providerKey = getProviderKey(draft.engineMode)
-  const apiBase = draft.apiBase.trim() || getDefaultApiBase(draft.engineMode)
+// Build a complete providers map seeded with empty configs, then
+// stamp the user's chosen provider with the welcome-flow inputs. The
+// shape matches what `Settings > Models` persists, so the entry
+// surfaces in Settings immediately after onboarding.
+function buildWelcomeProviders(
+  draft: SetupDraft,
+): Record<ManagedProviderKey, ProviderConfig> {
+  const providers = MANAGED_PROVIDER_KEYS.reduce((acc, key) => {
+    acc[key] = createEmptyProviderConfig(key)
+    return acc
+  }, {} as Record<ManagedProviderKey, ProviderConfig>)
+
+  const key = draft.engineMode
+  if (!key) return providers
+
+  const apiBase = draft.apiBase.trim() || getDefaultApiBase(key)
   const apiKey = draft.apiKey.trim()
   const modelId = draft.modelId.trim()
-  const existingLlmProvider = asRecord(llmProviders[providerKey])
 
-  return {
-    ...rest,
-    llm: {
-      ...llm,
-      default_provider: providerKey,
-      providers: {
-        ...llmProviders,
-        [providerKey]: {
-          ...existingLlmProvider,
-          base_url: apiBase,
+  providers[key] = {
+    ...providers[key],
+    apiKey,
+    apiBase: apiBase || providers[key].apiBase,
+    model: modelId || null,
+    protocol: key === 'anthropic' ? 'anthropic' : key === 'custom' ? draft.protocol : 'openai',
+    enabled: true,
+  }
+  return providers
+}
+
+// YAML keywords that would force the serializer to quote a plain
+// string key (YAML 1.1 booleans + null tokens). Numeric / hex / inf /
+// nan are caught by the regex below.
+const YAML_RESERVED_KEYWORDS = new Set([
+  'true', 'false', 'yes', 'no', 'on', 'off', 'y', 'n', 'null', '~',
+])
+
+// Build a YAML-safe endpoint identifier. The engine round-trips
+// endpoint names through YAML; any name that parses as a number,
+// boolean, null, or contains special chars will be wrapped in quotes
+// (e.g. `"1":`). To keep the engine yaml visually clean — and to
+// match the unquoted style of providers configured via Settings >
+// Models (e.g. `xopglm51:`) — we prepend the provider key when the
+// raw modelId would trigger quoting. Plain identifier-shaped model
+// names pass through unchanged.
+//
+// We deliberately do NOT validate or reject numeric inputs in the
+// UI; user-typed model ids stay verbatim in the `model` field. Only
+// the endpoint *key* (which is renderer-controlled) gets normalized.
+function safeEndpointName(key: ManagedProviderKey, modelId: string): string {
+  const ok = /^[A-Za-z_][A-Za-z0-9_.\-]*$/.test(modelId)
+    && !YAML_RESERVED_KEYWORDS.has(modelId.toLowerCase())
+  return ok ? modelId : `${key}-${modelId}`
+}
+
+// Best-effort engine-side provider + endpoint registration.
+//
+// Mirrors the `schedulePatchProviderCredentials` / `ensureProviderExists`
+// / `hotCreateEndpoint` flow in SettingsPage:
+//   1. PATCH /providers/{key} (api_key/base_url). On 404/update_failed,
+//      fall back to POST /providers to create it.
+//   2. POST /providers/{key}/endpoints with `{name=<yaml-safe>, model=
+//      modelId, disabled:false}`. On "already exists" 400, PATCH
+//      disabled=false to make sure the endpoint isn't paused.
+//   3. PUT /agent — append `${key}:${endpointName}` to the fallback
+//      chain so the dispatcher actually routes to the new endpoint.
+//
+// We swallow 404 (API not mounted because chain<2 entries) and status 0
+// (network) silently — the engine picks the values up from app-config
+// on next start.
+async function registerEngineProvider(
+  key: ManagedProviderKey,
+  cfg: ProviderConfig,
+): Promise<void> {
+  const baseUrl = cfg.apiBase?.trim() || PROVIDER_DEFAULT_BASES[key] || ''
+  const apiKey = cfg.apiKey.trim()
+  const modelId = cfg.model?.trim() || ''
+  if (!apiKey && !baseUrl) return
+
+  try {
+    // ── 1. Ensure provider exists on the engine ────────────────────
+    let providerReady = false
+    const patchRes = await window.agentApi.patchProvider(key, {
+      api_key: apiKey,
+      base_url: baseUrl,
+    })
+    if (patchRes.ok) {
+      providerReady = true
+    } else if (patchRes.status === 404 || patchRes.status === 0) {
+      return
+    } else {
+      const engineType = getEffectiveEngineType(key, cfg)
+      const createRes = await window.agentApi.createProvider({
+        name: key,
+        type: engineType,
+        ...(baseUrl ? { base_url: baseUrl } : {}),
+        ...(apiKey ? { api_key: apiKey } : {}),
+      })
+      if (createRes.ok) {
+        providerReady = true
+      } else if (createRes.status === 404 || createRes.status === 0) {
+        return
+      } else if (createRes.status === 400 && /exist/i.test(createRes.message || '')) {
+        // "already exists" race — retry PATCH and treat as ready.
+        await window.agentApi.patchProvider(key, {
           api_key: apiKey,
-          model: modelId,
-        },
-      },
-    },
+          base_url: baseUrl,
+        })
+        providerReady = true
+      }
+    }
+    if (!providerReady || !modelId) return
+
+    // ── 2. Register the model as an endpoint under that provider ───
+    // Endpoint NAME is the YAML-safe identifier; MODEL is the raw
+    // user input. They're identical for well-shaped ids (matching
+    // SettingsPage's `xopglm51` pattern) and differ only when the
+    // user-typed model is YAML-ambiguous (e.g. pure digits).
+    const endpointName = safeEndpointName(key, modelId)
+    const epRes = await window.agentApi.createEndpoint(key, {
+      name: endpointName,
+      model: modelId,
+      disabled: false,
+    })
+    let endpointReady = epRes.ok
+    if (!epRes.ok) {
+      if (epRes.status === 404 || epRes.status === 0) return
+      // Probably "already exists" — verify via GET, then unpause it.
+      const list = await window.agentApi.listEndpoints(key)
+      if (list.ok && list.data.endpoints.some((e) => e.name === endpointName)) {
+        endpointReady = true
+        await window.agentApi.patchEndpoint(key, endpointName, { disabled: false })
+      } else {
+        return
+      }
+    }
+    if (!endpointReady) return
+
+    // ── 3. Append to fallback chain so the dispatcher routes here ──
+    const chain = await window.agentApi.getFallbackChain()
+    if (!chain.ok) return
+    const chainRef = `${key}:${endpointName}`
+    const legacyRef = `${key}.${endpointName}`
+    if (chain.data.chain.includes(chainRef) || chain.data.chain.includes(legacyRef)) return
+    await window.agentApi.updateFallbackChain([...chain.data.chain, chainRef])
+  } catch {
+    // Best-effort — swallow.
   }
 }
 
 function buildAppConfig(previous: ConfigRecord, draft: SetupDraft): ConfigRecord {
-  const agents = asRecord(previous.agents)
-  const defaults = asRecord(agents.defaults)
+  if (!draft.engineMode) return previous
+  const providers = buildWelcomeProviders(draft)
+  const base = buildAppModelConfig(previous, providers, draft.engineMode)
+
+  // buildAppModelConfig already filled modelProviders + agents.defaults
+  // (provider + model). Layer onboarding metadata + profile preset on
+  // top so the wizard's choices stick.
+  const baseAgents = asRecord(base.agents)
+  const baseDefaults = asRecord(baseAgents.defaults)
   const onboarding = asRecord(previous.onboarding)
-  const modelProviders = asRecord(previous.modelProviders)
   const profilePreset = getProfilePreset(draft.profile)
-  const providerKey = getProviderKey(draft.engineMode)
-  const modelId = draft.modelId.trim()
-  const defaultModel = modelId ? `${providerKey}/${modelId}` : defaults.model
-  const apiBase = draft.apiBase.trim() || getDefaultApiBase(draft.engineMode)
-  const apiKey = draft.apiKey.trim()
 
   return {
-    ...previous,
-    modelProviders: {
-      ...modelProviders,
-      defaultSelection: providerKey,
-      [providerKey]: {
-        apiKey,
-        apiBase,
-        model: modelId,
-        protocol: providerKey,
-        extraHeaders: null,
-      },
-    },
+    ...base,
     agents: {
-      ...agents,
+      ...baseAgents,
       defaults: {
-        ...defaults,
-        provider: providerKey,
+        ...baseDefaults,
         workspace: profilePreset.workspace,
         maxToolIterations: profilePreset.maxToolIterations,
         reasoningEffort: profilePreset.reasoningEffort,
-        model: defaultModel,
       },
     },
     onboarding: {
@@ -159,24 +278,45 @@ function buildAppConfig(previous: ConfigRecord, draft: SetupDraft): ConfigRecord
 }
 
 export function WelcomeModal() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+
+  const toggleLanguage = async () => {
+    const next = i18n.language.startsWith('zh') ? 'en' : 'zh'
+    await i18n.changeLanguage(next)
+    try {
+      const cfg = await window.appConfig.read()
+      const ui = asRecord((cfg as ConfigRecord | undefined)?.ui)
+      await window.appConfig.save({ ...(cfg as ConfigRecord), ui: { ...ui, language: next } })
+    } catch {
+      // ignore — language change still takes effect for the current session
+    }
+  }
+
+  // Full managed provider list — mirrors `Settings > Models` so the
+  // welcome flow can configure any vendor the user normally would.
+  // Detail strings live under `welcome.engineOptions.<key>Detail` in
+  // both locale files.
+  const ENGINE_DETAIL_KEYS: Record<ManagedProviderKey, string> = useMemo(() => ({
+    xunfei: 'welcome.engineOptions.xunfeiDetail',
+    anthropic: 'welcome.engineOptions.anthropicDetail',
+    openai: 'welcome.engineOptions.openaiDetail',
+    google: 'welcome.engineOptions.googleDetail',
+    deepseek: 'welcome.engineOptions.deepseekDetail',
+    zhipu: 'welcome.engineOptions.zhipuDetail',
+    moonshot: 'welcome.engineOptions.moonshotDetail',
+    minimax: 'welcome.engineOptions.minimaxDetail',
+    custom: 'welcome.engineOptions.customDetail',
+  }), [])
 
   const engineOptions: Array<{
-    key: EngineMode
+    key: ManagedProviderKey
     title: string
     detail: string
-  }> = useMemo(() => [
-    {
-      key: 'openai',
-      title: 'OpenAI API',
-      detail: t('welcome.engineOptions.openaiDetail'),
-    },
-    {
-      key: 'anthropic',
-      title: 'Anthropic API',
-      detail: t('welcome.engineOptions.anthropicDetail'),
-    },
-  ], [t])
+  }> = useMemo(() => MANAGED_PROVIDER_KEYS.map((key) => ({
+    key,
+    title: PROVIDER_DISPLAY_NAMES[key],
+    detail: t(ENGINE_DETAIL_KEYS[key]),
+  })), [t, ENGINE_DETAIL_KEYS])
 
   const profileOptions: Array<{
     key: ProfileKey
@@ -217,6 +357,7 @@ export function WelcomeModal() {
     apiBase: '',
     apiKey: '',
     modelId: '',
+    protocol: 'openai',
     profile: null,
   })
   const [submitting, setSubmitting] = useState(false)
@@ -289,7 +430,7 @@ export function WelcomeModal() {
   }
 
   const handleFinish = async () => {
-    if (!allStagesDone || submitting) return
+    if (!allStagesDone || submitting || !draft.engineMode) return
     setSubmitting(true)
     setErrorMessage(null)
     try {
@@ -299,13 +440,25 @@ export function WelcomeModal() {
         apiKey: draft.apiKey.trim(),
         modelId: draft.modelId.trim(),
       }
-      const currentEngineConfig = asRecord(await window.engineConfig.read())
       const currentAppConfig = asRecord(await window.appConfig.read())
-      const engineResult = await window.engineConfig.save(buildEngineConfig(currentEngineConfig, finalDraft))
+      // Persist the welcome-flow inputs into appConfig using the same
+      // shape Settings > Models reads, so the configured provider
+      // surfaces immediately after onboarding. Engine YAML is owned
+      // by the Providers Management API and not touched here.
       const appResult = await window.appConfig.save(buildAppConfig(currentAppConfig, finalDraft))
-      if (!engineResult.ok || !appResult.ok) {
-        throw new Error(engineResult.error || appResult.error || t('welcome.saveError'))
+      if (!appResult.ok) {
+        throw new Error(appResult.error || t('welcome.saveError'))
       }
+
+      // Best-effort engine-side registration via Providers Management API.
+      // Silently skipped when API isn't mounted (chain<2) or unreachable.
+      // resolveProviderProtocol/buildAppModelConfig already wrote the
+      // correct agents.defaults.{provider,model} (anthropic / openai /
+      // custom-via-protocol); registerEngineProvider just mirrors the
+      // credentials onto the engine's in-memory provider table.
+      const providers = buildWelcomeProviders(finalDraft)
+      void registerEngineProvider(finalDraft.engineMode, providers[finalDraft.engineMode])
+
       const launched = await window.appBridge.markLaunched()
       if (launched.ok) {
         window.localStorage.setItem(FIRST_RUN_DONE_STORAGE_KEY, 'true')
@@ -336,16 +489,35 @@ export function WelcomeModal() {
               {username ? `${username}，` : ''}{t('welcome.greeting')}
             </h2>
           </div>
-          <span className="text-xs tabular-nums text-muted-foreground">
-            {stageIndex + 1} / {stages.length}
-          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void toggleLanguage()}
+              title={i18n.language.startsWith('zh') ? t('sidebar.switchToEnglish') : t('sidebar.switchToChinese')}
+              aria-label={i18n.language.startsWith('zh') ? t('sidebar.switchToEnglish') : t('sidebar.switchToChinese')}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <Languages size={15} aria-hidden="true" />
+            </button>
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {stageIndex + 1} / {stages.length}
+            </span>
+          </div>
         </header>
 
         <Stepper stages={stages} stageIndex={stageIndex} stageDone={stageDone} onJump={goToStage} />
 
         <div className="min-h-0 flex-1 overflow-hidden px-7 py-6">
-          <div className="mx-auto w-full max-w-[540px]">
-          {currentStage.key !== 'emma' && (
+          {/* Engine stage gets a wider column so more provider cards
+              are visible at once in the slider — the other stages
+              stay at the original 540px reading width. */}
+          <div
+            className={cn(
+              'mx-auto w-full',
+              currentStage.key === 'engine' ? 'max-w-[780px]' : 'max-w-[540px]'
+            )}
+          >
+          {currentStage.key !== 'emma' && currentStage.key !== 'engine' && (
             <div className="mb-5">
               <h3 className="text-sm font-semibold text-foreground">{currentStage.title}</h3>
               <p className="mt-1 text-xs text-muted-foreground">{currentStage.subtitle}</p>
@@ -368,42 +540,42 @@ export function WelcomeModal() {
           )}
 
           {currentStage.key === 'engine' && (
-            <div className="grid gap-2.5">
-              {engineOptions.map((option) => {
-                const selected = draft.engineMode === option.key
-                return (
-                  <button
-                    key={option.key}
-                    type="button"
-                    onClick={() => setDraft((d) => ({ ...d, engineMode: option.key }))}
-                    className={cn(
-                      'group flex items-start justify-between gap-4 rounded-xl border px-4 py-3.5 text-left transition-colors',
-                      selected
-                        ? 'border-primary/60 bg-primary/8 ring-1 ring-primary/30'
-                        : 'border-border bg-background hover:border-border/80 hover:bg-muted/40'
-                    )}
-                  >
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium text-foreground">{option.title}</div>
-                      <div className="mt-1 text-xs leading-5 text-muted-foreground">{option.detail}</div>
-                    </div>
-                    <span
-                      className={cn(
-                        'mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border',
-                        selected ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background'
-                      )}
-                      aria-hidden="true"
-                    >
-                      {selected && <Check size={12} strokeWidth={3} />}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
+            <EngineSlider
+              options={engineOptions}
+              selected={draft.engineMode}
+              onSelect={(key) => setDraft((d) => ({ ...d, engineMode: key }))}
+            />
           )}
 
           {currentStage.key === 'connection' && (
             <div className="grid gap-3.5">
+              {draft.engineMode === 'custom' && (
+                <div>
+                  <div className="mb-1.5 flex items-center gap-1 text-xs font-medium text-foreground">
+                    <span>{t('welcome.protocolLabel')}</span>
+                  </div>
+                  <div className="inline-flex rounded-lg border border-border bg-muted/50 p-0.5">
+                    {(['openai', 'anthropic'] as ProtocolProviderKey[]).map((p) => {
+                      const active = draft.protocol === p
+                      return (
+                        <button
+                          key={p}
+                          type="button"
+                          onClick={() => setDraft((d) => ({ ...d, protocol: p }))}
+                          className={cn(
+                            'px-3 py-1 rounded-md text-xs font-medium transition-colors',
+                            active
+                              ? 'bg-card text-foreground shadow-sm'
+                              : 'text-muted-foreground hover:text-foreground'
+                          )}
+                        >
+                          {p === 'openai' ? 'OpenAI' : 'Anthropic'}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
               <FormField
                 label="API Base URL"
                 value={draft.apiBase}
@@ -533,6 +705,138 @@ export function WelcomeModal() {
             </button>
           )}
         </footer>
+      </div>
+    </div>
+  )
+}
+
+// Horizontal-scrolling engine picker. With 9 managed providers the old
+// vertical list was too long for the wizard's max-w-[540px] column, so
+// we surface them as a snap-scroll carousel with prev/next chevrons.
+// Selection is decoupled from the visible "active" card so users can
+// preview without committing.
+function EngineSlider({
+  options,
+  selected,
+  onSelect,
+}: {
+  options: Array<{ key: ManagedProviderKey; title: string; detail: string }>
+  selected: ManagedProviderKey | null
+  onSelect: (key: ManagedProviderKey) => void
+}) {
+  const scrollerRef = useRef<HTMLDivElement | null>(null)
+  const [activeIndex, setActiveIndex] = useState<number>(() => {
+    const idx = selected ? options.findIndex((o) => o.key === selected) : -1
+    return idx >= 0 ? idx : 0
+  })
+
+  // Keep activeIndex aligned with external selection changes (e.g. Back
+  // returning to this stage with engineMode already set).
+  useEffect(() => {
+    if (!selected) return
+    const idx = options.findIndex((o) => o.key === selected)
+    if (idx >= 0) setActiveIndex(idx)
+  }, [selected, options])
+
+  // Scroll the active card into view whenever activeIndex changes.
+  useEffect(() => {
+    const scroller = scrollerRef.current
+    if (!scroller) return
+    const card = scroller.children[activeIndex] as HTMLElement | undefined
+    if (!card) return
+    card.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })
+  }, [activeIndex])
+
+  const goPrev = () => setActiveIndex((i) => Math.max(0, i - 1))
+  const goNext = () => setActiveIndex((i) => Math.min(options.length - 1, i + 1))
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={goPrev}
+        disabled={activeIndex === 0}
+        aria-label="previous"
+        className={cn(
+          'absolute left-[-12px] top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground',
+          activeIndex === 0 && 'cursor-not-allowed opacity-40 hover:bg-card hover:text-muted-foreground'
+        )}
+      >
+        <ChevronLeft size={16} />
+      </button>
+      <button
+        type="button"
+        onClick={goNext}
+        disabled={activeIndex === options.length - 1}
+        aria-label="next"
+        className={cn(
+          'absolute right-[-12px] top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground',
+          activeIndex === options.length - 1
+            && 'cursor-not-allowed opacity-40 hover:bg-card hover:text-muted-foreground'
+        )}
+      >
+        <ChevronRight size={16} />
+      </button>
+
+      <div
+        ref={scrollerRef}
+        className="flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-smooth px-6 pb-3 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      >
+        {options.map((option, index) => {
+          const isSelected = selected === option.key
+          const isActive = index === activeIndex
+          return (
+            <button
+              key={option.key}
+              type="button"
+              onClick={() => {
+                setActiveIndex(index)
+                onSelect(option.key)
+              }}
+              className={cn(
+                'group relative flex w-[240px] shrink-0 snap-center flex-col gap-3 rounded-xl border px-5 py-4 pr-10 text-left transition-all',
+                isSelected
+                  ? 'border-primary/60 bg-primary/8 ring-1 ring-primary/30'
+                  : isActive
+                    ? 'border-border bg-background shadow-sm'
+                    : 'border-border/70 bg-background/60 opacity-70 hover:opacity-100'
+              )}
+            >
+              {/* Check indicator sits in the top-right corner so it
+                  never crowds the provider title at narrow widths. */}
+              <span
+                className={cn(
+                  'absolute right-3 top-3 flex h-5 w-5 items-center justify-center rounded-full border transition-colors',
+                  isSelected
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'border-border bg-background opacity-0 group-hover:opacity-100'
+                )}
+                aria-hidden="true"
+              >
+                {isSelected && <Check size={12} strokeWidth={3} />}
+              </span>
+              <div className="text-sm font-medium text-foreground">{option.title}</div>
+              <div className="text-xs leading-5 text-muted-foreground line-clamp-3">
+                {option.detail}
+              </div>
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="mt-2 flex justify-center gap-1">
+        {options.map((option, index) => (
+          <button
+            key={option.key}
+            type="button"
+            onClick={() => setActiveIndex(index)}
+            aria-label={option.title}
+            className={cn(
+              'h-1.5 rounded-full transition-all',
+              index === activeIndex ? 'w-5 bg-primary/70' : 'w-1.5 bg-border hover:bg-muted-foreground/40'
+            )}
+          />
+        ))}
       </div>
     </div>
   )
