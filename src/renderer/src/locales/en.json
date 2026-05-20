@@ -244,6 +244,32 @@
       "workspace": "Workspace",
       "cancel": "Cancel",
       "create": "Create"
+    },
+    "scenarios": {
+      "precise": {
+        "s1": "Code",
+        "s2": "Extraction",
+        "s3": "Math",
+        "s4": "Fact lookup"
+      },
+      "balanced": {
+        "s1": "Q&A",
+        "s2": "Summarize",
+        "s3": "Daily chat",
+        "s4": "Planning"
+      },
+      "flexible": {
+        "s1": "Rewrite",
+        "s2": "Translate",
+        "s3": "Advice",
+        "s4": "Exploration"
+      },
+      "creative": {
+        "s1": "Writing",
+        "s2": "Naming",
+        "s3": "Storytelling",
+        "s4": "Brainstorm"
+      }
     }
   },
   "xlab": {

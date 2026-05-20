@@ -1032,8 +1032,18 @@ type TemperaturePreset = {
   icon: React.ElementType
   defaultValue: number
   description: string
+  // Short (2-4 char) scenario tags rendered as pills under the
+  // description. Kept intentionally terse — long sentences would
+  // make the pills look like chat bubbles instead of category chips.
+  scenarios: string[]
   recommended?: boolean
 }
+
+// Pull the 4 short scenario labels for a preset from i18n. Stored as
+// `agents.scenarios.<preset>.s1..s4` so each language can phrase them
+// naturally without changing the React layout.
+const sceneList = (t: any, preset: 'precise' | 'balanced' | 'flexible' | 'creative') =>
+  ['s1', 's2', 's3', 's4'].map((k) => t(`agents.scenarios.${preset}.${k}`))
 
 const TEMPERATURE_PRESETS = (t: any): TemperaturePreset[] => [
   {
@@ -1043,6 +1053,7 @@ const TEMPERATURE_PRESETS = (t: any): TemperaturePreset[] => [
     icon: Target,
     defaultValue: 0.12,
     description: t('agents.stylePreciseDesc'),
+    scenarios: sceneList(t, 'precise'),
   },
   {
     key: 'balanced',
@@ -1052,6 +1063,7 @@ const TEMPERATURE_PRESETS = (t: any): TemperaturePreset[] => [
     defaultValue: 0.35,
     recommended: true,
     description: t('agents.styleBalancedDesc'),
+    scenarios: sceneList(t, 'balanced'),
   },
   {
     key: 'flexible',
@@ -1060,6 +1072,7 @@ const TEMPERATURE_PRESETS = (t: any): TemperaturePreset[] => [
     icon: Lightbulb,
     defaultValue: 0.62,
     description: t('agents.styleFlexibleDesc'),
+    scenarios: sceneList(t, 'flexible'),
   },
   {
     key: 'creative',
@@ -1068,6 +1081,7 @@ const TEMPERATURE_PRESETS = (t: any): TemperaturePreset[] => [
     icon: Sparkles,
     defaultValue: 0.85,
     description: t('agents.styleCreativeDesc'),
+    scenarios: sceneList(t, 'creative'),
   },
 ]
 
@@ -1206,10 +1220,21 @@ function TemperaturePresets({
             </div>
             <p
               key={active.key + ':desc'}
-              className="text-xs text-muted-foreground leading-relaxed transition-opacity duration-500"
+              className="text-xs text-muted-foreground mb-3 leading-relaxed transition-opacity duration-500"
             >
               {active.description}
             </p>
+            <div className="text-[10px] text-muted-foreground mb-1.5">{t('agents.suitableScenarios')}</div>
+            <div className="flex flex-wrap gap-1.5">
+              {active.scenarios.map((s) => (
+                <span
+                  key={s}
+                  className="inline-flex items-center px-2.5 py-1 rounded-full bg-card border border-border/60 text-[11px] text-foreground"
+                >
+                  {s}
+                </span>
+              ))}
+            </div>
           </div>
         </div>
       </div>
