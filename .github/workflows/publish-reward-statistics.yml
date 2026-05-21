@@ -1,0 +1,29 @@
+name: Publish Reward Statistics
+
+on:
+  schedule:
+    - cron: '15 0 1 * *'
+  workflow_dispatch:
+    inputs:
+      month:
+        description: Target month in YYYY-MM format; defaults to the previous month
+        required: false
+        type: string
+
+jobs:
+  publish-reward-statistics:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Publish monthly reward summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node .github/scripts/count-reward.cjs "${{ inputs.month }}"

@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: General Questions
+    url: https://github.com/harnessclaw/harnessclaw/discussions
+    about: Ask questions and discuss ideas with the community

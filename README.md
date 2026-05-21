@@ -63,6 +63,13 @@ To build for specific platforms:
 
 Commit, release, and changelog rules are documented in [docs/release-rules.md](./docs/release-rules.md).
 
+## Reward Workflow
+
+- Open a new issue with the `Reward Task` template and add the bounty amount/currency.
+- When a linked PR closes that issue and is merged, GitHub Actions creates a `reward-<issue-number>` tag and comments the split result on the issue.
+- On the first day of each month, GitHub Actions aggregates last month's reward tags and publishes a `statistic-YYYY-MM` release summary.
+- These automations use the default `GITHUB_TOKEN`; no extra personal access token is required for the current workflows.
+
 ## 📞 Support
 
 - 💬 Community Discussion: [GitHub Discussions](https://github.com/harnessclaw/harnessclaw/discussions)

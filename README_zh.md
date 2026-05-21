@@ -63,6 +63,13 @@ yarn dist
 
 提交、版本与更新日志规则请见 [docs/release-rules.md](./docs/release-rules.md)。
 
+## Reward 流程
+
+- 新建 issue 时可直接使用 `Reward Task` 模板，填写奖励金额与币种。
+- 当关联 PR 合并并关闭该 issue 后，GitHub Actions 会创建 `reward-<issue-number>` 标签，并把奖励拆分结果评论回 issue。
+- 每个月第一天，GitHub Actions 会汇总上个月的 reward 标签，并发布一条 `statistic-YYYY-MM` 的统计 release。
+- 当前这两条 workflow 直接使用仓库默认的 `GITHUB_TOKEN`，不需要额外配置个人 access token。
+
 ## 📞 Support
 
 - 💬 Community Discussion: [GitHub Discussions](https://github.com/harnessclaw/harnessclaw/discussions)

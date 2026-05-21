@@ -1,0 +1,43 @@
+name: Claim Issue Reward
+
+on:
+  issues:
+    types:
+      - closed
+
+concurrency:
+  group: claim-issue-reward-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  claim-issue-reward:
+    if: contains(github.event.issue.labels.*.name, 'reward')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Get issue details
+        id: parse_issue
+        uses: stefanbuck/github-issue-parser@v3
+        with:
+          template-path: .github/ISSUE_TEMPLATE/reward-task.yml
+
+      - name: Calculate and save reward
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node .github/scripts/share-reward.cjs \
+            "${{ github.repository_owner }}" \
+            "${{ github.event.repository.name }}" \
+            "${{ github.event.issue.number }}" \
+            "${{ steps.parse_issue.outputs.issueparser_payer || github.event.issue.user.login }}" \
+            "${{ steps.parse_issue.outputs.issueparser_currency }}" \
+            "${{ steps.parse_issue.outputs.issueparser_amount }}"

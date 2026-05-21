@@ -1,0 +1,50 @@
+name: Reward Task
+description: Track an issue with a bounty/reward
+title: "[Reward] "
+labels:
+  - reward
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Task description
+    validations:
+      required: true
+
+  - type: dropdown
+    id: currency
+    attributes:
+      label: Reward currency
+      options:
+        - USD $
+        - CAD C$
+        - AUD A$
+        - GBP PS
+        - EUR EUR
+        - CNY RMB
+        - HKD HK$
+        - TWD NT$
+        - SGD S$
+        - KRW KRW
+        - JPY JPY
+        - INR INR
+        - UAH UAH
+    validations:
+      required: true
+
+  - type: input
+    id: amount
+    attributes:
+      label: Reward amount
+      placeholder: "100"
+    validations:
+      required: true
+
+  - type: input
+    id: payer
+    attributes:
+      label: Reward payer
+      description: GitHub username of the payer; defaults to the issue creator when omitted
+      placeholder: octocat
+    validations:
+      required: false
