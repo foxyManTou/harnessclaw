@@ -56,9 +56,9 @@ const [
   rewardRaw,
 ] = process.argv.slice(2)
 
-if (!repositoryOwner || !repositoryName || !issueNumberRaw || !currency || !rewardRaw) {
+if (!repositoryOwner || !repositoryName || !issueNumberRaw) {
   throw new Error(
-    'Usage: node .github/scripts/share-reward.cjs <owner> <repo> <issueNumber> <payer> <currency> <reward>'
+    'Usage: node .github/scripts/share-reward.cjs <owner> <repo> <issueNumber> [payer] [currency] [reward]'
   )
 }
 
@@ -67,14 +67,34 @@ if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
   throw new RangeError(`Invalid issue number: ${issueNumberRaw}`)
 }
 
-const totalReward = Number(rewardRaw)
-if (!Number.isFinite(totalReward) || totalReward <= 0) {
-  throw new RangeError(`Invalid reward amount: ${rewardRaw}`)
+// Fetch issue body to extract missing details or verify
+const issueData = runJson('gh', ['issue', 'view', String(issueNumber), '--json', 'body,author'])
+const issueBody = issueData?.body || ''
+const issueAuthor = issueData?.author?.login || ''
+
+function extractFromBody(label) {
+  const regex = new RegExp(`### ${label}\\s*([\\s\\S]*?)(?=###|$)`, 'i')
+  const match = issueBody.match(regex)
+  return match ? match[1].trim() : ''
 }
 
-const payer = payerRaw && String(payerRaw).trim()
-  ? String(payerRaw).trim().replace(/^@+/, '')
-  : ''
+const finalCurrency = currency || extractFromBody('Reward currency')
+const finalRewardRaw = rewardRaw || extractFromBody('Reward amount')
+const finalPayerRaw = payerRaw || extractFromBody('Reward payer') || issueAuthor
+
+if (!finalCurrency || !finalRewardRaw) {
+  console.log('Issue Body for debugging:', issueBody)
+  throw new Error(
+    `Could not determine currency or reward amount. \nCurrency: "${finalCurrency}"\nAmount: "${finalRewardRaw}"`
+  )
+}
+
+const totalReward = Number(finalRewardRaw)
+if (!Number.isFinite(totalReward) || totalReward <= 0) {
+  throw new RangeError(`Invalid reward amount: ${finalRewardRaw}`)
+}
+
+const payer = finalPayerRaw.trim().replace(/^@+/, '')
 const rewardTagName = `reward-${issueNumber}`
 
 const existingTagPayload = tryRun('git', ['tag', '-l', '--format=%(contents)', rewardTagName])
@@ -140,7 +160,7 @@ const entries = splitReward(totalReward, rewardUsers).map((item) => ({
   issue: `#${issueNumber}`,
   payer: toGitHubHandle(payer || repositoryOwner),
   payee: item.payee,
-  currency,
+  currency: finalCurrency,
   reward: item.reward,
 }))
 
@@ -148,7 +168,7 @@ const payload = {
   issue: `#${issueNumber}`,
   sourcePr: rewardSource.url,
   mergeCommitSha: rewardSource.mergeCommit.oid,
-  currency,
+  currency: finalCurrency,
   totalReward,
   entries,
 }
