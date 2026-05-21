@@ -109,7 +109,11 @@
       "vision": "视觉",
       "search": "联网",
       "reasoning": "推理",
-      "tools": "工具"
+      "tools": "工具",
+      "visionHint": "模型可处理图片输入（截图、照片、PDF 等）",
+      "searchHint": "模型可联网检索外部信息",
+      "reasoningHint": "模型支持长链路推理（thinking / 深度思考）",
+      "toolsHint": "模型支持工具调用（function calling / tool use）"
     },
     "protocol": {
       "label": "协议兼容",
@@ -135,11 +139,13 @@
     },
     "addModal": {
       "namePlaceholder": "搜索或新建分组",
-      "tagsLabel": "能力标签"
+      "tagsLabel": "能力标签",
+      "tagsHint": "请谨慎勾选，错误勾选会导致不可用"
     },
     "addModel": "添加模型",
     "addModelId": "请输入模型 ID",
     "apiBaseLabel": "API 地址",
+    "apiBaseInvalid": "请输入正确的路径，例如 https://api.example.com",
     "apiKeyHint": "多个密钥使用英文逗号分隔",
     "apiKeyLabel": "API 密钥",
     "apiKeyPlaceholder": "API 密钥",
@@ -1756,11 +1762,11 @@
       "skipped": "已跳过"
     },
     "summary": {
-      "completed": "已完成 {{count}}",
-      "failed": "失败 {{count}}",
-      "progress": "{{done}} / {{total}}",
-      "running": "执行中 {{count}}",
-      "waiting": "等待中 {{count}}"
+      "completed": "计划已完成 · {{completed}}/{{total}} 步成功",
+      "failed": "计划失败 · 失败 {{failed}} 步，跳过 {{skipped}} 步",
+      "running": "执行中 · 已完成 {{completed}}/{{total}}",
+      "progress": "已完成 {{completed}}/{{total}} 步",
+      "waiting": "计划已批准，等待派发 · 共 {{total}} 步"
     },
     "taskPlan": "任务计划"
   },

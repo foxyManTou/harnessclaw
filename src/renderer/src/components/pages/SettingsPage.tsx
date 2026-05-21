@@ -551,12 +551,27 @@ function ProviderStrategyRow({
 }) {
   const { t } = useTranslation()
   const [blinkingPrimary, setBlinkingPrimary] = useState(false)
+  // Spotlight is shown for the same window as the inner pulse — they
+  // double up: the spotlight dims the surrounding page while the
+  // CSS pulse highlights the dropdown border inside the bright cut-out.
+  const [primarySpotlightActive, setPrimarySpotlightActive] = useState(false)
+  const primarySelectRef = useRef<HTMLSpanElement | null>(null)
   useEffect(() => {
     if (blinkPrimarySignal === undefined || blinkPrimarySignal === 0) return
     setBlinkingPrimary(true)
-    const timer = setTimeout(() => setBlinkingPrimary(false), 1300)
-    return () => clearTimeout(timer)
+    setPrimarySpotlightActive(true)
+    const innerTimer = setTimeout(() => setBlinkingPrimary(false), 1300)
+    // Longer dim window so the user has time to register the spotlight
+    // and click the dropdown; matches ModelSection's 3.5s flash budget.
+    const spotTimer = setTimeout(() => setPrimarySpotlightActive(false), 3500)
+    return () => {
+      clearTimeout(innerTimer)
+      clearTimeout(spotTimer)
+    }
   }, [blinkPrimarySignal])
+  const getPrimarySpotlightTargets = useCallback((): HTMLElement[] => {
+    return primarySelectRef.current ? [primarySelectRef.current] : []
+  }, [])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [chain, setChain] = useState<string[]>([])
   const [chainEntries, setChainEntries] = useState<ProviderChainEntry[]>([])
@@ -826,12 +841,14 @@ function ProviderStrategyRow({
               <ExternalLink size={13} />
             </button>
           )}
-          <SelectInput
-            value={primary}
-            onChange={handlePrimaryChange}
-            options={primaryOptions}
-            className={blinkingPrimary ? 'agent-primary-blink' : undefined}
-          />
+          <span ref={primarySelectRef} className="inline-flex" data-flash="primary-provider">
+            <SelectInput
+              value={primary}
+              onChange={handlePrimaryChange}
+              options={primaryOptions}
+              className={blinkingPrimary ? 'agent-primary-blink' : undefined}
+            />
+          </span>
         </div>
       </SettingRow>
 
@@ -1012,6 +1029,12 @@ function ProviderStrategyRow({
         </div>
       )}
 
+      {primarySpotlightActive && (
+        <SpotlightOverlay
+          getTargets={getPrimarySpotlightTargets}
+          onDismiss={() => setPrimarySpotlightActive(false)}
+        />
+      )}
     </>
   )
 }
@@ -1699,6 +1722,21 @@ function getApiPathSuffix(protocol: 'openai' | 'anthropic' | 'gemini'): string {
   return '/v1/chat/completions'
 }
 
+// Validate an API base URL. Empty is allowed (renderer falls back to
+// PROVIDER_DEFAULT_BASES). Otherwise require http(s)://host[:port][/path].
+// `new URL()` covers IDN, IPv6, ports, paths — much cheaper to maintain
+// than a hand-rolled regex.
+function isValidApiBase(value: string): boolean {
+  const trimmed = value.trim()
+  if (!trimmed) return true
+  try {
+    const u = new URL(trimmed)
+    return u.protocol === 'http:' || u.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 const MODEL_FAMILY_RULES: Array<{ test: RegExp; group: string }> = [
   { test: /^spark-x2|^xf-spark-x2/i, group: 'Spark X2' },
   { test: /^spark|xunfei|iflytek/i, group: 'Spark' },
@@ -1924,12 +1962,13 @@ function ModelIcon({ id, size = 22 }: { id: string; size?: number }) {
 
 function HelpIcon({ title }: { title: string }) {
   return (
-    <span
-      title={title}
-      className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border border-border text-[9px] text-muted-foreground"
-    >
-      ?
-    </span>
+    <HoverHint label={title}>
+      <span
+        className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border border-border text-[9px] text-muted-foreground"
+      >
+        ?
+      </span>
+    </HoverHint>
   )
 }
 
@@ -2107,6 +2146,137 @@ function HoverHint({
         document.body,
       )}
     </span>
+  )
+}
+
+// Coach-mark spotlight: dim everything except a hole around the element
+// returned by `getTarget()`, add a glowing ring to draw the eye, render
+// via portal so the parent's stacking context can't suppress us. Used
+// when validation fails on provider enable — the toast alone wasn't
+// loud enough.
+//
+// Uses 4 fixed dim bands (top / left / right / bottom of the target rect)
+// instead of a single full-screen overlay with a cut-out. This keeps the
+// target element in normal flow so clicks pass through naturally; no
+// pointer-events juggling, no z-index gymnastics on the underlying tree.
+//
+// Dismiss triggers:
+//   - Backdrop (any of the 4 dim bands) click — forced focus shouldn't trap.
+//   - Mousedown anywhere inside the target rect — once the user takes the
+//     intended action the spotlight should vanish immediately, not linger
+//     for the auto-clear timeout.
+//   - Auto-clear timeout in the parent (safety net).
+//
+// `getTarget` is resolved every animation frame so the spotlight follows
+// scroll, layout shifts, and per-frame re-evaluation of "which element
+// needs attention" (e.g. the first disabled model checkmark, which
+// changes after the user enables one).
+// Coach-mark spotlight supporting multiple simultaneous targets. The
+// dim layer uses the union bounding box of all targets as a single
+// rectangular bright zone (cheaper than multi-hole SVG masks, and
+// keeps every target clickable inside the cut-out). Each individual
+// target gets its own glowing ring on top, so visual focus lands on
+// every actionable button — not just the bounding box edges.
+//
+// Dismiss triggers:
+//   - Backdrop (any of the 4 dim bands) click — forced focus shouldn't trap.
+//   - Mousedown inside any target rect — once the user clicks one of
+//     the highlighted controls the spotlight has done its job.
+//   - Auto-clear timeout in the parent (safety net).
+//
+// `getTargets` is resolved every animation frame so the spotlight
+// follows scroll, layout shifts, and per-frame re-evaluation of
+// "which elements still need attention" (e.g. as the user enables
+// models one by one, the set of disabled checkmarks shrinks).
+function SpotlightOverlay({
+  getTargets,
+  onDismiss,
+}: {
+  getTargets: () => HTMLElement[]
+  onDismiss: () => void
+}) {
+  const [rects, setRects] = useState<DOMRect[]>([])
+  const targetElsRef = useRef<HTMLElement[]>([])
+  useEffect(() => {
+    let raf = 0
+    const tick = () => {
+      const els = getTargets()
+      targetElsRef.current = els
+      const next = els.map((el) => el.getBoundingClientRect())
+      setRects((prev) => {
+        if (prev.length !== next.length) return next
+        for (let i = 0; i < next.length; i++) {
+          const a = prev[i]
+          const b = next[i]
+          if (a.top !== b.top || a.left !== b.left
+            || a.width !== b.width || a.height !== b.height) {
+            return next
+          }
+        }
+        return prev
+      })
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [getTargets])
+  useEffect(() => {
+    const onMouseDown = (e: MouseEvent) => {
+      const els = targetElsRef.current
+      const node = e.target as Node
+      if (els.some((el) => el.contains(node))) onDismiss()
+    }
+    document.addEventListener('mousedown', onMouseDown, true)
+    return () => document.removeEventListener('mousedown', onMouseDown, true)
+  }, [onDismiss])
+  if (rects.length === 0) return null
+  const PAD = 6
+  // Bounding box of every target — the single "bright zone" cut out of
+  // the dim layer. Per-target rings are still drawn individually
+  // inside this box for sharper focus.
+  let unionTop = Infinity
+  let unionLeft = Infinity
+  let unionRight = -Infinity
+  let unionBottom = -Infinity
+  for (const r of rects) {
+    if (r.top < unionTop) unionTop = r.top
+    if (r.left < unionLeft) unionLeft = r.left
+    if (r.right > unionRight) unionRight = r.right
+    if (r.bottom > unionBottom) unionBottom = r.bottom
+  }
+  const boxTop = Math.max(0, unionTop - PAD)
+  const boxLeft = Math.max(0, unionLeft - PAD)
+  const boxRight = Math.min(window.innerWidth, unionRight + PAD)
+  const boxBottom = Math.min(window.innerHeight, unionBottom + PAD)
+  const boxH = Math.max(0, boxBottom - boxTop)
+  const dim = 'fixed bg-black/55 z-[55] cursor-pointer'
+  return createPortal(
+    <>
+      <div className={cn(dim, 'inset-x-0')} style={{ top: 0, height: boxTop }} onClick={onDismiss} />
+      <div className={dim} style={{ top: boxTop, left: 0, width: boxLeft, height: boxH }} onClick={onDismiss} />
+      <div className={dim} style={{ top: boxTop, left: boxRight, right: 0, height: boxH }} onClick={onDismiss} />
+      <div className={cn(dim, 'inset-x-0')} style={{ top: boxBottom, bottom: 0 }} onClick={onDismiss} />
+      {rects.map((r, i) => {
+        const top = Math.max(0, r.top - PAD)
+        const left = Math.max(0, r.left - PAD)
+        const right = Math.min(window.innerWidth, r.right + PAD)
+        const bottom = Math.min(window.innerHeight, r.bottom + PAD)
+        const w = Math.max(0, right - left)
+        const h = Math.max(0, bottom - top)
+        // Pill radius for circular / nearly-square targets (model check
+        // button is 20x20); rectangular targets (inputs) use 8px.
+        const radius = Math.min(w, h) > 36 ? 8 : 9999
+        return (
+          <div
+            key={i}
+            aria-hidden
+            className="fixed pointer-events-none z-[56] ring-4 ring-amber-400 shadow-[0_0_20px_rgba(251,191,36,0.6)] animate-pulse"
+            style={{ top, left, width: w, height: h, borderRadius: radius }}
+          />
+        )
+      })}
+    </>,
+    document.body,
   )
 }
 
@@ -2339,7 +2509,6 @@ function ModelSection({
   // without re-checking `flashField` inline.
   const flashApiKey = flashField === 'apiKey'
   const flashApiBase = flashField === 'apiBase'
-  const flashModelChecks = flashField === 'models'
   const [editingModelId, setEditingModelId] = useState<string | null>(null)
   const [addModelId, setAddModelId] = useState('')
   const [addModelName, setAddModelName] = useState('')
@@ -2362,6 +2531,40 @@ function ModelSection({
   const [engineTypePopupOpen, setEngineTypePopupOpen] = useState(false)
   const engineTypePopupRef = useRef<HTMLDivElement | null>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Spotlight targets. Inputs (apiKey / apiBase) reference the actual
+  // <input> element so the bright cut-out hugs the control instead of
+  // the whole label-and-hint section. Models case uses a data-attribute
+  // query to find the first disabled checkmark button — this updates
+  // automatically as the user enables models without needing per-row refs.
+  const apiKeyInputRef = useRef<HTMLInputElement | null>(null)
+  const apiBaseInputRef = useRef<HTMLInputElement | null>(null)
+  const modelsSectionRef = useRef<HTMLDivElement | null>(null)
+  const getSpotlightTargets = useCallback((): HTMLElement[] => {
+    if (flashField === 'apiKey') {
+      return apiKeyInputRef.current ? [apiKeyInputRef.current] : []
+    }
+    if (flashField === 'apiBase') {
+      return apiBaseInputRef.current ? [apiBaseInputRef.current] : []
+    }
+    if (flashField === 'models') {
+      // Highlight every disabled checkmark in the visible model list so
+      // the user can pick any one — not just the first. As they enable
+      // models, `data-enabled` flips and that button drops out of the
+      // set automatically on the next animation frame.
+      const root = modelsSectionRef.current
+      if (!root) return []
+      const nodes = root.querySelectorAll<HTMLElement>(
+        'button[data-flash="model-enable"][data-enabled="false"]',
+      )
+      if (nodes.length > 0) return Array.from(nodes)
+      // No disabled buttons (everything got enabled while spotlight was
+      // live, or the list is empty). Fall back to the section root so
+      // something stays highlighted instead of returning empty —
+      // SpotlightOverlay treats [] as "nothing to show" and unmounts.
+      return [root]
+    }
+    return []
+  }, [flashField])
 
   useEffect(() => {
     if (!engineTypePopupOpen) return
@@ -2792,7 +2995,9 @@ function ModelSection({
   // user sees motion but the UI settles back to normal.
   useEffect(() => {
     if (!flashField) return
-    const timer = window.setTimeout(() => setFlashField(null), 1800)
+    // Longer than the old border-pulse (1.8s): the spotlight backdrop
+    // needs time to register visually before it auto-dismisses.
+    const timer = window.setTimeout(() => setFlashField(null), 3500)
     return () => window.clearTimeout(timer)
   }, [flashField])
 
@@ -3628,16 +3833,10 @@ function ModelSection({
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <p className="text-sm font-semibold text-foreground">{t('models.apiKeyLabel')}</p>
-                  <button
-                    type="button"
-                    className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
-                    title={t('common.advanced')}
-                  >
-                    <SlidersHorizontal size={14} />
-                  </button>
                 </div>
                 <div className="relative">
                   <input
+                    ref={apiKeyInputRef}
                     type={showApiKey ? 'text' : 'password'}
                     value={selected.apiKey}
                     onChange={(e) => {
@@ -3753,28 +3952,49 @@ function ModelSection({
                     )}
                   </div>
                 </div>
-                <input
-                  type="text"
-                  value={selected.apiBase || ''}
-                  onChange={(e) => {
-                    updateProvider(selectedProvider, { apiBase: e.target.value || null })
-                    schedulePatchProviderCredentials(selectedProvider)
-                  }}
-                  placeholder={PROVIDER_DEFAULT_BASES[selectedProvider] || 'https://api.example.com'}
-                  className={cn(
-                    'h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none transition-shadow placeholder:text-muted-foreground focus:ring-1 focus:ring-ring',
-                    flashApiBase && 'animate-pulse border-amber-400 ring-2 ring-amber-400 ring-offset-1'
-                  )}
-                />
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {t('models.previewLabel')}
-                  {(selected.apiBase?.trim() || PROVIDER_DEFAULT_BASES[selectedProvider] || '').replace(/\/+$/, '')}
-                  {getApiPathSuffix(getEffectiveEngineType(selectedProvider, selected))}
-                </p>
+                {(() => {
+                  const apiBaseValid = isValidApiBase(selected.apiBase || '')
+                  return (
+                    <>
+                      <input
+                        ref={apiBaseInputRef}
+                        type="text"
+                        value={selected.apiBase || ''}
+                        onChange={(e) => {
+                          const next = e.target.value
+                          updateProvider(selectedProvider, { apiBase: next || null })
+                          // Skip engine PATCH when the URL is malformed —
+                          // wait until the user finishes typing a valid one.
+                          if (isValidApiBase(next)) {
+                            schedulePatchProviderCredentials(selectedProvider)
+                          }
+                        }}
+                        placeholder={PROVIDER_DEFAULT_BASES[selectedProvider] || 'https://api.example.com'}
+                        aria-invalid={!apiBaseValid}
+                        className={cn(
+                          'h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none transition-shadow placeholder:text-muted-foreground focus:ring-1 focus:ring-ring',
+                          flashApiBase && 'animate-pulse border-amber-400 ring-2 ring-amber-400 ring-offset-1',
+                          !apiBaseValid && 'border-red-500 focus:ring-red-500'
+                        )}
+                      />
+                      {apiBaseValid ? (
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          {t('models.previewLabel')}
+                          {(selected.apiBase?.trim() || PROVIDER_DEFAULT_BASES[selectedProvider] || '').replace(/\/+$/, '')}
+                          {getApiPathSuffix(getEffectiveEngineType(selectedProvider, selected))}
+                        </p>
+                      ) : (
+                        <p className="mt-2 text-xs text-red-500">
+                          {t('models.apiBaseInvalid')}
+                        </p>
+                      )}
+                    </>
+                  )
+                })()}
               </div>
 
               {/* 模型 */}
-              <div>
+              <div ref={modelsSectionRef}>
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
                     <p className="text-sm font-semibold text-foreground">{t('models.modelsLabel')}</p>
@@ -3909,12 +4129,13 @@ function ModelSection({
                                         onClick={() => handleToggleModelEnabled(entry.id)}
                                         aria-label={isEnabled ? t('common.close') : t('skills.repo.enabled')}
                                         aria-pressed={isEnabled}
+                                        data-flash="model-enable"
+                                        data-enabled={isEnabled ? 'true' : 'false'}
                                         className={cn(
                                           'flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border transition-all',
                                           isEnabled
                                             ? 'border-status-connected bg-status-connected text-white shadow-sm scale-105'
-                                            : 'border-border bg-background text-transparent hover:border-status-connected/60 hover:text-status-connected/60',
-                                          flashModelChecks && !isEnabled && 'animate-pulse ring-2 ring-amber-400 ring-offset-1'
+                                            : 'border-border bg-background text-transparent hover:border-status-connected/60 hover:text-status-connected/60'
                                         )}
                                       >
                                         <Check size={12} strokeWidth={3} />
@@ -3963,20 +4184,13 @@ function ModelSection({
                   </p>
                 )}
 
-                {/* 管理 / 添加 */}
                 <div className="mt-4 flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={handleFetchModels}
-                    disabled={modelFetchState === 'loading'}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-md bg-violet-600 px-3 text-sm font-medium text-white transition-colors hover:bg-violet-700 disabled:opacity-60"
-                  >
-                    <SlidersHorizontal size={14} />
-                    {t('common.manage')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAddModelOpen(true)}
+                    onClick={() => {
+                      setAddModelTags(['reasoning', 'tools'])
+                      setAddModelOpen(true)
+                    }}
                     className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-muted"
                   >
                     <span className="text-base leading-none">+</span>
@@ -4163,22 +4377,22 @@ function ModelSection({
                 </div>
               </div>
 
-              {/* 模型类型：编辑模式下始终可见，不再藏在"高级设置"里。
-                  用户反馈里它是一个高频字段（决定能力开关），放进折叠区
-                  会增加点击成本。*/}
-              {editingModelId && (
-                <div className="mt-2 border-t border-border pt-5">
-                  <div className="mb-2 flex items-center gap-1">
-                    <span className="text-sm font-medium text-foreground">{t('models.addModal.tagsLabel')}</span>
+              {/* 模型类型：添加 / 编辑模式都展示，避免两个入口的表单不一致。
+                  高频字段（决定能力开关），不藏在"高级设置"折叠区里。*/}
+              <div className="mt-2 border-t border-border pt-5">
+                <div className="mb-2 flex items-center gap-1">
+                  <span className="text-sm font-medium text-foreground">{t('models.addModal.tagsLabel')}</span>
+                  <HoverHint label={t('models.addModal.tagsHint')}>
                     <AlertTriangle size={14} className="text-amber-500" />
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {MODEL_TAGS.map((tag) => {
-                      const active = addModelTags.includes(tag.key)
-                      const Icon = tag.icon
-                      return (
+                  </HoverHint>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {MODEL_TAGS.map((tag) => {
+                    const active = addModelTags.includes(tag.key)
+                    const Icon = tag.icon
+                    return (
+                      <HoverHint key={tag.key} label={t(`models.capabilities.${tag.key}Hint`)}>
                         <button
-                          key={tag.key}
                           type="button"
                           onClick={() =>
                             setAddModelTags((prev) =>
@@ -4207,16 +4421,16 @@ function ModelSection({
                           <Icon size={12} />
                           {t(tag.label)}
                         </button>
-                      )
-                    })}
-                  </div>
+                      </HoverHint>
+                    )
+                  })}
                 </div>
-              )}
+              </div>
 
               {/* 高级设置：当前仅承载计费相关三项。"币种"用下拉选择常见
                   货币符号；"输入价格 / 输出价格"采用左侧数字输入 + 右侧
                   单位（$/百万 Token）的并排布局，与设计稿对齐。 */}
-              {editingModelId && advancedOpen && (
+              {advancedOpen && (
                 <div className="mt-2 space-y-4 border-t border-border pt-5">
                   <div className="grid grid-cols-[6rem_1fr] items-center gap-3">
                     <label htmlFor="add-model-currency" className="text-sm text-foreground">
@@ -4292,21 +4506,17 @@ function ModelSection({
               )}
 
               <div className="flex items-center justify-between pt-2">
-                {editingModelId ? (
-                  <button
-                    type="button"
-                    onClick={() => setAdvancedOpen((v) => !v)}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-muted"
-                  >
-                    <SlidersHorizontal size={14} />
-                    {t('common.advanced')}
-                    {advancedOpen
-                      ? <ChevronDown size={14} className="text-muted-foreground" />
-                      : <ChevronRight size={14} className="text-muted-foreground" />}
-                  </button>
-                ) : (
-                  <span />
-                )}
+                <button
+                  type="button"
+                  onClick={() => setAdvancedOpen((v) => !v)}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+                >
+                  <SlidersHorizontal size={14} />
+                  {t('common.advanced')}
+                  {advancedOpen
+                    ? <ChevronDown size={14} className="text-muted-foreground" />
+                    : <ChevronRight size={14} className="text-muted-foreground" />}
+                </button>
                 <button
                   type="button"
                   onClick={handleAddModel}
@@ -4325,6 +4535,12 @@ function ModelSection({
           message={toastNotice.message}
           position="top"
           anchor="viewport"
+        />
+      )}
+      {flashField && (
+        <SpotlightOverlay
+          getTargets={getSpotlightTargets}
+          onDismiss={() => setFlashField(null)}
         />
       )}
     </div>
