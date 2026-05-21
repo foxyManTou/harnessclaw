@@ -129,7 +129,7 @@ export function PastedBlocksBar({ blocks, onRemove, onUpdate, removable = true }
             >
               <Clipboard size={13} className="flex-shrink-0 text-primary/70" />
               <span className="text-xs font-medium text-foreground">{t('pasted.label')}</span>
-              <span className="text-[11px] text-muted-foreground">{t('pasted.lines', { n: block.lines })}</span>
+              <span className="text-[11px] text-muted-foreground">{t('pasted.lines', { count: block.lines })}</span>
             </button>
             {removable && (
               <button
@@ -157,7 +157,7 @@ export function PastedBlocksBar({ blocks, onRemove, onUpdate, removable = true }
                 <FileText size={16} className="text-primary" />
                 <span className="text-sm font-semibold text-foreground">{t('pasted.previewTitle')}</span>
                 <span className="rounded-full border border-border bg-accent/70 px-2 py-0.5 text-[10px] text-muted-foreground">
-                  {t('pasted.lines', { n: draftLines })}
+                  {t('pasted.lines', { count: draftLines })}
                 </span>
               </div>
               <button
