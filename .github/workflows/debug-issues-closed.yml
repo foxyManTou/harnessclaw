@@ -1,0 +1,25 @@
+name: Debug Issues Closed
+
+on:
+  issues:
+    types:
+      - closed
+
+jobs:
+  debug-issues-closed:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Print issue metadata
+        run: |
+          echo "issue_number=${{ github.event.issue.number }}"
+          echo "issue_title=${{ github.event.issue.title }}"
+          echo "issue_labels=${{ join(github.event.issue.labels.*.name, ', ') }}"
+          echo "repository=${{ github.repository }}"
+          echo "actor=${{ github.actor }}"
+
+      - name: Print event payload
+        run: |
+          echo "event_path=$GITHUB_EVENT_PATH"
+          cat "$GITHUB_EVENT_PATH"
