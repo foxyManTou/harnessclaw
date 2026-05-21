@@ -23,6 +23,10 @@ function runJson(command, args, options = {}) {
   return raw ? JSON.parse(raw) : null
 }
 
+function ghApiJson(path, args = [], options = {}) {
+  return runJson('gh', ['api', path, ...args], options)
+}
+
 function isBotUser(login) {
   const lower = String(login || '').toLowerCase()
   return (
@@ -47,6 +51,59 @@ function splitReward(totalAmount, users) {
   }))
 }
 
+function parsePullNumberFromUrl(url) {
+  const match = String(url || '').match(/\/pull\/(\d+)(?:$|\/)/)
+  return match ? Number(match[1]) : NaN
+}
+
+function commentMarker(payload) {
+  return `<!-- reward-data:${payload.issue}:${payload.mergeCommitSha} -->`
+}
+
+function buildComment(payload) {
+  const lines = [
+    commentMarker(payload),
+    '## Reward Data',
+    '',
+    `Source PR: ${payload.sourcePr}`,
+    '',
+    '| Payee | Amount |',
+    '| --- | --- |',
+    ...payload.entries.map((entry) => `| ${entry.payee} | ${entry.currency} ${entry.reward.toFixed(2)} |`),
+    '',
+    '```json',
+    JSON.stringify(payload.entries, null, 2),
+    '```',
+  ]
+  return lines.join('\n')
+}
+
+function ensureRewardComment(repositoryOwner, repositoryName, issueNumber, payload) {
+  const marker = commentMarker(payload)
+  const existingComments = ghApiJson(`repos/${repositoryOwner}/${repositoryName}/issues/${issueNumber}/comments`, [
+    '--paginate',
+  ])
+  if (Array.isArray(existingComments)) {
+    const existing = existingComments.find((comment) => String(comment?.body || '').includes(marker))
+    if (existing) {
+      console.log(`Reward comment already exists for ${payload.issue}, skip posting.`)
+      return
+    }
+  }
+
+  console.log('Posting comment to issue...')
+  const commentBody = buildComment(payload)
+  run('gh', [
+    'api',
+    `repos/${repositoryOwner}/${repositoryName}/issues/${issueNumber}/comments`,
+    '--method',
+    'POST',
+    '-f',
+    `body=${commentBody}`,
+  ])
+  console.log('Comment posted successfully.')
+}
+
 const [
   repositoryOwner,
   repositoryName,
@@ -68,9 +125,9 @@ if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
 }
 
 // Fetch issue body to extract missing details or verify
-const issueData = runJson('gh', ['issue', 'view', String(issueNumber), '--json', 'body,author'])
+const issueData = ghApiJson(`repos/${repositoryOwner}/${repositoryName}/issues/${issueNumber}`)
 const issueBody = issueData?.body || ''
-const issueAuthor = issueData?.author?.login || ''
+const issueAuthor = issueData?.user?.login || ''
 
 function extractFromBody(label) {
   const regex = new RegExp(`### ${label}\\s*([\\s\\S]*?)(?=###|$)`, 'i')
@@ -101,8 +158,7 @@ const existingTagPayload = tryRun('git', ['tag', '-l', '--format=%(contents)', r
 if (existingTagPayload) {
   console.log(`Reward tag ${rewardTagName} already exists, skip recalculation.`)
   const existing = JSON.parse(existingTagPayload)
-  const commentBody = buildComment(existing)
-  run('gh', ['issue', 'comment', String(issueNumber), '--body', commentBody])
+  ensureRewardComment(repositoryOwner, repositoryName, issueNumber, existing)
   process.exit(0)
 }
 
@@ -144,8 +200,13 @@ if (!rewardSource?.url || !rewardSource?.mergeCommit?.oid) {
   throw new ReferenceError(`No merged PR with a merge commit found for issue #${issueNumber}.`)
 }
 
-const prMeta = runJson('gh', ['pr', 'view', rewardSource.url, '--json', 'author,assignees'])
-const authorLogin = prMeta?.author?.login
+const rewardPullNumber = parsePullNumberFromUrl(rewardSource.url)
+if (!Number.isInteger(rewardPullNumber) || rewardPullNumber <= 0) {
+  throw new RangeError(`Could not determine PR number from ${rewardSource.url}`)
+}
+
+const prMeta = ghApiJson(`repos/${repositoryOwner}/${repositoryName}/pulls/${rewardPullNumber}`)
+const authorLogin = prMeta?.user?.login
 const assigneeLogins = Array.isArray(prMeta?.assignees)
   ? prMeta.assignees.map((item) => item?.login).filter(Boolean)
   : []
@@ -189,24 +250,4 @@ try {
 }
 
 // 5. Post comment on the issue
-console.log('Posting comment to issue...')
-const commentBody = buildComment(payload)
-run('gh', ['issue', 'comment', String(issueNumber), '--body', commentBody])
-console.log('Comment posted successfully.')
-
-function buildComment(payload) {
-  const lines = [
-    '## Reward Data',
-    '',
-    `Source PR: ${payload.sourcePr}`,
-    '',
-    '| Payee | Amount |',
-    '| --- | --- |',
-    ...payload.entries.map((entry) => `| ${entry.payee} | ${entry.currency} ${entry.reward.toFixed(2)} |`),
-    '',
-    '```json',
-    JSON.stringify(payload.entries, null, 2),
-    '```',
-  ]
-  return lines.join('\n')
-}
+ensureRewardComment(repositoryOwner, repositoryName, issueNumber, payload)
