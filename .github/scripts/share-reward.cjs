@@ -173,18 +173,26 @@ const payload = {
   entries,
 }
 
+// 4. Create Git Tag to record the reward
+console.log(`Creating tag: ${rewardTagName} pointing to ${rewardSource.mergeCommit.oid}`)
 run('git', ['config', 'user.name', 'github-actions[bot]'])
 run('git', ['config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'])
 try {
   run('git', ['tag', '-a', rewardTagName, rewardSource.mergeCommit.oid, '-m', JSON.stringify(payload, null, 2)])
   run('git', ['push', 'origin', `refs/tags/${rewardTagName}`])
+  console.log('Tag pushed successfully.')
+} catch (tagError) {
+  console.error('Failed to push tag:', tagError.message)
 } finally {
   tryRun('git', ['config', '--unset', 'user.name'])
   tryRun('git', ['config', '--unset', 'user.email'])
 }
 
+// 5. Post comment on the issue
+console.log('Posting comment to issue...')
 const commentBody = buildComment(payload)
 run('gh', ['issue', 'comment', String(issueNumber), '--body', commentBody])
+console.log('Comment posted successfully.')
 
 function buildComment(payload) {
   const lines = [
