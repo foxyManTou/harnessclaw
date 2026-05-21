@@ -82,7 +82,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ManagedProviderKey, string> = {
 }
 
 export const PROVIDER_DEFAULT_BASES: Record<ManagedProviderKey, string> = {
-  xunfei: 'https://spark-api-open.xf-yun.com/agent/v1',
+  xunfei: 'https://spark-api-open.xf-yun.com/agent',
   anthropic: 'https://api.anthropic.com',
   openai: 'https://api.openai.com',
   google: 'https://generativelanguage.googleapis.com',
