@@ -30,6 +30,13 @@ jobs:
         with:
           template-path: .github/ISSUE_TEMPLATE/reward-task.yml
 
+      - name: Debug Output
+        run: |
+          echo "Payer: ${{ steps.parse_issue.outputs.issueparser_payer }}"
+          echo "Currency: ${{ steps.parse_issue.outputs.issueparser_currency }}"
+          echo "Amount: ${{ steps.parse_issue.outputs.issueparser_amount }}"
+        continue-on-error: true
+
       - name: Calculate and save reward
         env:
           GH_TOKEN: ${{ github.token }}
