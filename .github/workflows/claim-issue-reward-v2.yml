@@ -5,6 +5,10 @@ on:
     types:
       - closed
 
+concurrency:
+  group: claim-issue-reward-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
 jobs:
   claim-issue-reward:
     if: contains(github.event.issue.labels.*.name, 'reward')
