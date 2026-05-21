@@ -7,6 +7,7 @@ import {
   Loader2, Wrench, Brain, AlertCircle, RefreshCw, ChevronDown, ChevronUp,
   FileText, X, ArrowDown, AtSign, GitBranch, ListTodo, Users, MessagesSquare, ChevronLeft, ChevronRight, Search, HelpCircle, FolderOpen, Download,
   Globe, ExternalLink, Pencil, FolderPlus, FolderMinus,
+  PenLine, Clock, ShieldQuestion,
 } from 'lucide-react'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -229,6 +230,12 @@ interface ToolActivity {
    * string lives in `content` and is sourced from `error.user_message`.
    */
   devMessage?: string
+  /** v2 phases — 仅在 type='call' 且 result 未到达时有效。
+   *  引擎流式追踪到的卡片阶段。 */
+  phase?: 'planning' | 'planning_args' | 'queued'
+        | 'permission_wait' | 'executing'
+  phaseHint?: string      // 引擎解析好的中文
+  phaseBytes?: number     // 字节计数（开发者面板用，UI 通常显示 phaseHint）
 }
 
 interface Message {
@@ -244,6 +251,7 @@ interface Message {
   attachments?: AttachmentItem[]
   contentSegments?: ContentSegment[] // text segments with timestamps for interleaving
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+  hintSummary?: string // v2.2 M4: from card.add(message) Hint.Summary; shown while content is empty
 }
 
 interface SessionItem {
@@ -815,8 +823,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
             <MessageBubble
               message={message}
               syncAgents={collaboration.syncAgents}
-              // v1.12: Emma 的鎏光只在当前正在流式输出的助手消息上显示（紧贴 "Emma" 名字）。
-              activeIntent={message.isStreaming ? currentIntent : undefined}
               hasPendingPlanDraft={!!planDraft && !planDraft.confirmed}
               onOpenFilePreview={onOpenFilePreview}
               onPreviewUserImage={onPreviewUserImage}
@@ -871,7 +877,22 @@ const ConversationTimeline = memo(function ConversationTimeline({
           <ThinkingIndicator content={currentThinking} />
         )}
 
-        {isProcessing && !isPaused && !isStopping && !currentThinking && !pendingAssistantMessage?.content && !(pendingAssistantMessage?.tools && pendingAssistantMessage.tools.length > 0) && (
+        {/* Emma intent 鎏光：作为"呼应节点"渲染在列表底部，跟着 messagesEndRef
+            一起永远靠近视口底部。优先级低于 ThinkingIndicator（thinking-mode
+            reasoning 内容更重要），但优先于通用 Thinking… 兜底。 */}
+        {isProcessing && !isPaused && !isStopping && !currentThinking && currentIntent?.text && (
+          <div className="-my-[17px] flex justify-start pl-[2.625rem]">
+            <span
+              className="chat-thinking-shimmer min-w-0 truncate"
+              aria-live="polite"
+              title={currentIntent.text}
+            >
+              {currentIntent.text}
+            </span>
+          </div>
+        )}
+
+        {isProcessing && !isPaused && !isStopping && !currentThinking && !currentIntent?.text && !pendingAssistantMessage?.content && !(pendingAssistantMessage?.tools && pendingAssistantMessage.tools.length > 0) && (
           <div className="-my-[17px] flex justify-start pl-[2.625rem]">
             <span className="chat-thinking-shimmer" aria-live="polite">Thinking…</span>
           </div>
@@ -4338,7 +4359,28 @@ export function ChatPage() {
         // and `tool_end` inner events are forwarded; user-visible text now comes
         // exclusively from L1 (emma) `content.delta`. Ignore any unexpected
         // `text` events from older servers to avoid duplicating emma's reply.
-        if (eventType !== 'tool_start' && eventType !== 'tool_end') break
+        if (eventType !== 'tool_start' && eventType !== 'tool_end' && eventType !== 'tool_phase') break
+
+        // tool_phase: mutate existing ToolActivity by callId — no new activity created.
+        if (eventType === 'tool_phase') {
+          const callId = typeof payload.tool_use_id === 'string' ? payload.tool_use_id : ''
+          const phase = (typeof payload.phase === 'string' ? payload.phase : undefined) as ToolActivity['phase']
+          const phaseHint = typeof payload.phase_hint === 'string' ? payload.phase_hint : undefined
+          const phaseBytes = typeof payload.phase_bytes === 'number' ? payload.phase_bytes : undefined
+          updateSession(sid, (prev) => ({
+            ...prev,
+            messages: prev.messages.map((m) => ({
+              ...m,
+              tools: (m.tools || []).map((t) =>
+                t.callId === callId && t.type === 'call'
+                  ? { ...t, phase, phaseHint, phaseBytes }
+                  : t
+              ),
+            })),
+          }))
+          break
+        }
+
         const now = Date.now()
         const subagentInfo = createSubagentInfo(agentId, agentName, 'running')
 
@@ -4783,6 +4825,22 @@ export function ChatPage() {
       break
       }
 
+      case 'message_hint': {
+        // v2.2 M4: inter-round message card hint — "正在解读结果" etc.
+        // Set hintSummary on the pending assistant message so it can be
+        // rendered while the content segments are still empty.
+        const sid = eventSessionId!
+        const hintSummary = typeof event.hint_summary === 'string' ? event.hint_summary : undefined
+        if (!hintSummary) break
+        const aid = pendingAssistantIds.current[sid]
+        if (!aid) break
+        updateSession(sid, (prev) => ({
+          ...prev,
+          messages: prev.messages.map((m) => m.id === aid ? { ...m, hintSummary } : m),
+        }))
+        break
+      }
+
       case 'task_start': {
         const sid = eventSessionId!
         if (!subagent) break
@@ -4968,6 +5026,9 @@ export function ChatPage() {
           intent: callIntent,
           ts: Date.now(),
           subagent,
+          phase: (typeof event.phase === 'string' ? event.phase : undefined) as ToolActivity['phase'],
+          phaseHint: typeof event.phase_hint === 'string' ? event.phase_hint : undefined,
+          phaseBytes: typeof event.phase_bytes === 'number' ? event.phase_bytes : undefined,
         }
         const startedCallId = activity.callId
         updateSession(sid, (prev) => ({
@@ -4981,6 +5042,27 @@ export function ChatPage() {
           isStopping: false,
           pauseReason: undefined,
           messages: prev.messages.map((m) => m.id === aid ? { ...m, tools: [...(m.tools || []), activity] } : m),
+        }))
+        break
+      }
+
+      case 'tool_phase': {
+        const sid = eventSessionId!
+        const callId = getToolEventCallId(event)
+        const phase = (typeof event.phase === 'string' ? event.phase : undefined) as ToolActivity['phase']
+        const phaseHint = typeof event.phase_hint === 'string' ? event.phase_hint : undefined
+        const phaseBytes = typeof event.phase_bytes === 'number' ? event.phase_bytes : undefined
+
+        updateSession(sid, (prev) => ({
+          ...prev,
+          messages: prev.messages.map((m) => ({
+            ...m,
+            tools: (m.tools || []).map((t) =>
+              t.callId === callId && t.type === 'call'
+                ? { ...t, phase, phaseHint, phaseBytes }
+                : t
+            ),
+          })),
         }))
         break
       }
@@ -6870,7 +6952,6 @@ function UserMessageText({ text }: { text: string }) {
 function MessageBubble({
   message,
   syncAgents,
-  activeIntent,
   hasPendingPlanDraft,
   onOpenFilePreview,
   onPreviewUserImage,
@@ -6883,9 +6964,6 @@ function MessageBubble({
   /** v1.12: per-agent state used to render the sub-agent task expander and
    * intent shimmer inside the agent-team segment header. */
   syncAgents?: Record<string, SyncAgentState>
-  /** v1.12: main-agent (Emma) intent shimmer rendered after the agent name.
-   * Only set on the currently streaming assistant message. */
-  activeIntent?: SessionState['currentIntent']
   /** True while a `plan.proposed` PlanDraftCard is awaiting the user. The
    * engine's turn is parked, so we suppress the breathing-dot indicator on
    * the streaming assistant message during that window. */
@@ -7322,19 +7400,11 @@ function MessageBubble({
         )}
       >
         {!isUser && (
-          // v1.12: 主 Agent (Emma) 名字旁渲染鎏光 intent — "安排好具体的事情就应该结束了"
-          // (在 tool_call / tool_start 触达时由 reducer 清空 currentIntent)。
+          // Emma 名字仅作 header 标识 — 鎏光 intent 已迁出，
+          // 在 ChatPage 列表底部（与 Thinking… 同位）渲染，避免长消息滚动时
+          // intent 被滚出视口看不到。
           <div className="mb-1 flex items-center gap-2">
             <span className="text-xs font-medium text-muted-foreground">Emma</span>
-            {activeIntent?.text && (
-              <span
-                className="chat-thinking-shimmer min-w-0 truncate text-xs font-medium"
-                aria-live="polite"
-                title={activeIntent.text}
-              >
-                {activeIntent.text}
-              </span>
-            )}
           </div>
         )}
         <div className={cn(
@@ -7357,6 +7427,13 @@ function MessageBubble({
                 onPreview={onPreviewUserImage}
               />
             </div>
+          </div>
+        )}
+
+        {/* v2.2 M4: inter-round hint shown while assistant content is still empty */}
+        {!isUser && !isSystem && message.isStreaming && !message.content && displaySegments.length === 0 && message.hintSummary && (
+          <div className="mb-1.5 text-xs text-muted-foreground chat-thinking-shimmer" aria-live="polite">
+            {message.hintSummary}
           </div>
         )}
 
@@ -8058,6 +8135,36 @@ function truncateToolContent(content: string, limit = 2400): string {
   return content.length > limit ? `${content.slice(0, limit)}...` : content
 }
 
+function getPhasePresentation(
+  phase: ToolActivity['phase'],
+  isRunning: boolean,
+): { icon: 'pen' | 'clock' | 'shield' | 'loader', colorClass: string, animateClass: string } | null {
+  if (!isRunning) return null
+  switch (phase) {
+    case 'planning':
+    case 'planning_args':
+      return { icon: 'pen', colorClass: 'text-blue-500', animateClass: 'animate-pulse' }
+    case 'queued':
+      return { icon: 'clock', colorClass: 'text-amber-500', animateClass: 'animate-pulse' }
+    case 'permission_wait':
+      return { icon: 'shield', colorClass: 'text-orange-500', animateClass: 'animate-pulse' }
+    case 'executing':
+    default:
+      return { icon: 'loader', colorClass: 'text-yellow-500', animateClass: 'animate-spin' }
+  }
+}
+
+function getPhasePillLabel(phase: ToolActivity['phase']): string {
+  switch (phase) {
+    case 'planning':
+    case 'planning_args': return '构思中'
+    case 'queued': return '等待执行'
+    case 'permission_wait': return '等待授权'
+    case 'executing': return '执行中'
+    default: return '运行中'
+  }
+}
+
 function ToolCallCard({
   call,
   result,
@@ -8138,7 +8245,7 @@ function ToolCallCard({
   // categorized errorPresentation; for `cancelled` / `skipped` we use a
   // muted neutral; for `ok` and running we keep the legacy treatment.
   const statusPillLabel = isRunning
-    ? t('chat.asyncAgentStatus.running')
+    ? getPhasePillLabel(call.phase)
     : status === 'failed'
       ? errorPresentation!.label
       : status === 'cancelled'
@@ -8162,9 +8269,18 @@ function ToolCallCard({
       )}>
         <div className="flex items-start gap-2 px-3 py-2 transition-colors hover:bg-muted/40">
           <div className="flex h-5 flex-shrink-0 items-center justify-center" aria-hidden="true">
-            {isRunning ? (
-              <Loader2 size={12} className="animate-spin text-yellow-500" />
-            ) : status === 'failed' ? (
+            {isRunning ? (() => {
+              const pres = getPhasePresentation(call.phase, true)
+              if (!pres) return <Loader2 size={12} className="animate-spin text-yellow-500" />
+              const iconCls = cn(pres.colorClass, pres.animateClass)
+              switch (pres.icon) {
+                case 'pen': return <PenLine size={12} className={iconCls} />
+                case 'clock': return <Clock size={12} className={iconCls} />
+                case 'shield': return <ShieldQuestion size={12} className={iconCls} />
+                case 'loader':
+                default: return <Loader2 size={12} className={iconCls} />
+              }
+            })() : status === 'failed' ? (
               <span className="text-[12px] leading-none" title={errorPresentation!.label}>{errorPresentation!.icon}</span>
             ) : status === 'cancelled' || status === 'skipped' ? (
               <span className="text-[12px] leading-none">{status === 'cancelled' ? '✋' : '⏭'}</span>
@@ -8227,7 +8343,9 @@ function ToolCallCard({
               'mt-1 text-[11px] leading-5',
               status === 'failed' ? errorColorClasses!.text : 'text-muted-foreground'
             )}>
-              {isRunning ? t('chat.toolResult.executing') : getToolResultSummary(t, call, result, filePreview)}
+              {isRunning
+                  ? (call.phaseHint || t('chat.toolResult.executing'))
+                  : getToolResultSummary(t, call, result, filePreview)}
             </p>
 
             {/* v2 §12 — retry / recovery hints. Display-only; no control

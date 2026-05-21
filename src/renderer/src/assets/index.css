@@ -1921,7 +1921,7 @@
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   color: transparent;
-  animation: chat-thinking-shimmer 1.8s ease-in-out infinite;
+  animation: chat-thinking-shimmer 3.5s ease-in-out infinite;
 }
 
 @keyframes chat-thinking-shimmer {

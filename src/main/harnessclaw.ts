@@ -1126,6 +1126,19 @@ export class HarnessclawClient extends EventEmitter {
         if (info.isSubagent) return
         // We don't emit a turn_start per message — the turn card already
         // emitted it. message cards just exist to anchor channels.
+        // v2.2 M4: if the card carries a Hint.Summary (e.g. "正在解读结果"),
+        // forward it to the renderer so it can display the hint on the
+        // pending assistant message while content is still empty.
+        const hintSummary = args.hint && typeof args.hint.summary === 'string' && args.hint.summary
+          ? args.hint.summary
+          : undefined
+        if (hintSummary) {
+          this.emitCompatEvent({
+            type: 'message_hint',
+            session_id: sessionId,
+            hint_summary: hintSummary,
+          })
+        }
         return
       }
 
@@ -1134,9 +1147,13 @@ export class HarnessclawClient extends EventEmitter {
         const target = typeof args.payload.target === 'string' ? args.payload.target : 'server'
         const intent = typeof args.payload.intent === 'string' ? args.payload.intent : ''
         const input = isPlainObject(args.payload.input) ? args.payload.input : {}
+        // v2.2 phase fields — may be present on card.add(tool, target=server) (T1)
+        const phase = typeof args.payload.phase === 'string' ? args.payload.phase : undefined
+        const phaseHint = typeof args.payload.phase_hint === 'string' ? args.payload.phase_hint : undefined
+        const phaseBytes = typeof args.payload.phase_bytes === 'number' ? args.payload.phase_bytes : undefined
         card.toolTarget = target
 
-        this.emitToolStart(sessionId, forest, card, toolName, target, intent, input, args.traceId)
+        this.emitToolStart(sessionId, forest, card, toolName, target, intent, input, args.traceId, phase, phaseHint, phaseBytes)
 
         if (target === 'client') {
           // v2 client tools: execute locally and send tool.result back.
@@ -1304,6 +1321,9 @@ export class HarnessclawClient extends EventEmitter {
     intent: string,
     input: Record<string, unknown>,
     traceId: string,
+    phase?: string,
+    phaseHint?: string,
+    phaseBytes?: number,
   ): void {
     if (card.toolEmitted) return
     card.toolEmitted = true
@@ -1321,6 +1341,9 @@ export class HarnessclawClient extends EventEmitter {
           tool_name: toolName,
           input,
           intent,
+          phase,
+          phase_hint: phaseHint,
+          phase_bytes: phaseBytes,
         },
       })
       return
@@ -1337,6 +1360,9 @@ export class HarnessclawClient extends EventEmitter {
       call_id: card.cardId,
       tool_use_id: card.cardId,
       intent: intent || undefined,
+      phase,
+      phase_hint: phaseHint,
+      phase_bytes: phaseBytes,
     })
   }
 
@@ -1403,6 +1429,43 @@ export class HarnessclawClient extends EventEmitter {
               ? card.payload.subagent_type
               : (typeof args.payload.subagent_type === 'string' ? args.payload.subagent_type : undefined),
           })
+        }
+        return
+      }
+
+      case 'tool': {
+        // v2.2 phase fields — emitted by engine on card.set(tool) for T2/T3/T4/T5 transitions.
+        const p = args.payload as Record<string, unknown>
+        if ('phase' in p || 'phase_hint' in p || 'phase_bytes' in p) {
+          const info = this.resolveAgentInfo(forest, args.agentId)
+          if (info.isSubagent) {
+            this.emitCompatEvent({
+              type: 'subagent_event',
+              session_id: sessionId,
+              agent_id: info.agentId,
+              agent_name: info.agentName,
+              payload: {
+                event_type: 'tool_phase',
+                tool_use_id: args.cardId,
+                call_id: args.cardId,
+                phase: typeof p.phase === 'string' ? p.phase : undefined,
+                phase_hint: typeof p.phase_hint === 'string' ? p.phase_hint : undefined,
+                phase_bytes: typeof p.phase_bytes === 'number' ? p.phase_bytes : undefined,
+                input: isPlainObject(p.input) ? p.input : undefined,
+              },
+            })
+          } else {
+            this.emitCompatEvent({
+              type: 'tool_phase',
+              session_id: sessionId,
+              call_id: args.cardId,
+              tool_use_id: args.cardId,
+              phase: typeof p.phase === 'string' ? p.phase : undefined,
+              phase_hint: typeof p.phase_hint === 'string' ? p.phase_hint : undefined,
+              phase_bytes: typeof p.phase_bytes === 'number' ? p.phase_bytes : undefined,
+              input: isPlainObject(p.input) ? p.input : undefined,
+            })
+          }
         }
         return
       }
