@@ -168,6 +168,49 @@ export function HomePage() {
     setAttachments((prev) => prev.filter((item) => item.id !== id))
   }
 
+  // Paste hand-off: clipboard images go to the attachments pipeline
+  // (same shape as drag/drop), everything else falls through to the
+  // pasted-text bar via the existing hook. Both flows can fire in a
+  // single paste event (e.g. screenshot + selected text), so we don't
+  // short-circuit text handling when an image is found.
+  const handleComposerPaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (harnessclawStatus !== 'connected') {
+      pasted.handlePaste(e)
+      return
+    }
+    const items = e.clipboardData?.items
+    const imageFiles: File[] = []
+    if (items) {
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i]
+        if (it.kind === 'file' && it.type.startsWith('image/')) {
+          const f = it.getAsFile()
+          if (f) imageFiles.push(f)
+        }
+      }
+    }
+    if (imageFiles.length === 0) {
+      pasted.handlePaste(e)
+      return
+    }
+    // Suppress the textarea inserting an image-shaped "filename" string,
+    // but still let the pasted-text hook scan for any text payload that
+    // came along in the same event.
+    e.preventDefault()
+    pasted.handlePaste(e)
+    const saved: AttachmentItem[] = []
+    for (const f of imageFiles) {
+      try {
+        const buf = await f.arrayBuffer()
+        const res = await window.files.saveClipboardImage(buf, f.type || 'image/png')
+        if (res.ok) saved.push({ ...res.file, id: res.file.path })
+      } catch (err) {
+        console.error('Failed to save pasted image:', err)
+      }
+    }
+    if (saved.length) appendAttachments(saved)
+  }
+
   return (
     <div className="flex min-h-full justify-center px-6 pb-10 pt-[clamp(3rem,9vh,6rem)]">
       <div className="w-full max-w-[760px]">
@@ -231,7 +274,7 @@ export function HomePage() {
               selectedSkills={selectedSkills}
               onSelectedSkillsChange={setSelectedSkills}
               onKeyDown={handleKeyDown}
-              onPaste={pasted.handlePaste}
+              onPaste={handleComposerPaste}
               placeholder={t('home.inputPlaceholder')}
               maxLength={maxLength}
               className="min-h-[56px] max-h-[112px] leading-7"
