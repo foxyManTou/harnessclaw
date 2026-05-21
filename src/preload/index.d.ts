@@ -304,6 +304,16 @@ interface FilesAPI {
   >
   save: (options: { defaultFileName?: string; content?: string; sourcePath?: string }) =>
     Promise<{ ok: boolean; path?: string; cancelled?: boolean; error?: string }>
+  // saveClipboardImage writes a pasted-image blob to ~/.harnessclaw/
+  // clipboard-paste/ and returns the resolved PickedLocalFile so the
+  // renderer can attach it like any drag/drop file. Errors:
+  //   - 'invalid_payload' | 'empty_payload'
+  //   - 'too_large'      size > 20 MB
+  //   - 'resolve_failed' written but stat failed
+  saveClipboardImage: (data: ArrayBuffer, mime: string) => Promise<
+    | { ok: true; file: PickedLocalFile }
+    | { ok: false; error: string }
+  >
 }
 
 interface ConsoleAgentDefinition {

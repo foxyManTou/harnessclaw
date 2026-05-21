@@ -2020,6 +2020,58 @@ app.whenReady().then(() => {
     }
   })
 
+  // files:saveClipboardImage — persist a pasted-image blob to a
+  // per-app temp dir so the renderer can treat it like any other
+  // local file (same PickedLocalFile shape, fileURL preview, engine
+  // multimodal pipeline). The renderer can't write to disk directly;
+  // it hands us the raw bytes + sniffed MIME.
+  //
+  // Files land in ~/.harnessclaw/clipboard-paste/ — left in place
+  // intentionally so the user can re-attach the same image across
+  // sessions; the directory is opt-in cleanup territory.
+  ipcMain.handle('files:saveClipboardImage', async (
+    _,
+    payload: { data: Uint8Array | ArrayBuffer; mime?: string } | undefined,
+  ) => {
+    try {
+      if (!payload || !payload.data) {
+        return { ok: false as const, error: 'invalid_payload' }
+      }
+      const buf = Buffer.from(payload.data as Uint8Array)
+      if (buf.length === 0) {
+        return { ok: false as const, error: 'empty_payload' }
+      }
+      const MAX_BYTES = 20 * 1024 * 1024
+      if (buf.length > MAX_BYTES) {
+        return { ok: false as const, error: 'too_large' }
+      }
+      const mime = (payload.mime || 'image/png').toLowerCase()
+      const extByMime: Record<string, string> = {
+        'image/png': '.png',
+        'image/jpeg': '.jpg',
+        'image/jpg': '.jpg',
+        'image/gif': '.gif',
+        'image/webp': '.webp',
+        'image/bmp': '.bmp',
+        'image/svg+xml': '.svg',
+      }
+      const ext = extByMime[mime] || '.png'
+      const dir = join(homedir(), '.harnessclaw', 'clipboard-paste')
+      mkdirSync(dir, { recursive: true })
+      const ts = new Date().toISOString().replace(/[:.]/g, '-')
+      const rand = Math.random().toString(36).slice(2, 8)
+      const fileName = `paste-${ts}-${rand}${ext}`
+      const outPath = join(dir, fileName)
+      writeFileSync(outPath, buf)
+      const [picked] = buildPickedLocalFiles([outPath])
+      if (!picked) return { ok: false as const, error: 'resolve_failed' }
+      return { ok: true as const, file: picked }
+    } catch (error) {
+      writeAppLog('error', 'files:saveClipboardImage', 'failed', { error: String(error) })
+      return { ok: false as const, error: String((error as Error)?.message || error) }
+    }
+  })
+
   ipcMain.handle('files:read', async (_, rawPath: unknown) => {
     try {
       if (typeof rawPath !== 'string' || !rawPath.trim()) {

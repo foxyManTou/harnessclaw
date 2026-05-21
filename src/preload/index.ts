@@ -166,6 +166,11 @@ const filesAPI = {
   readBase64: (path: string) => ipcRenderer.invoke('files:read-base64', path),
   save: (options: { defaultFileName?: string; content?: string; sourcePath?: string }) =>
     ipcRenderer.invoke('files:save', options),
+  // saveClipboardImage writes a pasted-image blob to a temp dir and
+  // returns the resolved PickedLocalFile so the renderer can route it
+  // through the same attachment pipeline as drag/drop or file picker.
+  saveClipboardImage: (data: ArrayBuffer, mime: string) =>
+    ipcRenderer.invoke('files:saveClipboardImage', { data, mime }),
 }
 
 // artifactsAPI bridges the renderer to artifacts:fetch, which downloads
