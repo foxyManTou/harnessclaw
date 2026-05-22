@@ -1204,6 +1204,29 @@ export class HarnessclawClient extends EventEmitter {
               : undefined,
           }]
         })
+        // Emit a synthetic tool_start so the Plan tool shows up as a tool
+        // activity card in the frontend. The plan card is a child of the L2
+        // coordinator agent card (parentCardId); attribute the event to that
+        // agent so it routes into the subagent tool panel correctly.
+        const planParentAgentId = args.parentCardId
+        if (planParentAgentId && forest.subagentIds.has(planParentAgentId)) {
+          const planAgentName = forest.agentNames.get(planParentAgentId) || 'subagent'
+          this.emitCompatEvent({
+            type: 'subagent_event',
+            session_id: sessionId,
+            agent_id: planParentAgentId,
+            agent_name: planAgentName,
+            payload: {
+              event_type: 'tool_start',
+              tool_use_id: planId,
+              tool_name: 'Plan',
+              input: {
+                goal: typeof args.payload.goal === 'string' ? args.payload.goal : '',
+                strategy: typeof args.payload.strategy === 'string' ? args.payload.strategy : 'sequential',
+              },
+            },
+          })
+        }
         this.emitCompatEvent({
           type: 'plan_created',
           session_id: sessionId,
@@ -1947,6 +1970,28 @@ export class HarnessclawClient extends EventEmitter {
 
       case 'plan': {
         const planId = card && typeof card.payload.plan_id === 'string' ? card.payload.plan_id : args.cardId
+        // Close the synthetic Plan tool card opened at card.add time.
+        const closePlanParentAgentId = card?.parentCardId
+        if (closePlanParentAgentId && forest.subagentIds.has(closePlanParentAgentId)) {
+          const closePlanAgentName = forest.agentNames.get(closePlanParentAgentId) || 'subagent'
+          const stepCount = card && Array.isArray(card.payload.steps) ? card.payload.steps.length : 0
+          this.emitCompatEvent({
+            type: 'subagent_event',
+            session_id: sessionId,
+            agent_id: closePlanParentAgentId,
+            agent_name: closePlanAgentName,
+            payload: {
+              event_type: 'tool_end',
+              tool_use_id: planId,
+              tool_name: 'Plan',
+              output: status === 'ok'
+                ? `已完成执行计划，共 ${stepCount} 个步骤`
+                : '计划执行失败',
+              status: status === 'ok' ? 'ok' : 'failed',
+              is_error: status !== 'ok',
+            },
+          })
+        }
         if (status === 'ok') {
           this.emitCompatEvent({
             type: 'plan_completed',
