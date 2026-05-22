@@ -13,10 +13,25 @@ jobs:
   claim-issue-reward:
     if: contains(github.event.issue.labels.*.name, 'reward')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: read
     steps:
-      - name: Print minimal diagnostics
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Share reward
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "issue_number=${{ github.event.issue.number }}"
-          echo "issue_title=${{ github.event.issue.title }}"
-          echo "issue_labels=${{ join(github.event.issue.labels.*.name, ', ') }}"
-          echo "repository=${{ github.repository }}"
+          node .github/scripts/share-reward.cjs \
+            ${{ github.repository_owner }} \
+            ${{ github.event.repository.name }} \
+            ${{ github.event.issue.number }}
