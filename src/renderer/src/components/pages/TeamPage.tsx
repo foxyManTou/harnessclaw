@@ -278,7 +278,7 @@ export function TeamPage() {
     },
   }), [t])
 
-  const SOP_STEPS = useMemo(() => [
+  const sopSteps = useMemo(() => [
     { num: 1, label: t('team.sop.steps.target.label'), icon: Target },
     { num: 2, label: t('team.sop.steps.members.label'), icon: UserPlus },
     { num: 3, label: t('team.sop.steps.workflow.label'), icon: Workflow },
@@ -286,7 +286,7 @@ export function TeamPage() {
     { num: 5, label: t('team.sop.steps.test.label'), icon: Rocket },
   ], [t])
 
-  const SOP_OVERVIEW = useMemo(() => [
+  const sopOverview = useMemo(() => [
     { title: t('team.sop.steps.target.label'), items: t('team.sop.items.targetDesc', { returnObjects: true }) as string[] },
     { title: t('team.sop.steps.members.label'), items: t('team.sop.items.membersDesc', { returnObjects: true }) as string[] },
     { title: t('team.sop.steps.workflow.label'), items: t('team.sop.items.workflowDesc', { returnObjects: true }) as string[] },
@@ -584,6 +584,8 @@ export function TeamPage() {
               agents={agents}
               teams={teams}
               agentLookup={agentLookup}
+              sopSteps={sopSteps}
+              sopOverview={sopOverview}
               nameError={sopNameError}
               onSetStep={setSopStep}
               onChangeDraft={setSopDraft}
@@ -602,6 +604,8 @@ export function TeamPage() {
         editingId={editingAgentId}
         draft={agentDraft}
         agents={agents}
+        agentTypeLabels={AGENT_TYPE_LABELS}
+        profileLabels={PROFILE_LABELS}
         nameError={agentNameError}
         nameInputRef={agentNameInputRef}
         onClose={() => {
@@ -799,6 +803,8 @@ function AgentDialog({
   editingId,
   draft,
   agents,
+  agentTypeLabels,
+  profileLabels,
   nameError,
   saving,
   nameInputRef,
@@ -812,6 +818,13 @@ function AgentDialog({
   editingId: string | null
   draft: AgentDraft
   agents: AgentRecord[]
+  // AgentDialog is a sibling of TeamPage, not a nested closure, so it
+  // can't reach the AGENT_TYPE_LABELS / PROFILE_LABELS useMemo values
+  // declared inside TeamPage. They have to be plumbed through as props
+  // — otherwise `<SelectField labels={AGENT_TYPE_LABELS}>` raises a
+  // ReferenceError at render time and the whole page goes white.
+  agentTypeLabels: Record<AgentTypeOption, string>
+  profileLabels: Record<ProfileOption, string>
   nameError: string
   saving?: boolean
   nameInputRef: React.RefObject<HTMLInputElement | null>
@@ -916,7 +929,7 @@ function AgentDialog({
                     <SelectField
                       value={draft.agent_type}
                       options={AGENT_TYPE_OPTIONS}
-                      labels={AGENT_TYPE_LABELS}
+                      labels={agentTypeLabels}
                       onChange={(value) => onChangeDraft((current) => ({ ...current, agent_type: value as AgentTypeOption }))}
                     />
                   </FieldBlock>
@@ -925,7 +938,7 @@ function AgentDialog({
                     <SelectField
                       value={draft.profile}
                       options={PROFILE_OPTIONS}
-                      labels={PROFILE_LABELS}
+                      labels={profileLabels}
                       onChange={(value) => onChangeDraft((current) => ({ ...current, profile: value as ProfileOption }))}
                     />
                   </FieldBlock>
@@ -1124,6 +1137,8 @@ function SopWizardView({
   agents,
   teams,
   agentLookup,
+  sopSteps,
+  sopOverview,
   nameError,
   onSetStep,
   onChangeDraft,
@@ -1139,6 +1154,11 @@ function SopWizardView({
   agents: AgentRecord[]
   teams: AgentTeamRecord[]
   agentLookup: Record<string, AgentRecord>
+  // Same plumbing reason as AgentDialog's labels — these useMemo'd
+  // arrays live inside TeamPage and aren't reachable from this
+  // sibling function. Pass them in instead of relying on closure.
+  sopSteps: Array<{ num: number; label: string; icon: React.ElementType }>
+  sopOverview: Array<{ title: string; items: string[] }>
   nameError: string
   onSetStep: (step: number) => void
   onChangeDraft: React.Dispatch<React.SetStateAction<SopDraft>>
@@ -1215,13 +1235,13 @@ function SopWizardView({
     )
   }
 
-  const nextLabel = step < 5 ? t('team.sop.next', { label: SOP_STEPS[step]?.label ?? '' }) : t('team.sop.publish')
+  const nextLabel = step < 5 ? t('team.sop.next', { label: sopSteps[step]?.label ?? '' }) : t('team.sop.publish')
 
   return (
     <div className="flex min-h-full flex-col justify-end space-y-5 pb-5">
       {/* ── Stepper ── */}
       <div className="flex items-center justify-center gap-0">
-        {SOP_STEPS.map((s, i) => {
+        {sopSteps.map((s, i) => {
           const Icon = s.icon
           const isActive = s.num === step
           const isDone = s.num < step
@@ -1253,7 +1273,7 @@ function SopWizardView({
                   {s.label}
                 </span>
               </button>
-              {i < SOP_STEPS.length - 1 && (
+              {i < sopSteps.length - 1 && (
                 <div
                   className={cn(
                     'mx-2.5 mt-[-16px] h-[2px] w-8',
@@ -1270,7 +1290,7 @@ function SopWizardView({
       <div className="rounded-2xl border border-border bg-card">
         <div className="border-b border-border/70 px-4 py-2">
           <h3 className="text-xs font-semibold text-foreground">
-            {t('team.sop.wizardTitle', { step, label: SOP_STEPS[step - 1].label })}
+            {t('team.sop.wizardTitle', { step, label: sopSteps[step - 1].label })}
           </h3>
         </div>
 
@@ -1450,7 +1470,7 @@ function SopWizardView({
       <div className="space-y-2">
         <h4 className="text-sm font-semibold text-foreground">{t('team.sop.overview')}</h4>
         <div className="flex items-stretch gap-0">
-          {SOP_OVERVIEW.map((col, i) => {
+          {sopOverview.map((col, i) => {
             const stepNum = i + 1
             const status = stepNum < step ? t('team.sop.status.done') : stepNum === step ? t('team.sop.status.doing') : t('team.sop.status.todo')
             const statusColor = stepNum < step
@@ -1486,7 +1506,7 @@ function SopWizardView({
                     </span>
                   </div>
                 </div>
-                {i < SOP_OVERVIEW.length - 1 && (
+                {i < sopOverview.length - 1 && (
                   <div className="flex w-5 flex-shrink-0 items-center justify-center">
                     <ChevronRight size={12} className="text-muted-foreground/50" />
                   </div>
