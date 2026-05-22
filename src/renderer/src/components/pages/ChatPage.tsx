@@ -1402,7 +1402,7 @@ function createEmptySessionState(): SessionState {
 }
 
 function createPersistentSessionId(): string {
-  return `harnessclaw:session:${globalThis.crypto.randomUUID()}`
+  return globalThis.crypto.randomUUID()
 }
 
 function normalizeProjectContext(raw: unknown): ProjectContext | null {
@@ -4367,13 +4367,15 @@ export function ChatPage() {
           const phase = (typeof payload.phase === 'string' ? payload.phase : undefined) as ToolActivity['phase']
           const phaseHint = typeof payload.phase_hint === 'string' ? payload.phase_hint : undefined
           const phaseBytes = typeof payload.phase_bytes === 'number' ? payload.phase_bytes : undefined
+          const rawInputContent = 'input' in payload ? getToolCallEventContent(payload) : undefined
+          const inputContent = rawInputContent && rawInputContent !== '{}' ? rawInputContent : undefined
           updateSession(sid, (prev) => ({
             ...prev,
             messages: prev.messages.map((m) => ({
               ...m,
               tools: (m.tools || []).map((t) =>
                 t.callId === callId && t.type === 'call'
-                  ? { ...t, phase, phaseHint, phaseBytes }
+                  ? { ...t, phase, phaseHint, phaseBytes, ...(inputContent ? { content: inputContent } : {}) }
                   : t
               ),
             })),
@@ -5052,6 +5054,8 @@ export function ChatPage() {
         const phase = (typeof event.phase === 'string' ? event.phase : undefined) as ToolActivity['phase']
         const phaseHint = typeof event.phase_hint === 'string' ? event.phase_hint : undefined
         const phaseBytes = typeof event.phase_bytes === 'number' ? event.phase_bytes : undefined
+        const rawInputContent = 'input' in event ? getToolCallEventContent(event) : undefined
+        const inputContent = rawInputContent && rawInputContent !== '{}' ? rawInputContent : undefined
 
         updateSession(sid, (prev) => ({
           ...prev,
@@ -5059,7 +5063,7 @@ export function ChatPage() {
             ...m,
             tools: (m.tools || []).map((t) =>
               t.callId === callId && t.type === 'call'
-                ? { ...t, phase, phaseHint, phaseBytes }
+                ? { ...t, phase, phaseHint, phaseBytes, ...(inputContent ? { content: inputContent } : {}) }
                 : t
             ),
           })),
