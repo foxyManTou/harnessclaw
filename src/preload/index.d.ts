@@ -696,9 +696,33 @@ declare global {
     db: DbAPI
     files: FilesAPI
     artifacts: ArtifactsAPI
+    workspace: WorkspaceAPI
     agentApi: AgentApiInterface
     launcherApi: LauncherAPI
   }
+}
+
+// WorkspaceAPI lists the on-disk per-session working directory
+// (`~/.harnessclaw/workspace/session/<sid>`) as a recursive tree.
+// The renderer feeds returned file paths back into window.files.read
+// to render previews in FilePreviewDrawer.
+interface WorkspaceFileNode {
+  name: string
+  path: string
+  type: 'file' | 'dir'
+  size?: number
+  modifiedAt?: number
+  children?: WorkspaceFileNode[]
+}
+interface WorkspaceAPI {
+  listSession: (sessionId: string) => Promise<
+    | { ok: true; root: string; exists: boolean; tree: WorkspaceFileNode[]; fileCount: number; truncated?: boolean }
+    | { ok: false; error: string }
+  >
+  openFolder: (sessionId: string) => Promise<
+    | { ok: true; path: string }
+    | { ok: false; error: string; path?: string }
+  >
 }
 
 // ArtifactsAPI bridges the renderer to artifacts:fetch (main process

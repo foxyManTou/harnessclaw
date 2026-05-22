@@ -2181,6 +2181,138 @@ app.whenReady().then(() => {
     }
   })
 
+  // workspace:listSession — list files in the per-session workspace dir
+  // `~/.harnessclaw/workspace/session/<sessionId>` as a recursive tree.
+  // Used by the chat top-bar "files" button so users can browse and
+  // preview anything the agent wrote into its working directory, not
+  // just declared artifacts.
+  //
+  // The renderer feeds individual file paths back into `files:read`
+  // (existing pipeline) to render a preview in FilePreviewDrawer, so
+  // this handler only returns metadata, not contents.
+  ipcMain.handle('workspace:listSession', async (_, rawSessionId: unknown) => {
+    try {
+      if (typeof rawSessionId !== 'string' || !rawSessionId.trim()) {
+        return { ok: false, error: 'invalid_session_id' }
+      }
+      // Be tolerant of the legacy "harnessclaw:session:<uuid>" form even
+      // though current sessions are bare UUIDs — older persisted ids may
+      // still flow through.
+      const sid = rawSessionId.trim().replace(/^(?:harnessclaw[:_])?session[:_]?/i, '')
+      const safeSid = sid.replace(/[\\/:*?"<>|]/g, '_')
+      if (!safeSid) {
+        return { ok: false, error: 'invalid_session_id' }
+      }
+      const root = join(homedir(), '.harnessclaw', 'workspace', 'session', safeSid)
+      if (!existsSync(root)) {
+        return { ok: true, root, exists: false, tree: [], fileCount: 0 }
+      }
+      // Hard caps to keep the popover usable and to bound IPC payload
+      // size if the workspace contains a runaway dir (eg. node_modules).
+      const MAX_ENTRIES = 2000
+      const MAX_DEPTH = 8
+      let total = 0
+      let fileCount = 0
+      type Node = {
+        name: string
+        path: string
+        type: 'file' | 'dir'
+        size?: number
+        modifiedAt?: number
+        children?: Node[]
+      }
+      const walk = (dir: string, depth: number): Node[] => {
+        if (depth > MAX_DEPTH || total >= MAX_ENTRIES) return []
+        let entries: import('fs').Dirent[]
+        try {
+          entries = readdirSync(dir, { withFileTypes: true })
+        } catch {
+          return []
+        }
+        // dirs first, then files, both alphabetical (case-insensitive)
+        entries.sort((a, b) => {
+          if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1
+          return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+        })
+        const out: Node[] = []
+        for (const entry of entries) {
+          if (total >= MAX_ENTRIES) break
+          // skip hidden / engine-internal scratch dirs to keep the tree readable
+          if (entry.name.startsWith('.')) continue
+          total += 1
+          const full = join(dir, entry.name)
+          if (entry.isDirectory()) {
+            out.push({
+              name: entry.name,
+              path: full,
+              type: 'dir',
+              children: walk(full, depth + 1),
+            })
+          } else if (entry.isFile()) {
+            let size: number | undefined
+            let modifiedAt: number | undefined
+            try {
+              const st = statSync(full)
+              size = st.size
+              modifiedAt = st.mtimeMs
+            } catch {
+              // ignore stat failures; still surface the entry
+            }
+            fileCount += 1
+            out.push({
+              name: entry.name,
+              path: full,
+              type: 'file',
+              size,
+              modifiedAt,
+            })
+          }
+        }
+        return out
+      }
+      const tree = walk(root, 0)
+      return {
+        ok: true,
+        root,
+        exists: true,
+        tree,
+        fileCount,
+        truncated: total >= MAX_ENTRIES,
+      }
+    } catch (error) {
+      return { ok: false, error: String((error as Error)?.message || error) }
+    }
+  })
+
+  // workspace:openFolder — reveal the per-session workspace root in
+  // the OS file manager (Finder / Explorer / xdg). If the directory
+  // doesn't exist yet (the agent hasn't written anything), it's
+  // created on the fly so the user lands somewhere sensible.
+  ipcMain.handle('workspace:openFolder', async (_, rawSessionId: unknown) => {
+    try {
+      if (typeof rawSessionId !== 'string' || !rawSessionId.trim()) {
+        return { ok: false, error: 'invalid_session_id' }
+      }
+      const sid = rawSessionId.trim().replace(/^(?:harnessclaw[:_])?session[:_]?/i, '')
+      const safeSid = sid.replace(/[\\/:*?"<>|]/g, '_')
+      if (!safeSid) {
+        return { ok: false, error: 'invalid_session_id' }
+      }
+      const root = join(homedir(), '.harnessclaw', 'workspace', 'session', safeSid)
+      if (!existsSync(root)) {
+        mkdirSync(root, { recursive: true })
+      }
+      const result = await shell.openPath(root)
+      if (result) {
+        // shell.openPath returns an error string on failure, empty string on success.
+        return { ok: false, error: result, path: root }
+      }
+      return { ok: true, path: root }
+    } catch (error) {
+      return { ok: false, error: String((error as Error)?.message || error) }
+    }
+  })
+
   // artifacts:fetch — pull raw binary content for an artifact from the
   // engine over Console HTTP, write it to a per-session cache dir under
   // ~/.harnessclaw/, and return the on-disk path so the renderer can

@@ -191,6 +191,34 @@ const artifactsAPI = {
     >,
 }
 
+// workspaceAPI lists the on-disk per-session working directory
+// (`~/.harnessclaw/workspace/session/<sid>`) as a tree. Used by the
+// chat top-bar "files" button so users can browse and preview every
+// file the agent produced, not just declared artifacts. The renderer
+// keeps using files.read for the actual preview.
+export interface WorkspaceFileNode {
+  name: string
+  path: string
+  type: 'file' | 'dir'
+  size?: number
+  modifiedAt?: number
+  children?: WorkspaceFileNode[]
+}
+const workspaceAPI = {
+  listSession: (sessionId: string) =>
+    ipcRenderer.invoke('workspace:listSession', sessionId) as Promise<
+      | { ok: true; root: string; exists: boolean; tree: WorkspaceFileNode[]; fileCount: number; truncated?: boolean }
+      | { ok: false; error: string }
+    >,
+  // Reveals the session workspace root in the OS file manager.
+  // Creates the dir on demand if the agent hasn't written there yet.
+  openFolder: (sessionId: string) =>
+    ipcRenderer.invoke('workspace:openFolder', sessionId) as Promise<
+      | { ok: true; path: string }
+      | { ok: false; error: string; path?: string }
+    >,
+}
+
 const agentAPI = {
   listAgents: (params?: { agent_type?: string; source?: string; limit?: number; offset?: number }) =>
     ipcRenderer.invoke('console:listAgents', params),
@@ -354,6 +382,7 @@ if (process.contextIsolated) {
     contextBridge.exposeInMainWorld('db', dbAPI)
     contextBridge.exposeInMainWorld('files', filesAPI)
     contextBridge.exposeInMainWorld('artifacts', artifactsAPI)
+    contextBridge.exposeInMainWorld('workspace', workspaceAPI)
     contextBridge.exposeInMainWorld('agentApi', agentAPI)
     contextBridge.exposeInMainWorld('launcherApi', launcherAPI)
   } catch (error) {
@@ -386,6 +415,8 @@ if (process.contextIsolated) {
   window.files = filesAPI
   // @ts-ignore (define in dts)
   window.artifacts = artifactsAPI
+  // @ts-ignore (define in dts)
+  window.workspace = workspaceAPI
   // @ts-ignore (define in dts)
   window.agentApi = agentAPI
   // @ts-ignore (define in dts)

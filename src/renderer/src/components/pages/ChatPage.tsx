@@ -5,7 +5,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import {
   Send, Plus, Copy, Check, Trash2,
   Loader2, Wrench, Brain, AlertCircle, RefreshCw, ChevronDown, ChevronUp,
-  FileText, X, ArrowDown, AtSign, GitBranch, ListTodo, Users, MessagesSquare, ChevronLeft, ChevronRight, Search, HelpCircle, FolderOpen, Download,
+  FileText, File, Folder, X, ArrowDown, AtSign, GitBranch, ListTodo, Users, MessagesSquare, ChevronLeft, ChevronRight, Search, HelpCircle, FolderOpen, Download,
   Globe, ExternalLink, Pencil, FolderPlus, FolderMinus,
   PenLine, Clock, ShieldQuestion,
 } from 'lucide-react'
@@ -2893,6 +2893,449 @@ function SessionArtifactsButton({
   )
 }
 
+// Shape mirrors WorkspaceFileNode from preload (`window.workspace.listSession`).
+// Kept local so this component doesn't need to import a preload type.
+interface WorkspaceFileNode {
+  name: string
+  path: string
+  type: 'file' | 'dir'
+  size?: number
+  modifiedAt?: number
+  children?: WorkspaceFileNode[]
+}
+
+/**
+ * Top-bar button that lists the session's on-disk working directory
+ * (`~/.harnessclaw/workspace/session/<sid>`) as a collapsible file tree.
+ * Click a file → opens it in the same FilePreviewDrawer used by the
+ * artifacts dropdown / read_file tool previews.
+ *
+ * This is wider in scope than SessionArtifactsButton (which only lists
+ * artifacts declared via artifact_created events): the agent often
+ * produces files that never get formally registered as artifacts but
+ * still live in the session workspace dir.
+ */
+function SessionWorkspaceFilesButton({
+  sessionId,
+}: {
+  sessionId: string
+}) {
+  const { t } = useTranslation()
+  // Closed by default — the user opens the workspace via the header
+  // button when they want to inspect files. Clicking outside the
+  // drawer (or pressing Esc / the close button) dismisses it.
+  const [open, setOpen] = useState(false)
+  const [tree, setTree] = useState<WorkspaceFileNode[]>([])
+  const [fileCount, setFileCount] = useState(0)
+  const [root, setRoot] = useState<string>('')
+  const [exists, setExists] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  // Currently selected file → fed to the inline preview pane on the
+  // right of the drawer. Reset when the active session changes so the
+  // preview never bleeds across sessions.
+  const [selected, setSelected] = useState<{ path: string; name: string } | null>(null)
+  useEffect(() => {
+    setSelected(null)
+  }, [sessionId])
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  // (Re)load the tree when the popover opens or the active session changes.
+  // The agent may keep writing files into the session dir while the
+  // popover is closed, so refreshing on every open is intentional.
+  const reload = useCallback(async () => {
+    if (!sessionId) return
+    // Preload may not be ready yet during HMR / first mount of a freshly
+    // bundled renderer — fail soft instead of crashing the page when
+    // `window.workspace` isn't exposed yet.
+    if (typeof window === 'undefined' || !window.workspace || typeof window.workspace.listSession !== 'function') {
+      setError('workspace api unavailable')
+      return
+    }
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await window.workspace.listSession(sessionId)
+      if (!res.ok) {
+        setError(res.error || 'failed')
+        setTree([])
+        setFileCount(0)
+        setExists(false)
+        return
+      }
+      setTree(res.tree)
+      setFileCount(res.fileCount)
+      setRoot(res.root)
+      setExists(res.exists)
+    } catch (err) {
+      setError(String((err as Error)?.message || err))
+    } finally {
+      setLoading(false)
+    }
+  }, [sessionId])
+
+  // Light-weight count fetch on session change so the badge stays
+  // accurate even when the popover is closed. Same call as `reload`
+  // since the IPC is cheap (one local readdir + stats), and it keeps
+  // the open-time fetch path identical.
+  useEffect(() => {
+    void reload()
+  }, [reload])
+
+  // Close drawer on Escape; click-outside is handled by the backdrop.
+  useEffect(() => {
+    if (!open) return
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('keydown', handleKey)
+    }
+  }, [open])
+
+  const handleToggle = () => {
+    setOpen((v) => {
+      const next = !v
+      if (next) void reload()
+      return next
+    })
+  }
+
+  // Always render the button so users can peek into a freshly created
+  // session even before the agent writes the first file.
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        onClick={handleToggle}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        aria-label={t('chat.header.workspaceCount', { n: fileCount })}
+        title={t('chat.header.workspace')}
+        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-border px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      >
+        <FolderOpen size={14} />
+        <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+          {fileCount}
+        </span>
+      </button>
+
+      {open && createPortal(
+        // Modal-style drawer: a translucent backdrop dims the rest of
+        // the app and captures click-outside → close. Clicks inside
+        // the `<aside>` itself stop propagation via the wrapper layout
+        // (the backdrop is a sibling, not an ancestor of the panel).
+        <div
+          className="fixed inset-0 z-[150] flex"
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        >
+          <div
+            className="absolute inset-0 bg-slate-950/25 backdrop-blur-[2px]"
+            onClick={() => setOpen(false)}
+            aria-hidden="true"
+          />
+          <aside
+            role="dialog"
+            aria-label={t('chat.header.workspace')}
+            className="drawer-slide-in-from-right relative ml-auto flex h-full w-[56rem] max-w-[92vw] flex-col border-l border-border bg-card shadow-2xl"
+          >
+            <header className="flex items-start justify-between gap-3 border-b border-border px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <h2 className="text-sm font-semibold text-foreground">{t('chat.header.workspace')}</h2>
+                {root ? (
+                  <p className="mt-0.5 truncate text-[11px] text-muted-foreground" title={root}>
+                    {root}
+                  </p>
+                ) : null}
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                  {fileCount}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void reload()}
+                  aria-label={t('chat.header.workspaceRefresh')}
+                  title={t('chat.header.workspaceRefresh')}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <RefreshCw size={13} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Fire and forget — main's shell.openPath logs its
+                    // own errors, and a failed reveal shouldn't block the
+                    // user from continuing to browse the drawer.
+                    void window.workspace.openFolder(sessionId)
+                  }}
+                  aria-label={t('chat.header.workspaceOpenFolder')}
+                  title={t('chat.header.workspaceOpenFolder')}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <FolderOpen size={13} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  aria-label={t('common.close', { defaultValue: '关闭' })}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            </header>
+
+            {/* Two-pane body: file tree (left) + inline preview (right).
+                Default state keeps BOTH panes visible — the user lands
+                on a session and immediately sees both the file UI/
+                structure and a place to inspect content, instead of
+                having to chase a click-to-open flow. */}
+            <div className="flex flex-1 overflow-hidden">
+              <div className="flex w-72 shrink-0 flex-col border-r border-border">
+                <div className="flex-1 overflow-y-auto py-1">
+                  {loading ? (
+                    <div className="flex h-full items-center justify-center px-4 py-10 text-xs text-muted-foreground">
+                      {t('chat.header.workspaceLoading')}
+                    </div>
+                  ) : error ? (
+                    <div className="flex h-full items-center justify-center px-4 py-10 text-xs text-destructive">
+                      {error}
+                    </div>
+                  ) : !exists || tree.length === 0 ? (
+                    <div className="flex h-full items-center justify-center px-4 py-10 text-xs text-muted-foreground">
+                      {t('chat.header.workspaceEmpty')}
+                    </div>
+                  ) : (
+                    <ul>
+                      {tree.map((node) => (
+                        <WorkspaceTreeNode
+                          key={node.path}
+                          node={node}
+                          depth={0}
+                          selectedPath={selected?.path || null}
+                          onSelectFile={(path, fileName) => setSelected({ path, name: fileName })}
+                        />
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-1 flex-col overflow-hidden">
+                <WorkspaceInlinePreview file={selected} />
+              </div>
+            </div>
+          </aside>
+        </div>,
+        document.body,
+      )}
+    </div>
+  )
+}
+
+/**
+ * Recursive row inside the workspace drawer's file tree. Directories
+ * expand/collapse; files become selectable (single-select, drives the
+ * inline preview pane on the right).
+ */
+function WorkspaceTreeNode({
+  node,
+  depth,
+  selectedPath,
+  onSelectFile,
+}: {
+  node: WorkspaceFileNode
+  depth: number
+  selectedPath: string | null
+  onSelectFile: (path: string, fileName: string) => void
+}) {
+  // Top-level dirs start expanded; deeper dirs default collapsed to
+  // keep the tree readable when the agent creates nested folders.
+  const [expanded, setExpanded] = useState(depth === 0)
+  const indent = { paddingLeft: `${8 + depth * 14}px` }
+
+  if (node.type === 'dir') {
+    const children = node.children || []
+    return (
+      <li>
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-accent"
+          style={indent}
+        >
+          {expanded ? (
+            <ChevronDown size={12} className="shrink-0 text-muted-foreground" />
+          ) : (
+            <ChevronRight size={12} className="shrink-0 text-muted-foreground" />
+          )}
+          <Folder size={13} className="shrink-0 text-primary" />
+          <span className="truncate font-medium">{node.name}</span>
+          {children.length > 0 ? (
+            <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">{children.length}</span>
+          ) : null}
+        </button>
+        {expanded && children.length > 0 && (
+          <ul>
+            {children.map((child) => (
+              <WorkspaceTreeNode
+                key={child.path}
+                node={child}
+                depth={depth + 1}
+                selectedPath={selectedPath}
+                onSelectFile={onSelectFile}
+              />
+            ))}
+          </ul>
+        )}
+      </li>
+    )
+  }
+
+  const isSelected = selectedPath === node.path
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={() => onSelectFile(node.path, node.name)}
+        aria-pressed={isSelected}
+        className={cn(
+          'flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-xs transition-colors',
+          isSelected
+            ? 'bg-accent text-foreground'
+            : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+        )}
+        style={indent}
+        title={node.path}
+      >
+        <span className="w-3 shrink-0" aria-hidden="true" />
+        <File size={13} className={cn('shrink-0', isSelected ? 'text-primary' : 'text-muted-foreground')} />
+        <span className="min-w-0 flex-1 truncate">{node.name}</span>
+      </button>
+    </li>
+  )
+}
+
+/**
+ * Inline file preview rendered inside the workspace drawer's right
+ * pane. Replicates a stripped-down version of FilePreviewDrawer:
+ *   - Images / audio / video → native element via `localFileUrl`.
+ *   - docx / xlsx / pptx / pdf → rich preview (HTML/text) from main
+ *     process via `files:read` (mammoth / SheetJS / pdf-parse).
+ *   - Everything else → plain text in a monospace block.
+ * Binary formats without a rich-preview path show a friendly placeholder.
+ */
+function WorkspaceInlinePreview({ file }: { file: { path: string; name: string } | null }) {
+  const { t } = useTranslation()
+  const [content, setContent] = useState<string>('')
+  const [isBinary, setIsBinary] = useState(false)
+  const [previewKind, setPreviewKind] = useState<'html' | 'text' | undefined>(undefined)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!file) {
+      setContent('')
+      setIsBinary(false)
+      setPreviewKind(undefined)
+      setError(null)
+      return
+    }
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    setContent('')
+    setPreviewKind(undefined)
+    setIsBinary(false)
+    ;(async () => {
+      try {
+        const res = await window.files.read(file.path)
+        if (cancelled) return
+        if (!res?.ok) {
+          setError(res?.error || 'read failed')
+          return
+        }
+        setContent(typeof res.content === 'string' ? res.content : '')
+        setIsBinary(Boolean(res.isBinary))
+        setPreviewKind(res.previewKind === 'html' || res.previewKind === 'text' ? res.previewKind : undefined)
+      } catch (err) {
+        if (!cancelled) setError(String((err as Error)?.message || err))
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [file?.path])
+
+  if (!file) {
+    return (
+      <div className="flex flex-1 items-center justify-center px-6 py-10 text-xs text-muted-foreground">
+        {t('chat.header.workspacePreviewEmpty')}
+      </div>
+    )
+  }
+
+  const ext = file.name.includes('.') ? file.name.split('.').pop()!.toLowerCase() : ''
+  const isImage = /^(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/.test(ext)
+  const isAudio = /^(mp3|wav|m4a|aac|flac|ogg)$/.test(ext)
+  const isVideo = /^(mp4|mov|avi|mkv|webm)$/.test(ext)
+  const mediaUrl = isImage || isAudio || isVideo ? localFileUrl(file.path) : null
+
+  return (
+    <>
+      <header className="flex items-center gap-2 border-b border-border bg-muted/30 px-4 py-2">
+        <File size={13} className="shrink-0 text-primary" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-xs font-semibold text-foreground" title={file.name}>{file.name}</div>
+          <div className="mt-0.5 truncate text-[10px] text-muted-foreground" title={file.path}>{file.path}</div>
+        </div>
+      </header>
+      <div className="flex-1 overflow-auto bg-background/40">
+        {loading ? (
+          <div className="flex h-full items-center justify-center px-6 py-10 text-xs text-muted-foreground">
+            {t('chat.header.workspaceLoading')}
+          </div>
+        ) : error ? (
+          <div className="flex h-full items-center justify-center px-6 py-10 text-xs text-destructive">
+            {error}
+          </div>
+        ) : isImage && mediaUrl ? (
+          <div className="flex h-full items-center justify-center p-4">
+            <img src={mediaUrl} alt={file.name} className="max-h-full max-w-full rounded-md border border-border object-contain" />
+          </div>
+        ) : isAudio && mediaUrl ? (
+          <div className="flex h-full items-center justify-center p-6">
+            <audio src={mediaUrl} controls className="w-full max-w-md" />
+          </div>
+        ) : isVideo && mediaUrl ? (
+          <div className="flex h-full items-center justify-center p-4">
+            <video src={mediaUrl} controls className="max-h-full max-w-full rounded-md border border-border" />
+          </div>
+        ) : previewKind === 'html' ? (
+          <div
+            className="prose prose-sm max-w-none px-4 py-3 text-foreground dark:prose-invert"
+            dangerouslySetInnerHTML={{ __html: content }}
+          />
+        ) : previewKind === 'text' ? (
+          <pre className="whitespace-pre-wrap break-words px-4 py-3 text-[12px] leading-5 text-foreground">{content}</pre>
+        ) : isBinary ? (
+          <div className="flex h-full items-center justify-center px-6 py-10 text-xs text-muted-foreground">
+            {t('chat.header.workspaceBinaryHint')}
+          </div>
+        ) : (
+          <pre className="whitespace-pre-wrap break-words px-4 py-3 font-mono text-[12px] leading-5 text-foreground">
+            {content}
+          </pre>
+        )}
+      </div>
+    </>
+  )
+}
+
 /**
  * Top-bar session title with an inline dropdown menu mirroring the sidebar's
  * per-session "more" menu: 重命名 / 加入项目（或 退出项目）/ 删除. Rename
@@ -3316,6 +3759,7 @@ export function ChatPage() {
     },
     [],
   )
+
   // User-configurable behavior for plain http(s) link clicks inside assistant
   // markdown messages. Persisted in app config under `ui.linkOpenBehavior`.
   // Default is `'drawer'` — clicking a link opens the in-app WebPreviewDrawer
@@ -6237,15 +6681,12 @@ export function ChatPage() {
 
             {activeSessionId && (
               <div className="flex flex-wrap items-center justify-start gap-2 sm:justify-end">
-                {/* v1.13: Files button. Appears only when the session has at
-                    least one artifact; click opens a popover listing all
-                    produced artifacts; click an item → preview drawer. */}
-                <SessionArtifactsButton
-                  artifacts={sessionArtifacts}
-                  onOpenArtifact={(artifact) => {
-                    void openArtifactPreview(artifact, activeSessionId)
-                  }}
-                />
+                {/* Files button — lists the session's working directory
+                    (`~/.harnessclaw/workspace/session/<sid>`) as a file
+                    tree, with an inline preview pane next to it. Both
+                    panes are visible by default so users land directly
+                    on the workspace view without an extra click. */}
+                <SessionWorkspaceFilesButton sessionId={activeSessionId} />
                 {/* Session-level stats popover (context window utilization,
                     cost, tokens, latency, per sub-agent breakdown).
                     Polls `/api/v1/sessions/{id}/metrics` on the Console
