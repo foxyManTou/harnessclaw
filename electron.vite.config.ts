@@ -4,6 +4,14 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   main: {
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve(__dirname, 'src/main/index.ts'),
+          'browser-agent-session': resolve(__dirname, 'src/main/browser-agent-session.ts')
+        }
+      }
+    },
     plugins: [externalizeDepsPlugin({
       include: ['better-sqlite3']
     })]

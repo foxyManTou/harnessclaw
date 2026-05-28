@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, dialog, nativeImage, screen, globalShortcut, protocol, net } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog, nativeImage, screen, globalShortcut, protocol, net, type BrowserWindowConstructorOptions } from 'electron'
 import { basename, dirname, extname, isAbsolute, join } from 'path'
 import { homedir } from 'os'
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync, copyFileSync } from 'fs'
@@ -6,6 +6,11 @@ import { spawn, ChildProcess } from 'child_process'
 import { pathToFileURL } from 'url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { harnessclawClient } from './harnessclaw'
+import {
+  BrowserAgentSessionManager,
+  DEFAULT_BROWSER_AGENT_CDP_PORT,
+  createRemoteDebuggingTargetResolver,
+} from './browser-agent-session'
 import { manuallyCheckForUpdates, setupAutoUpdater } from './updater'
 import {
   HARNESSCLAW_DIR,
@@ -1132,6 +1137,7 @@ function createWindow(): BrowserWindow {
 
 let launcherWindow: BrowserWindow | null = null
 let mainWindowRef: BrowserWindow | null = null
+let browserAgentSessions: BrowserAgentSessionManager | null = null
 
 const LAUNCHER_WIDTH = 710
 const LAUNCHER_HEIGHT = 90
@@ -1140,6 +1146,22 @@ const LAUNCHER_HEIGHT = 90
 // The user pins this at 140px so the bar feels anchored just below
 // the top of the screen — a familiar Spotlight-ish anchor point.
 const LAUNCHER_TOP_OFFSET = 140
+
+function resolveBrowserAgentCDPPort(): number {
+  const raw = process.env.HARNESSCLAW_BROWSER_CDP_PORT
+  if (!raw) {
+    return DEFAULT_BROWSER_AGENT_CDP_PORT
+  }
+  const parsed = Number(raw)
+  if (Number.isInteger(parsed) && parsed > 0 && parsed < 65536) {
+    return parsed
+  }
+  return DEFAULT_BROWSER_AGENT_CDP_PORT
+}
+
+const browserAgentCDPPort = resolveBrowserAgentCDPPort()
+app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1')
+app.commandLine.appendSwitch('remote-debugging-port', String(browserAgentCDPPort))
 
 function createLauncherWindow(): BrowserWindow {
   // Anchor the launcher to whichever display currently has the cursor
@@ -1403,6 +1425,15 @@ app.whenReady().then(() => {
       is_first_launch: isFirstLaunchForTelemetry,
       startup_duration_ms: Date.now() - appStartTimestamp,
     },
+  })
+
+  browserAgentSessions = new BrowserAgentSessionManager({
+    createWindow: (options) => new BrowserWindow(options as BrowserWindowConstructorOptions),
+    resolveCDPEndpoint: createRemoteDebuggingTargetResolver(browserAgentCDPPort),
+  })
+  harnessclawClient.setBrowserAgentSessionManager(browserAgentSessions)
+  writeAppLog('info', 'browser-agent.session', 'Browser Agent client session manager ready', {
+    cdp_port: browserAgentCDPPort,
   })
 
   app.on('browser-window-created', (_, window) => {
@@ -3260,6 +3291,8 @@ app.on('before-quit', (event) => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
+  browserAgentSessions?.closeAll()
+  harnessclawClient.setBrowserAgentSessionManager(null)
   harnessclawClient.disconnect()
   stopHarnessclawEngine()
   closeDb()
