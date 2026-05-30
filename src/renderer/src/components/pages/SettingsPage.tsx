@@ -2838,6 +2838,7 @@ function ModelSection({
         disabled: false,
       }
       if (typeof maxTokens === 'number' && maxTokens > 0) payload.max_tokens = maxTokens
+      // POST has no "clear" state — omit empty to avoid sending group: "".
       if (group !== undefined && group !== '') payload.group = group
       const res = await window.agentApi.createEndpoint(key, payload)
       let endpointReady = res.ok
@@ -2853,9 +2854,12 @@ function ModelSection({
         if (list.ok && list.data.endpoints.some((e) => e.name === modelId)) {
           endpointReady = true
           // Endpoint already on engine — make sure it's not paused.
-          // The user clicked enable, so reset `disabled=false`.
+          // The user clicked enable, so reset `disabled=false`. Forward
+          // group too — this is still an enable path, so empty means
+          // "no group requested" (not a 3-state clear).
           const patchRes = await window.agentApi.patchEndpoint(key, modelId, {
             disabled: false,
+            ...(group !== undefined && group !== '' ? { group } : {}),
           })
           if (!patchRes.ok && patchRes.status !== 404 && patchRes.status !== 0) {
             reportHotReloadError(
@@ -3698,6 +3702,7 @@ function ModelSection({
         id,
         undefined,
         tags,
+        // omit empty — POST has no clear semantics.
         previousEntry?.group?.trim() || undefined,
       )
     } else {
