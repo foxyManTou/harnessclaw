@@ -2657,44 +2657,49 @@ function ModelSection({
       const res = await window.agentApi.listProviders()
       if (!res.ok) return // engine unreachable — silent skip
       const enginePayload = Array.isArray(res.data?.providers) ? res.data.providers : []
+
+      // Compute reconciled state + backfill plan purely against the
+      // current `providers` closure value. Doing this OUTSIDE the
+      // setProviders updater avoids React 18 Strict Mode dev's
+      // double-invoke trap (which would push backfill entries twice
+      // and fire 2× PATCHes). Safe because `loading === false` means
+      // the initial-load setProviders has already committed.
+      const next = { ...providers }
       const backfillPlan: Array<{ provider: ManagedProviderKey; endpoint: string; group: string }> = []
-      setProviders((prev) => {
-        const next = { ...prev }
-        let mutated = false
-        for (const ep of enginePayload) {
-          const pname = ep.name as ManagedProviderKey
-          if (!isManagedProviderKey(pname)) continue
-          const slot = next[pname]
-          if (!slot) continue
-          let slotMutated = false
-          const updatedModels = slot.models.map((m) => {
-            const match = ep.endpoints.find((e: { name: string }) => e.name === m.id)
-            if (!match) return m
-            const engineGroup = ((match as { group?: string }).group ?? '').trim()
-            const localGroup = m.group?.trim() ?? ''
-            if (engineGroup) {
-              // Engine authoritative — overwrite when different.
-              if (engineGroup === localGroup) return m
-              slotMutated = true
-              return { ...m, group: engineGroup }
-            }
-            // Engine empty + local non-empty → keep local, schedule backfill PATCH.
-            if (localGroup) {
-              backfillPlan.push({
-                provider: pname,
-                endpoint: match.name,
-                group: localGroup,
-              })
-            }
-            return m
-          })
-          if (slotMutated) {
-            next[pname] = { ...slot, models: updatedModels }
-            mutated = true
+      let mutated = false
+      for (const ep of enginePayload) {
+        const pname = ep.name as ManagedProviderKey
+        if (!isManagedProviderKey(pname)) continue
+        const slot = next[pname]
+        if (!slot) continue
+        let slotMutated = false
+        const updatedModels = slot.models.map((m) => {
+          const match = ep.endpoints.find((e) => e.name === m.id)
+          if (!match) return m
+          const engineGroup = (match.group ?? '').trim()
+          const localGroup = m.group?.trim() ?? ''
+          if (engineGroup) {
+            // Engine authoritative — overwrite when different.
+            if (engineGroup === localGroup) return m
+            slotMutated = true
+            return { ...m, group: engineGroup }
           }
+          // Engine empty + local non-empty → keep local, schedule backfill PATCH.
+          if (localGroup) {
+            backfillPlan.push({
+              provider: pname,
+              endpoint: match.name,
+              group: localGroup,
+            })
+          }
+          return m
+        })
+        if (slotMutated) {
+          next[pname] = { ...slot, models: updatedModels }
+          mutated = true
         }
-        return mutated ? next : prev
-      })
+      }
+      if (mutated) setProviders(next)
       // Fire-and-forget backfill; ignore individual failures so one bad
       // endpoint doesn't block the rest. Failures (e.g. 404) just mean
       // the field stays unsynced; the next manual edit will pick it up.
@@ -2702,7 +2707,7 @@ function ModelSection({
         void window.agentApi.patchEndpoint(item.provider, item.endpoint, { group: item.group })
       }
     })()
-  }, [loading])
+  }, [loading, providers])
 
   // Persist only the renderer-side UI state (appConfig). The engine YAML
   // is owned by the Providers Management API — every mutation goes
