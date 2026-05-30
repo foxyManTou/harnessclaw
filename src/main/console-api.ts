@@ -265,6 +265,10 @@ export interface ProviderEndpointInfo {
   // {vision, pdf, audio, video, reasoning, tools, search}; empty / absent
   // means "inherit manifest baseline".
   model_type?: string[]
+  // Engine 2026-05-30+: optional display-only tag persisted on the
+  // endpoint. Empty/absent = ungrouped (renderer falls back to
+  // getModelGroup(id) heuristic).
+  group?: string
 }
 
 export interface ProviderInfo {
@@ -364,6 +368,8 @@ export interface EndpointCreatePayload {
   // Optional: create the endpoint already paused. Defaults to false on
   // the engine side. See engine docs 2026-05-14 entry.
   disabled?: boolean
+  // Engine 2026-05-30+: optional display-only tag. Free text.
+  group?: string
 }
 
 // PATCH /providers/{p}/endpoints/{e} — update endpoint fields.
@@ -387,6 +393,9 @@ export interface EndpointPatch {
   // vision/pdf/audio/video/reasoning/tools/search. Unknown tokens →
   // 400 invalid_model_type.
   model_type?: string[]
+  // Engine 2026-05-30+: free-text display tag. Sending `""` explicitly
+  // clears it (yaml key removed); omitting leaves it unchanged.
+  group?: string
 }
 
 export type ProvidersResult<T> =
