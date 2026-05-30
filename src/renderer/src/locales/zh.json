@@ -1505,6 +1505,9 @@
       "opsDetail": "偏稳定协作和批量处理，保持简洁默认值。"
     },
     "modelIdHint": "请填写所选服务商支持的模型 ID，例如 gpt-4o-mini 或 claude-sonnet-4。",
+    "modelGroupLabel": "分组名（可选）",
+    "modelGroupHint": "可选展示分组，仅影响客户端模型列表上的分组渲染；引擎不感知。留空则按系列自动推断。",
+    "modelGroupPlaceholder": "例如 GPT-5",
     "prompts": {
       "categories": {
         "dev": "研发",
