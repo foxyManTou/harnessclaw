@@ -2637,6 +2637,73 @@ function ModelSection({
     })()
   }, [])
 
+  // After the initial local-yaml load completes, reconcile each
+  // ProviderModelEntry.group with the engine's authoritative value
+  // (engine = source of truth per spec 2026-05-30). When the engine
+  // has no group but the renderer does, we keep the renderer value
+  // AND backfill it via a PATCH so the engine becomes consistent on
+  // the next round-trip. Engine unreachable → silent skip; user can
+  // still operate offline.
+  //
+  // Single-shot: runs once after `loading` flips to false. Doing this
+  // here (vs inside the initial-load effect) keeps the initial-load
+  // code synchronous in its UI commit and avoids racing the
+  // setProviders update.
+  const reconciledGroupsRef = useRef(false)
+  useEffect(() => {
+    if (loading || reconciledGroupsRef.current) return
+    reconciledGroupsRef.current = true
+    void (async () => {
+      const res = await window.agentApi.listProviders()
+      if (!res.ok) return // engine unreachable — silent skip
+      const enginePayload = Array.isArray(res.data?.providers) ? res.data.providers : []
+      const backfillPlan: Array<{ provider: ManagedProviderKey; endpoint: string; group: string }> = []
+      setProviders((prev) => {
+        const next = { ...prev }
+        let mutated = false
+        for (const ep of enginePayload) {
+          const pname = ep.name as ManagedProviderKey
+          if (!isManagedProviderKey(pname)) continue
+          const slot = next[pname]
+          if (!slot) continue
+          let slotMutated = false
+          const updatedModels = slot.models.map((m) => {
+            const match = ep.endpoints.find((e: { name: string }) => e.name === m.id)
+            if (!match) return m
+            const engineGroup = ((match as { group?: string }).group ?? '').trim()
+            const localGroup = m.group?.trim() ?? ''
+            if (engineGroup) {
+              // Engine authoritative — overwrite when different.
+              if (engineGroup === localGroup) return m
+              slotMutated = true
+              return { ...m, group: engineGroup }
+            }
+            // Engine empty + local non-empty → keep local, schedule backfill PATCH.
+            if (localGroup) {
+              backfillPlan.push({
+                provider: pname,
+                endpoint: match.name,
+                group: localGroup,
+              })
+            }
+            return m
+          })
+          if (slotMutated) {
+            next[pname] = { ...slot, models: updatedModels }
+            mutated = true
+          }
+        }
+        return mutated ? next : prev
+      })
+      // Fire-and-forget backfill; ignore individual failures so one bad
+      // endpoint doesn't block the rest. Failures (e.g. 404) just mean
+      // the field stays unsynced; the next manual edit will pick it up.
+      for (const item of backfillPlan) {
+        void window.agentApi.patchEndpoint(item.provider, item.endpoint, { group: item.group })
+      }
+    })()
+  }, [loading])
+
   // Persist only the renderer-side UI state (appConfig). The engine YAML
   // is owned by the Providers Management API — every mutation goes
   // through the HTTP endpoints (PATCH /providers, POST/PATCH/DELETE
