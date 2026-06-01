@@ -143,6 +143,32 @@ interface HarnessclawAPI {
   onEvent: (callback: (event: Record<string, unknown>) => void) => () => void
 }
 
+interface BrowserAgentTabInfo {
+  tab_id: string
+  title: string
+  url: string
+  cdp_endpoint: string
+  active: boolean
+}
+
+interface BrowserAgentSessionInfo {
+  session_id: string
+  window_id: string
+  cdp_endpoint: string
+  partition: string
+  visible: boolean
+  last_used_turn_id?: string
+  active_tab?: BrowserAgentTabInfo
+  tabs?: BrowserAgentTabInfo[]
+  closed?: boolean
+}
+
+interface BrowserAgentAPI {
+  listSessions: () => Promise<{ ok: boolean; sessions?: BrowserAgentSessionInfo[]; error?: string }>
+  setVisibility: (sessionId: string, visible: boolean) => Promise<{ ok: boolean; session?: BrowserAgentSessionInfo; error?: string }>
+  onSessionChanged: (callback: (session: BrowserAgentSessionInfo) => void) => () => void
+}
+
 interface SkillInfo {
   id: string
   name: string
@@ -731,6 +757,7 @@ declare global {
     appConfig: ConfigAPI
     appRuntime: AppRuntimeAPI
     harnessclaw: HarnessclawAPI
+    browserAgent: BrowserAgentAPI
     skills: SkillsAPI
     db: DbAPI
     files: FilesAPI

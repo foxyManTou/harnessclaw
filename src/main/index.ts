@@ -1139,6 +1139,14 @@ let launcherWindow: BrowserWindow | null = null
 let mainWindowRef: BrowserWindow | null = null
 let browserAgentSessions: BrowserAgentSessionManager | null = null
 
+function broadcastBrowserAgentSessionChanged(session: Record<string, unknown>): void {
+  BrowserWindow.getAllWindows().forEach((win) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('browser-agent:session-changed', session)
+    }
+  })
+}
+
 const LAUNCHER_WIDTH = 710
 const LAUNCHER_HEIGHT = 90
 // Distance from the top edge of the display (NOT the work area, so
@@ -1430,10 +1438,23 @@ app.whenReady().then(() => {
   browserAgentSessions = new BrowserAgentSessionManager({
     createWindow: (options) => new BrowserWindow(options as BrowserWindowConstructorOptions),
     resolveCDPEndpoint: createRemoteDebuggingTargetResolver(browserAgentCDPPort),
+    onSessionChanged: (session) => broadcastBrowserAgentSessionChanged(session as unknown as Record<string, unknown>),
   })
   harnessclawClient.setBrowserAgentSessionManager(browserAgentSessions)
   writeAppLog('info', 'browser-agent.session', 'Browser Agent client session manager ready', {
     cdp_port: browserAgentCDPPort,
+  })
+
+  ipcMain.handle('browser-agent:listSessions', () => {
+    return { ok: true, sessions: browserAgentSessions?.listSessions() || [] }
+  })
+  ipcMain.handle('browser-agent:setVisibility', (_, input: Record<string, unknown>) => {
+    if (!browserAgentSessions) return { ok: false, error: 'Browser Agent session manager is not available' }
+    try {
+      return { ok: true, session: browserAgentSessions.setVisibility(input || {}) }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
   })
 
   app.on('browser-window-created', (_, window) => {

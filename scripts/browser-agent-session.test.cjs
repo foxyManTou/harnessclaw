@@ -14,6 +14,25 @@ class FakeWindow {
     this.visible = false
     this.focused = false
     this.destroyed = false
+    this.sent = []
+    this.bounds = { width: 1280, height: 900 }
+    this.listeners = new Map()
+    this.webContents = {
+      loadURL: async (url) => this.loadURL(url),
+      getURL: () => this.loaded[this.loaded.length - 1] || '',
+      getTitle: () => '',
+      canGoBack: () => false,
+      canGoForward: () => false,
+      goBack: () => {},
+      goForward: () => {},
+      reload: () => {},
+      focus: () => {},
+      on: () => this.webContents,
+      setWindowOpenHandler: () => {},
+      send: (channel, payload) => {
+        this.sent.push({ channel, payload })
+      },
+    }
   }
 
   async loadURL(url) {
@@ -24,20 +43,106 @@ class FakeWindow {
     this.visible = true
   }
 
+  hide() {
+    this.visible = false
+  }
+
+  isVisible() {
+    return this.visible
+  }
+
   focus() {
     this.focused = true
   }
 
+  getContentBounds() {
+    return this.bounds
+  }
+
+  on(event, listener) {
+    if (typeof listener === 'function') {
+      const listeners = this.listeners.get(event) || []
+      listeners.push(listener)
+      this.listeners.set(event, listeners)
+    }
+    return this
+  }
+
+  once(event, listener) {
+    const listeners = this.listeners.get(event) || []
+    const wrapped = (...args) => {
+      this.listeners.set(event, (this.listeners.get(event) || []).filter((item) => item !== wrapped))
+      listener(...args)
+    }
+    listeners.push(wrapped)
+    this.listeners.set(event, listeners)
+    return this
+  }
+
   destroy() {
     this.destroyed = true
+    this.emit('closed')
   }
 
   isDestroyed() {
     return this.destroyed
   }
+
+  emit(event, ...args) {
+    for (const listener of this.listeners.get(event) || []) {
+      listener(...args)
+    }
+  }
+
+  closeFromUser() {
+    this.emit('close')
+    this.destroyed = true
+    this.emit('closed')
+  }
 }
 
-test('creates isolated browser session without navigating away from the CDP marker', async () => {
+class FakeWebView {
+  constructor(id) {
+    this.id = id
+    this.bounds = null
+    this.listeners = new Map()
+    this.webContents = {
+      loaded: [],
+      title: '',
+      canGoBack: () => false,
+      canGoForward: () => false,
+      goBack: () => {},
+      goForward: () => {},
+      reload: () => {},
+      focus: () => {},
+      getURL: () => this.webContents.loaded[this.webContents.loaded.length - 1] || '',
+      getTitle: () => this.webContents.title,
+      loadURL: async (url) => {
+        this.webContents.loaded.push(url)
+        this.emit('did-navigate')
+      },
+      on: (event, listener) => {
+        const listeners = this.listeners.get(event) || []
+        listeners.push(listener)
+        this.listeners.set(event, listeners)
+        return this.webContents
+      },
+      setWindowOpenHandler: () => {},
+    }
+  }
+
+  setBounds(bounds) {
+    this.bounds = bounds
+  }
+
+  emit(event) {
+    for (const listener of this.listeners.get(event) || []) {
+      listener()
+    }
+  }
+}
+
+test('creates global persistent browser session in the BrowserWindow without loading a custom shell', async () => {
   let nextId = 41
   const windows = []
   const manager = new BrowserAgentSessionManager({
@@ -58,19 +163,23 @@ test('creates isolated browser session without navigating away from the CDP mark
   const result = await manager.createSession({
     start_url: 'https://example.com',
     visibility: 'visible',
+    partition: 'persist:custom-isolated',
     task_id: 'task A',
   })
 
   assert.equal(result.session_id, 'sess_test_1')
   assert.equal(result.window_id, '41')
   assert.equal(result.cdp_endpoint, 'ws://127.0.0.1:9222/devtools/page/page-41')
-  assert.equal(result.partition, 'persist:browser-agent-task-A')
+  assert.equal(result.active_tab.url, 'https://example.com')
+  assert.equal(result.tabs.length, 1)
+  assert.equal(result.partition, 'persist:browser-agent-default')
   assert.equal(windows[0].options.webPreferences.sandbox, true)
   assert.equal(windows[0].options.webPreferences.contextIsolation, true)
   assert.equal(windows[0].options.webPreferences.nodeIntegration, false)
-  assert.equal(windows[0].options.webPreferences.partition, 'persist:browser-agent-task-A')
+  assert.equal(windows[0].options.webPreferences.partition, 'persist:browser-agent-default')
   assert.equal(windows[0].loaded[0], 'about:blank#harnessclaw-browser-session=sess_test_1')
-  assert.equal(windows[0].loaded.length, 1)
+  assert.equal(windows[0].loaded[1], 'https://example.com')
+  assert.equal(windows[0].loaded.length, 2)
   assert.equal(windows[0].visible, true)
   assert.equal(windows[0].focused, true)
 })
@@ -95,6 +204,60 @@ test('closes tracked browser session', async () => {
   assert.equal(result.closed, true)
   assert.equal(win.destroyed, true)
   assert.equal(manager.getSession('sess_close'), undefined)
+})
+
+test('broadcasts closed session when the browser window is closed directly', async () => {
+  const win = new FakeWindow(12, {})
+  const changed = []
+  const manager = new BrowserAgentSessionManager({
+    createWindow() {
+      return win
+    },
+    async resolveCDPEndpoint() {
+      return 'ws://127.0.0.1:9222/devtools/page/page-12'
+    },
+    createSessionID() {
+      return 'sess_user_close'
+    },
+    onSessionChanged(session) {
+      changed.push(session)
+    },
+  })
+
+  await manager.createSession({})
+  win.closeFromUser()
+
+  assert.equal(manager.getSession('sess_user_close'), undefined)
+  const closed = changed.find((session) => session.session_id === 'sess_user_close' && session.closed)
+  assert.equal(closed?.visible, false)
+  assert.equal(closed?.closed, true)
+})
+
+test('broadcasts closed session as soon as the browser window starts closing', async () => {
+  const win = new FakeWindow(13, {})
+  const changed = []
+  const manager = new BrowserAgentSessionManager({
+    createWindow() {
+      return win
+    },
+    async resolveCDPEndpoint() {
+      return 'ws://127.0.0.1:9222/devtools/page/page-13'
+    },
+    createSessionID() {
+      return 'sess_close_event'
+    },
+    onSessionChanged(session) {
+      changed.push(session)
+    },
+  })
+
+  await manager.createSession({})
+  win.emit('close')
+
+  assert.equal(manager.getSession('sess_close_event'), undefined)
+  const closed = changed.find((session) => session.session_id === 'sess_close_event' && session.closed)
+  assert.equal(closed?.visible, false)
+  assert.equal(closed?.closed, true)
 })
 
 test('defaults new browser session to visible and rejects non-http start URL', async () => {
@@ -144,6 +307,95 @@ test('shows window for human takeover', async () => {
   assert.equal(result.status, 'shown')
   assert.equal(win.visible, true)
   assert.equal(win.focused, true)
+})
+
+test('toggles browser session visibility without destroying the window', async () => {
+  const win = new FakeWindow(11, {})
+  const manager = new BrowserAgentSessionManager({
+    createWindow() {
+      return win
+    },
+    async resolveCDPEndpoint() {
+      return 'ws://127.0.0.1:9222/devtools/page/page-11'
+    },
+    createSessionID() {
+      return 'sess_toggle'
+    },
+  })
+
+  await manager.createSession({ visibility: 'hidden' })
+  assert.equal(win.visible, false)
+
+  const shown = manager.setVisibility({ session_id: 'sess_toggle', visible: true })
+  assert.equal(shown.visible, true)
+  assert.equal(win.visible, true)
+  assert.equal(win.focused, true)
+
+  const hidden = manager.setVisibility({ session_id: 'sess_toggle', visible: false })
+  assert.equal(hidden.visible, false)
+  assert.equal(win.visible, false)
+  assert.equal(win.destroyed, false)
+})
+
+test('hides only browser sessions used by the completed turn', async () => {
+  let nextId = 20
+  const windows = []
+  const manager = new BrowserAgentSessionManager({
+    createWindow(options) {
+      const win = new FakeWindow(nextId++, options)
+      windows.push(win)
+      return win
+    },
+    async resolveCDPEndpoint(markerURL) {
+      return `ws://127.0.0.1:9222/devtools/page/${encodeURIComponent(markerURL)}`
+    },
+    createSessionID() {
+      return `sess_turn_${nextId}`
+    },
+  })
+
+  const first = await manager.createSession({ visibility: 'visible', last_used_turn_id: 'turn-a' })
+  const second = await manager.createSession({ visibility: 'visible', last_used_turn_id: 'turn-b' })
+
+  manager.hideSessionsForTurn('turn-a')
+
+  assert.equal(manager.getSession(first.session_id).visible, false)
+  assert.equal(manager.getSession(second.session_id).visible, true)
+  assert.equal(windows[0].destroyed, false)
+  assert.equal(windows[1].destroyed, false)
+})
+
+test('ignores the old shell web view path and exposes a single active CDP tab', async () => {
+  let nextWindowId = 31
+  let createWebViewCalled = false
+  const manager = new BrowserAgentSessionManager({
+    createWindow(options) {
+      return new FakeWindow(nextWindowId++, options)
+    },
+    createWebView() {
+      createWebViewCalled = true
+      return new FakeWebView(1)
+    },
+    async resolveCDPEndpoint(markerURL) {
+      assert.equal(markerURL, 'about:blank#harnessclaw-browser-session=sess_tabs')
+      return 'ws://127.0.0.1:9222/devtools/page/sess_tabs'
+    },
+    createSessionID() {
+      return 'sess_tabs'
+    },
+  })
+
+  const created = await manager.createSession({ visibility: 'visible', start_url: 'https://example.com' })
+  assert.equal(createWebViewCalled, false)
+  assert.equal(created.tabs.length, 1)
+  assert.equal(created.active_tab.tab_id, created.tabs[0].tab_id)
+  assert.equal(created.active_tab.cdp_endpoint, created.cdp_endpoint)
+  assert.equal(created.active_tab.url, 'https://example.com')
+  assert.equal(created.active_tab.title, 'example.com')
+
+  const navigated = await manager.navigate({ session_id: 'sess_tabs', url: 'https://openai.com' })
+  assert.equal(navigated.tabs.length, 1)
+  assert.equal(navigated.active_tab.url, 'https://openai.com')
 })
 
 test('remote debugging resolver selects target by marker URL', async () => {

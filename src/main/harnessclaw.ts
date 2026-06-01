@@ -83,6 +83,7 @@ interface CardState {
   parentCardId?: string
   cardKind: string
   agentId?: string
+  traceId?: string
   payload: Record<string, unknown>
   hint?: Record<string, unknown>
   channels: Map<string, Map<number, string>>
@@ -127,6 +128,13 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+function withBrowserTurnID(input: Record<string, unknown>, turnId?: string): Record<string, unknown> {
+  if (!turnId || typeof input.last_used_turn_id === 'string' || typeof input.turn_id === 'string') {
+    return input
+  }
+  return { ...input, last_used_turn_id: turnId }
 }
 
 function asPositiveNumber(value: unknown, fallback: number): number {
@@ -1142,6 +1150,7 @@ export class HarnessclawClient extends EventEmitter {
       parentCardId: args.parentCardId,
       cardKind: args.cardKind,
       agentId: args.agentId,
+      traceId: args.traceId,
       payload: { ...args.payload },
       hint: args.hint,
       channels: new Map(),
@@ -1834,6 +1843,7 @@ export class HarnessclawClient extends EventEmitter {
           })
         }
 
+        this.browserAgentSessions?.hideSessionsForTurn(args.traceId)
         if (status === 'cancelled' || status === 'aborted') {
           this.emitCompatEvent({
             type: 'stopped',
@@ -2088,6 +2098,9 @@ export class HarnessclawClient extends EventEmitter {
           artifacts: aggregated,
           error: errorInfo,
         })
+        if (agentName === 'browser-agent' || agentName === 'Browser Agent') {
+          this.browserAgentSessions?.hideSessionsForTurn(args.traceId)
+        }
         return
       }
 
@@ -2872,13 +2885,16 @@ export class HarnessclawClient extends EventEmitter {
           result = await this.runWebFetchTool(input, Math.min(cfg.webFetchTimeoutMs, cfg.toolTimeoutMs))
           break
         case 'browser_session_create':
-          result = await this.runBrowserSessionCreateTool(input)
+          result = await this.runBrowserSessionCreateTool(input, card.traceId)
           break
         case 'browser_session_close':
           result = await this.runBrowserSessionCloseTool(input)
           break
+        case 'browser_session_state':
+          result = await this.runBrowserSessionStateTool(input, card.traceId)
+          break
         case 'browser_ask_human':
-          result = await this.runBrowserAskHumanTool(input, sessionId, toolUseId)
+          result = await this.runBrowserAskHumanTool(input, sessionId, toolUseId, card.traceId)
           break
         default:
           result = {
@@ -2903,12 +2919,28 @@ export class HarnessclawClient extends EventEmitter {
     this.sendToolResult(sessionId, toolUseId, result)
   }
 
-  private async runBrowserSessionCreateTool(input: Record<string, unknown>): Promise<ToolResultPayload> {
+  private async runBrowserSessionCreateTool(input: Record<string, unknown>, turnId?: string): Promise<ToolResultPayload> {
     if (!this.browserAgentSessions) {
       return this.browserAgentUnavailable()
     }
     try {
-      const session = await this.browserAgentSessions.createSession(input)
+      const session = await this.browserAgentSessions.createSession(withBrowserTurnID(input, turnId))
+      return {
+        status: 'success',
+        output: JSON.stringify(session),
+        metadata: { ...session },
+      }
+    } catch (err) {
+      return this.browserAgentFailure(err)
+    }
+  }
+
+  private async runBrowserSessionStateTool(input: Record<string, unknown>, turnId?: string): Promise<ToolResultPayload> {
+    if (!this.browserAgentSessions) {
+      return this.browserAgentUnavailable()
+    }
+    try {
+      const session = this.browserAgentSessions.getSessionState(withBrowserTurnID(input, turnId))
       return {
         status: 'success',
         output: JSON.stringify(session),
@@ -2939,12 +2971,16 @@ export class HarnessclawClient extends EventEmitter {
     input: Record<string, unknown>,
     sessionId: string,
     toolUseId: string,
+    turnId?: string,
   ): Promise<ToolResultPayload> {
     if (!this.browserAgentSessions) {
       return this.browserAgentUnavailable()
     }
     try {
-      const takeover = this.browserAgentSessions.askHuman(input)
+      const takeover = this.browserAgentSessions.askHuman({
+        ...withBrowserTurnID(input, turnId),
+        request_id: toolUseId,
+      })
       const question = [
         takeover.message,
         '',
@@ -2990,6 +3026,7 @@ export class HarnessclawClient extends EventEmitter {
       return
     }
     this.pendingBrowserAskHuman.delete(toolUseId)
+    this.browserAgentSessions?.finishHumanTakeover(toolUseId, status)
 
     const metadata = {
       session_id: pending.browserSessionId,
