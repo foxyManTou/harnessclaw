@@ -572,6 +572,24 @@ function ProviderStrategyRow({
   const getPrimarySpotlightTargets = useCallback((): HTMLElement[] => {
     return primarySelectRef.current ? [primarySelectRef.current] : []
   }, [])
+  // Renderer-side enabled flags live in appConfig.modelProviders.<key>.enabled.
+  // We treat that as a hard override on top of the engine's
+  // `provider.disabled`: if the user turned the ON badge OFF in the
+  // Models tab, the provider must NEVER appear in the primary picker
+  // even if the engine's PATCH /providers/{p} {disabled:true} hasn't
+  // been confirmed yet (e.g. the PATCH failed with 404 because the
+  // provider was never created engine-side, or returned an older
+  // payload without the `disabled` field).
+  const { config: appConfigData } = useAppConfig()
+  const rendererDisabledNames = useMemo(() => {
+    const out = new Set<string>()
+    const modelProviders = asRecord((appConfigData ?? {}).modelProviders)
+    for (const [name, raw] of Object.entries(modelProviders)) {
+      const rec = asRecord(raw)
+      if (rec.enabled === false) out.add(name)
+    }
+    return out
+  }, [appConfigData])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [chain, setChain] = useState<string[]>([])
   const [chainEntries, setChainEntries] = useState<ProviderChainEntry[]>([])
@@ -642,6 +660,13 @@ function ProviderStrategyRow({
   const allEndpoints = useMemo<ProviderEndpointRef[]>(() => {
     const out: ProviderEndpointRef[] = []
     for (const p of providers) {
+      // Effective disabled = engine flag OR renderer-side enabled=false.
+      // The latter catches the gap where the user turned OFF the
+      // provider in the Models tab but the engine response either
+      // hasn't refreshed yet or didn't include the `disabled` field at
+      // all (older engines / 404 on PATCH because the provider was
+      // never created server-side).
+      const effectiveDisabled = p.disabled === true || rendererDisabledNames.has(p.name)
       for (const e of p.endpoints) {
         out.push({
           ref: `${p.name}:${e.name}`,
@@ -649,12 +674,12 @@ function ProviderStrategyRow({
           endpoint: e.name,
           model: e.model,
           type: p.type,
-          providerDisabled: p.disabled === true,
+          providerDisabled: effectiveDisabled,
         })
       }
     }
     return out
-  }, [providers])
+  }, [providers, rendererDisabledNames])
 
   // Split the flat chain into primary (head) + fallback (tail). The
   // engine enforces `fallback_chain` entries must be distinct from
