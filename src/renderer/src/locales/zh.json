@@ -107,10 +107,12 @@
     },
     "capabilities": {
       "vision": "视觉",
+      "image_generation": "生图",
       "search": "联网",
       "reasoning": "推理",
       "tools": "工具",
       "visionHint": "模型可处理图片输入（截图、照片、PDF 等）",
+      "image_generationHint": "模型可通过图片接口生成或编辑图片",
       "searchHint": "模型可联网检索外部信息",
       "reasoningHint": "模型支持长链路推理（thinking / 深度思考）",
       "toolsHint": "模型支持工具调用（function calling / tool use）"
@@ -1099,6 +1101,7 @@
       },
       "capabilities": {
         "vision": "视觉",
+        "image_generation": "生图",
         "web": "联网",
         "reasoning": "推理",
         "tools": "工具"
@@ -1501,11 +1504,13 @@
       "openaiDetail": "接入 OpenAI 官方 API 或兼容其模型命名与网关配置的账户。",
       "anthropicDetail": "接入 Anthropic 官方 API，作为 Claude 系列模型的默认入口。",
       "xunfeiDetail": "接入科大讯飞 Spark，适合中文场景与国内开发者生态。",
+      "gptImageDetail": "OpenAI 图片生成模型。请在设置 > 模型配置中维护。",
       "googleDetail": "通过 gemini 协议接入 Google Generative Language，使用 Gemini 系列模型。",
       "deepseekDetail": "接入 DeepSeek 的 OpenAI 兼容 API，代码与推理性价比高。",
       "zhipuDetail": "通过 OpenAI 兼容网关接入智谱 GLM，支持 GLM-4 等系列。",
       "moonshotDetail": "通过 OpenAI 兼容 API 接入 Moonshot Kimi，适合长上下文对话。",
       "minimaxDetail": "通过 OpenAI 兼容 API 接入 MiniMax，支持 abab 系列模型。",
+      "doubaoDetail": "豆包 Seedream 图片生成模型。请在设置 > 模型配置中维护。",
       "customDetail": "自定义网关：自行设置 Base URL、Key 以及协议（OpenAI 或 Anthropic）。"
     },
     "protocolLabel": "协议",

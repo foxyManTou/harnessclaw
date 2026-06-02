@@ -172,10 +172,12 @@
     },
     "capabilities": {
       "vision": "Vision",
+      "image_generation": "Image Gen",
       "search": "Web",
       "reasoning": "Reasoning",
       "tools": "Tools",
       "visionHint": "Model accepts image inputs (screenshots, photos, PDFs).",
+      "image_generationHint": "Model can generate or edit images through image APIs.",
       "searchHint": "Model can search the web for external information.",
       "reasoningHint": "Model supports extended chain-of-thought / thinking mode.",
       "toolsHint": "Model supports tool use / function calling."
@@ -1089,6 +1091,7 @@
       },
       "capabilities": {
         "vision": "Vision",
+        "image_generation": "Image Gen",
         "web": "Web",
         "reasoning": "Reasoning",
         "tools": "Tools"
@@ -1491,11 +1494,13 @@
       "openaiDetail": "Connect to OpenAI official API or accounts compatible with its model naming and gateway configuration.",
       "anthropicDetail": "Connect to Anthropic official API as the default entry point for Claude series models.",
       "xunfeiDetail": "Connect to iFlytek Spark, suited for Chinese-language scenarios and the domestic developer ecosystem.",
+      "gptImageDetail": "OpenAI image generation models. Configure them in Settings > Models.",
       "googleDetail": "Connect to Google Generative Language for Gemini-series models via the gemini protocol.",
       "deepseekDetail": "Connect to DeepSeek's OpenAI-compatible API — great for code and reasoning at low cost.",
       "zhipuDetail": "Connect to Zhipu GLM via the OpenAI-compatible gateway; supports GLM-4 series models.",
       "moonshotDetail": "Connect to Moonshot Kimi via the OpenAI-compatible API for long-context conversations.",
       "minimaxDetail": "Connect to MiniMax via the OpenAI-compatible API; supports the abab series.",
+      "doubaoDetail": "Doubao Seedream image generation models. Configure them in Settings > Models.",
       "customDetail": "Bring your own gateway — set base URL, key and a protocol (OpenAI or Anthropic) yourself."
     },
     "protocolLabel": "Protocol",

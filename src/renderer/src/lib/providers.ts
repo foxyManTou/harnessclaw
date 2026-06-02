@@ -46,14 +46,17 @@ export type ManagedProviderKey =
   | 'xunfei'
   | 'anthropic'
   | 'openai'
+  | 'gpt-image'
   | 'google'
   | 'deepseek'
   | 'zhipu'
   | 'moonshot'
   | 'minimax'
+  | 'doubao'
   | 'custom'
 
 export type ProtocolProviderKey = 'anthropic' | 'openai'
+export type AgentProviderKey = Exclude<ManagedProviderKey, 'gpt-image' | 'doubao'>
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -61,23 +64,36 @@ export const MANAGED_PROVIDER_KEYS: ManagedProviderKey[] = [
   'xunfei',
   'anthropic',
   'openai',
+  'gpt-image',
   'google',
   'deepseek',
   'zhipu',
   'moonshot',
   'minimax',
+  'doubao',
   'custom',
 ]
+
+export const IMAGE_GENERATION_PROVIDER_KEYS: ReadonlyArray<Extract<ManagedProviderKey, 'gpt-image' | 'doubao'>> = [
+  'gpt-image',
+  'doubao',
+]
+
+export const AGENT_PROVIDER_KEYS: AgentProviderKey[] = MANAGED_PROVIDER_KEYS.filter(
+  (key): key is AgentProviderKey => !IMAGE_GENERATION_PROVIDER_KEYS.includes(key as 'gpt-image' | 'doubao')
+)
 
 export const PROVIDER_DISPLAY_NAMES: Record<ManagedProviderKey, string> = {
   xunfei: '科大讯飞 Spark',
   anthropic: 'Anthropic',
   openai: 'OpenAI',
+  'gpt-image': 'GPT Image',
   google: 'Google',
   deepseek: 'DeepSeek',
   zhipu: '智谱 GLM',
   moonshot: 'Kimi',
   minimax: 'MiniMax',
+  doubao: 'Doubao Seedream',
   custom: 'Custom',
 }
 
@@ -85,11 +101,13 @@ export const PROVIDER_DEFAULT_BASES: Record<ManagedProviderKey, string> = {
   xunfei: 'https://spark-api-open.xf-yun.com/agent',
   anthropic: 'https://api.anthropic.com',
   openai: 'https://api.openai.com',
+  'gpt-image': 'https://api.openai.com',
   google: 'https://generativelanguage.googleapis.com',
   deepseek: 'https://api.deepseek.com',
   zhipu: 'https://open.bigmodel.cn/api/paas/v4',
   moonshot: 'https://api.moonshot.cn',
   minimax: 'https://api.minimax.chat',
+  doubao: 'https://ark.cn-beijing.volces.com/api/v3',
   custom: '',
 }
 
@@ -98,9 +116,11 @@ export const PROVIDER_DEFAULT_BASES: Record<ManagedProviderKey, string> = {
 // openai / anthropic / gemini).
 //
 // OpenAI-compatible vendors (DeepSeek, Kimi=moonshot, GLM=zhipu, MiniMax,
-// 讯飞=xunfei) all use `openai` and only differ by `base_url`. Google goes
-// to `gemini` — NOT `google`. `custom` is resolved at call time from the
-// user-selected protocol (openai | anthropic).
+// 讯飞=xunfei, Doubao image generation) all use `openai` and only differ by
+// `base_url`. Google goes to `gemini` — NOT `google`. `gpt-image` also uses
+// OpenAI credentials but is kept as a separate settings bucket because it is
+// image-generation-only and must not become an Agent LLM provider. `custom` is
+// resolved at call time from the user-selected protocol (openai | anthropic).
 export const PROVIDER_ENGINE_TYPES: Record<
   Exclude<ManagedProviderKey, 'custom'>,
   'openai' | 'anthropic' | 'gemini'
@@ -108,11 +128,13 @@ export const PROVIDER_ENGINE_TYPES: Record<
   xunfei: 'openai',
   anthropic: 'anthropic',
   openai: 'openai',
+  'gpt-image': 'openai',
   google: 'gemini',
   deepseek: 'openai',
   zhipu: 'openai',
   moonshot: 'openai',
   minimax: 'openai',
+  doubao: 'openai',
 }
 
 export const ENGINE_TYPE_OPTIONS: ReadonlyArray<'openai' | 'anthropic' | 'gemini'> = [
@@ -131,6 +153,14 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 export function isManagedProviderKey(value: string): value is ManagedProviderKey {
   return MANAGED_PROVIDER_KEYS.includes(value as ManagedProviderKey)
+}
+
+export function isAgentProviderKey(value: ManagedProviderKey): value is AgentProviderKey {
+  return AGENT_PROVIDER_KEYS.includes(value as AgentProviderKey)
+}
+
+export function isImageGenerationProviderKey(value: ManagedProviderKey): boolean {
+  return IMAGE_GENERATION_PROVIDER_KEYS.includes(value as 'gpt-image' | 'doubao')
 }
 
 // Resolve the effective engine type for a provider:
