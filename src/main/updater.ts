@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog } from 'electron'
 import electronUpdater from 'electron-updater'
 import { request } from 'node:https'
+import { reportTelemetry } from './telemetry-helper'
 
 const { autoUpdater } = electronUpdater
 
@@ -157,6 +158,7 @@ async function checkForUpdates(window: BrowserWindow): Promise<{ ok: boolean; er
     return { ok: false, error: 'No active window' }
   }
   checkInFlight = true
+  reportTelemetry({ category: 'feature_usage', action: 'update_checked' })
   try {
     sendUpdateEvent(window, 'checking')
     await autoUpdater.checkForUpdates()

@@ -7,6 +7,7 @@ import { dirname, resolve } from 'node:path'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { readEngineConfig } from './config'
 import { sanitizeForLogging, writeAppLog } from './logging'
+import { reportTelemetry } from './telemetry-helper'
 
 interface HarnessclawConfig {
   enabled: boolean
@@ -692,6 +693,37 @@ export class HarnessclawClient extends EventEmitter {
     return { agentId: id, agentName: name, isSubagent }
   }
 
+  /**
+   * 解析当前 LLM provider / model,用于埋点。
+   *
+   * v2 wire 协议的 turn 卡片 payload 和 Metrics 都不带 provider 字段
+   * (Metrics 只有 model),所以从 engine 配置的 agent.primary
+   * (格式 "provider:endpoint") 推断 provider,并从 endpoints 映射出真实 model id。
+   * 失败时回退 'unknown'。
+   */
+  private resolveLlmInfo(): { provider: string; model: string } {
+    try {
+      const cfg = readEngineConfig({}) as Record<string, unknown>
+      const agent = (cfg.agent || {}) as Record<string, unknown>
+      const primary = typeof agent.primary === 'string' ? agent.primary : ''
+      if (!primary) return { provider: 'unknown', model: 'unknown' }
+      // primary canonical 分隔符 ':',兼容旧 '.' 格式(取第一个分隔符)
+      const sepIdx = primary.includes(':') ? primary.indexOf(':') : primary.indexOf('.')
+      const provider = sepIdx > 0 ? primary.slice(0, sepIdx) : primary
+      const endpoint = sepIdx > 0 ? primary.slice(sepIdx + 1) : ''
+      // 从 llm.providers.<provider>.endpoints.<endpoint>.model 取真实 model id
+      const llm = (cfg.llm || {}) as Record<string, unknown>
+      const providers = (llm.providers || {}) as Record<string, unknown>
+      const provEntry = (providers[provider] || {}) as Record<string, unknown>
+      const endpoints = (provEntry.endpoints || {}) as Record<string, unknown>
+      const epEntry = (endpoints[endpoint] || {}) as Record<string, unknown>
+      const model = typeof epEntry.model === 'string' && epEntry.model ? epEntry.model : (endpoint || 'unknown')
+      return { provider: provider || 'unknown', model }
+    } catch {
+      return { provider: 'unknown', model: 'unknown' }
+    }
+  }
+
   private handleMessage(msg: Record<string, unknown>): void {
     const type = typeof msg.type === 'string' ? msg.type : ''
     if (!type) return
@@ -1107,6 +1139,15 @@ export class HarnessclawClient extends EventEmitter {
 
     switch (args.cardKind) {
       case 'turn': {
+        const llmInfo = this.resolveLlmInfo()
+        reportTelemetry({
+          category: 'llm_call',
+          action: 'llm_request_start',
+          properties: {
+            provider: llmInfo.provider,
+            model: llmInfo.model,
+          },
+        })
         this.emitCompatEvent({
           type: 'turn_start',
           session_id: sessionId,
@@ -1350,6 +1391,14 @@ export class HarnessclawClient extends EventEmitter {
   ): void {
     if (card.toolEmitted) return
     card.toolEmitted = true
+
+    if (toolName) {
+      reportTelemetry({
+        category: 'tool_execution',
+        action: 'tool_call_start',
+        properties: { tool_name: toolName },
+      })
+    }
 
     const info = this.resolveAgentInfo(forest, card.agentId)
     if (info.isSubagent) {
@@ -1732,6 +1781,34 @@ export class HarnessclawClient extends EventEmitter {
       case 'turn': {
         const usage = metricsToUsage(args.metrics)
         const durationMs = args.metrics && typeof args.metrics.duration_ms === 'number' ? args.metrics.duration_ms : undefined
+
+        // provider 从 engine 配置推断(wire 协议 Metrics 不带 provider);
+        // model 优先用 Metrics.model(真实 model id),回退到配置推断值
+        const llmInfo = this.resolveLlmInfo()
+        const llmProvider = llmInfo.provider
+        const llmModel = args.metrics && typeof args.metrics.model === 'string' && args.metrics.model
+          ? args.metrics.model
+          : llmInfo.model
+        if (status === 'failed' || status === 'error') {
+          const errType = errorInfo && typeof errorInfo.type === 'string' ? errorInfo.type : 'unknown'
+          reportTelemetry({
+            category: 'llm_call',
+            action: 'llm_request_failure',
+            properties: { provider: llmProvider, model: llmModel, error_type: errType },
+          })
+        } else if (status !== 'cancelled' && status !== 'aborted') {
+          reportTelemetry({
+            category: 'llm_call',
+            action: 'llm_request_success',
+            properties: {
+              provider: llmProvider,
+              model: llmModel,
+              tokens: usage ? usage.total_tokens : 0,
+              ...(typeof durationMs === 'number' ? { duration_ms: durationMs } : {}),
+            },
+          })
+        }
+
         if (status === 'cancelled' || status === 'aborted') {
           this.emitCompatEvent({
             type: 'stopped',
@@ -1799,6 +1876,27 @@ export class HarnessclawClient extends EventEmitter {
         const output = typeof inner.output === 'string'
           ? inner.output
           : typeof args.payload.output === 'string' ? args.payload.output : ''
+
+        if (toolName) {
+          const toolDurationMs = args.metrics && typeof args.metrics.duration_ms === 'number' ? args.metrics.duration_ms : undefined
+          if (status === 'failed') {
+            const errType = errorInfo && typeof errorInfo.type === 'string' ? errorInfo.type : 'unknown'
+            reportTelemetry({
+              category: 'tool_execution',
+              action: 'tool_call_failure',
+              properties: { tool_name: toolName, error_type: errType },
+            })
+          } else if (status === 'completed' || status === 'ok') {
+            reportTelemetry({
+              category: 'tool_execution',
+              action: 'tool_call_success',
+              properties: {
+                tool_name: toolName,
+                ...(typeof toolDurationMs === 'number' ? { duration_ms: toolDurationMs } : {}),
+              },
+            })
+          }
+        }
 
         // v2 §6.5 / §12 — structured ErrorInfo. `error.type` now carries real
         // categories (invalid_input / permission_denied / tool_timeout /

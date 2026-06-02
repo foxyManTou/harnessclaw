@@ -47,6 +47,14 @@ import {
   writeUsageLog,
 } from './logging'
 import {
+  TelemetryConfigManager,
+  TelemetryReporter,
+  getOrCreateDeviceId,
+  generateClientSessionId,
+  type TelemetryEventInput,
+} from './telemetry'
+import { setSharedReporter } from './telemetry-helper'
+import {
   deleteInstalledSkill,
   installDiscoveredSkill,
   listDiscoveredSkills,
@@ -406,6 +414,10 @@ const HARNESSCLAW_LAUNCHED_FLAG = join(HARNESSCLAW_DIR, '.launched')
 const HARNESSCLAW_ENGINE_BIN = resolveBundledBinaryPath('harnessclaw-engine')
 let harnessclawEngineProcess: ChildProcess | null = null
 
+let telemetryReporter: TelemetryReporter | null = null
+let telemetryConfigManager: TelemetryConfigManager | null = null
+let appStartTimestamp = 0
+
 function resolveDevIconPath(): string | undefined {
   const candidates = [
     join(process.cwd(), 'resources', 'icon.png'),
@@ -741,6 +753,115 @@ function trackUsage(entry: UsageLogEntry): void {
     writeAppLog('error', 'usage', 'Failed to insert usage event', { entry, error: String(error) })
   }
   writeUsageLog({ ...entry, details, createdAt })
+}
+
+function initializeTelemetry(): void {
+  try {
+    ensureDir(HARNESSCLAW_DIR)
+    const deviceId = getOrCreateDeviceId(HARNESSCLAW_DIR)
+    const clientSessionId = generateClientSessionId()
+    telemetryConfigManager = new TelemetryConfigManager(HARNESSCLAW_DIR)
+    telemetryReporter = new TelemetryReporter(deviceId, clientSessionId, telemetryConfigManager)
+    setSharedReporter(telemetryReporter)
+    writeAppLog('info', 'telemetry', 'Telemetry initialized', {
+      device_id: deviceId,
+      client_session_id: clientSessionId,
+    })
+  } catch (err) {
+    writeAppLog('error', 'telemetry', 'Failed to initialize telemetry', { error: String(err) })
+  }
+}
+
+function reportTelemetryEvent(input: TelemetryEventInput): void {
+  if (!telemetryReporter) return
+  try {
+    telemetryReporter.report(input)
+  } catch (err) {
+    writeAppLog('error', 'telemetry', 'Failed to report event', {
+      category: input.category,
+      action: input.action,
+      error: String(err),
+    })
+  }
+}
+
+/**
+ * 比较 engine config 前后差异,上报 provider_enabled / model_added 埋点
+ *
+ * - provider_enabled: 某 provider 从 disabled=true (或不存在) 变为 disabled=false
+ * - model_added: 某 provider.endpoints 下新增了 endpoint
+ */
+function reportEngineConfigDiff(previous: unknown, next: unknown): void {
+  try {
+    const prevProviders = asRecord(asRecord(asRecord(previous).llm).providers)
+    const nextProviders = asRecord(asRecord(asRecord(next).llm).providers)
+
+    for (const [key, value] of Object.entries(nextProviders)) {
+      const nextProvider = asRecord(value)
+      const prevProvider = asRecord(prevProviders[key])
+      const nextDisabled = nextProvider.disabled === true
+      const prevDisabled = prevProvider.disabled === true || prevProviders[key] === undefined
+
+      // provider_enabled: 之前禁用/不存在,现在启用
+      if (prevDisabled && !nextDisabled) {
+        reportTelemetryEvent({
+          category: 'feature_usage',
+          action: 'provider_enabled',
+          properties: { provider_key: key },
+        })
+      }
+
+      // model_added: 比较 endpoints
+      const prevEndpoints = asRecord(prevProvider.endpoints)
+      const nextEndpoints = asRecord(nextProvider.endpoints)
+      for (const endpointName of Object.keys(nextEndpoints)) {
+        if (!(endpointName in prevEndpoints)) {
+          reportTelemetryEvent({
+            category: 'feature_usage',
+            action: 'model_added',
+            properties: { provider_key: key },
+          })
+        }
+      }
+    }
+  } catch (err) {
+    writeAppLog('warn', 'telemetry', 'Failed to diff engine config', { error: String(err) })
+  }
+}
+
+/**
+ * 比较 app config 前后差异,上报 settings_changed 埋点 (只采 key,不采 value)
+ */
+function reportAppConfigDiff(previous: unknown, next: unknown): void {
+  try {
+    const changedKeys = collectChangedKeys(previous, next, '')
+    for (const key of changedKeys) {
+      reportTelemetryEvent({
+        category: 'feature_usage',
+        action: 'settings_changed',
+        properties: { setting_key: key },
+      })
+    }
+  } catch (err) {
+    writeAppLog('warn', 'telemetry', 'Failed to diff app config', { error: String(err) })
+  }
+}
+
+function collectChangedKeys(prev: unknown, next: unknown, prefix: string, acc: string[] = []): string[] {
+  const prevObj = asRecord(prev)
+  const nextObj = asRecord(next)
+  const keys = new Set([...Object.keys(prevObj), ...Object.keys(nextObj)])
+  for (const key of keys) {
+    const fullKey = prefix ? `${prefix}.${key}` : key
+    const prevVal = prevObj[key]
+    const nextVal = nextObj[key]
+    if (typeof prevVal === 'object' && prevVal !== null && typeof nextVal === 'object' && nextVal !== null) {
+      collectChangedKeys(prevVal, nextVal, fullKey, acc)
+    } else if (JSON.stringify(prevVal) !== JSON.stringify(nextVal)) {
+      acc.push(fullKey)
+    }
+  }
+  return acc
 }
 
 function buildExportPayload(type: string): { name: string; content: string } {
@@ -1255,6 +1376,10 @@ app.whenReady().then(() => {
 
   electronApp.setAppUserModelId('com.iflytek.harnessclaw')
   initializeLogging()
+  appStartTimestamp = Date.now()
+  // is_first_launch 必须在 initializeTelemetry() 之前判断 —— 后者会创建 device_id 文件
+  const isFirstLaunchForTelemetry = !existsSync(join(HARNESSCLAW_DIR, 'device_id'))
+  initializeTelemetry()
   const appConfigInit = ensureHarnessclawConfigInitialized()
   const engineConfigInit = ensureEngineConfigInitialized()
   if (!appConfigInit.ok) {
@@ -1270,6 +1395,15 @@ app.whenReady().then(() => {
   }
   setLogThreshold(normalizeLogThreshold(asRecord(readHarnessclawConfig({})).logging?.level))
   writeAppLog('info', 'app.lifecycle', 'Application ready')
+
+  reportTelemetryEvent({
+    category: 'app_lifecycle',
+    action: 'app_start',
+    properties: {
+      is_first_launch: isFirstLaunchForTelemetry,
+      startup_duration_ms: Date.now() - appStartTimestamp,
+    },
+  })
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
@@ -1315,6 +1449,9 @@ app.whenReady().then(() => {
     // harnessclaw-engine/docs/api/providers-management-api.md.
     const previous = readEngineConfig({ providers: {} })
     const result = saveEngineConfig(data)
+    if (result.ok) {
+      reportEngineConfigDiff(previous, data)
+    }
     if (result.ok && existsSync(HARNESSCLAW_LAUNCHED_FLAG)) {
       const next = asRecord(data)
       if (isProvidersOnlyConfigChange(previous, next)) {
@@ -1343,8 +1480,10 @@ app.whenReady().then(() => {
 
   ipcMain.handle('app-config:save', (_, data: unknown) => {
     ensureDir(HARNESSCLAW_DIR)
+    const previousAppConfig = readHarnessclawConfig({})
     const result = saveHarnessclawConfig(data)
     if (result.ok) {
+      reportAppConfigDiff(previousAppConfig, data)
       setLogThreshold(normalizeLogThreshold(asRecord(asRecord(data).logging).level))
       broadcastAppRuntimeStatus()
       // Re-apply launcher hotkey / enabled state so changes from the
@@ -1417,6 +1556,34 @@ app.whenReady().then(() => {
 
   ipcMain.handle('app-runtime:trackUsage', (_, entry: UsageLogEntry) => {
     trackUsage(entry)
+    return { ok: true }
+  })
+
+  ipcMain.handle('telemetry:track', (_, input: TelemetryEventInput) => {
+    reportTelemetryEvent(input)
+    return { ok: true }
+  })
+
+  ipcMain.handle('telemetry:getConfig', () => {
+    if (!telemetryConfigManager) {
+      return { ok: false, error: 'telemetry not initialized' }
+    }
+    return { ok: true, config: telemetryConfigManager.getConfig() }
+  })
+
+  ipcMain.handle('telemetry:setEnabled', (_, enabled: boolean) => {
+    if (!telemetryConfigManager) {
+      return { ok: false, error: 'telemetry not initialized' }
+    }
+    telemetryConfigManager.setEnabled(!!enabled)
+    return { ok: true, config: telemetryConfigManager.getConfig() }
+  })
+
+  ipcMain.handle('telemetry:setConsented', (_, consented: boolean) => {
+    if (!telemetryConfigManager) {
+      return { ok: false, error: 'telemetry not initialized' }
+    }
+    telemetryConfigManager.setConsented(consented)
     return { ok: true }
   })
 
@@ -3069,6 +3236,26 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+let appExitReported = false
+app.on('before-quit', (event) => {
+  if (appExitReported || !telemetryReporter) return
+  appExitReported = true
+  event.preventDefault()
+  const uptimeSeconds = Math.floor((Date.now() - appStartTimestamp) / 1000)
+  void telemetryReporter
+    .reportSync(
+      {
+        category: 'app_lifecycle',
+        action: 'app_exit',
+        properties: { uptime_seconds: uptimeSeconds },
+      },
+      1000,
+    )
+    .finally(() => {
+      app.quit()
+    })
 })
 
 app.on('will-quit', () => {

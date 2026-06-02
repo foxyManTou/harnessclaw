@@ -682,6 +682,8 @@
     },
     "actions": {
       "copyMessage": "Copy Message",
+      "thumbsUp": "Thumbs up",
+      "thumbsDown": "Thumbs down",
       "copy": "Copy",
       "export": "Export",
       "closePreview": "Close preview",
@@ -990,6 +992,11 @@
         "info": "Info",
         "debug": "Debug",
         "trace": "Trace"
+      },
+      "telemetry": {
+        "title": "Usage Statistics",
+        "enabled": "Send anonymous usage data",
+        "enabledDesc": "Help us improve the product. Only feature-usage counts and an anonymous device ID are collected; no conversation content, files, or personal information. You can turn this off at any time."
       }
     },
     "models": {

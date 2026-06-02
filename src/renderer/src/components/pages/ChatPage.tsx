@@ -7,12 +7,13 @@ import {
   Loader2, Wrench, Brain, AlertCircle, RefreshCw, ChevronDown, ChevronUp,
   FileText, File, Folder, X, ArrowDown, AtSign, GitBranch, ListTodo, Users, MessagesSquare, ChevronLeft, ChevronRight, Search, HelpCircle, FolderOpen, Download,
   Globe, ExternalLink, Pencil, FolderPlus, FolderMinus,
-  PenLine, Clock, ShieldQuestion,
+  PenLine, Clock, ShieldQuestion, ThumbsUp, ThumbsDown
 } from 'lucide-react'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { visit, SKIP } from 'unist-util-visit'
 import { cn, localFileUrl } from '@/lib/utils'
+import { trackSessionCreate, trackMessageSent } from '@/lib/telemetry'
 import {
   AttachmentPreviewPanel,
   type LocalAttachmentItem,
@@ -3831,6 +3832,7 @@ export function ChatPage() {
 
   const ensureLocalSession = useCallback((sid?: string, context: ProjectContext | null = routeProjectContext) => {
     const resolvedSessionId = sid || createPersistentSessionId()
+    const isNew = !sid
     setSessionMap((prev) => ({
       ...prev,
       [resolvedSessionId]: prev[resolvedSessionId] || createEmptySessionState(),
@@ -3848,6 +3850,9 @@ export function ChatPage() {
       })
     } else {
       void window.db.createSession(resolvedSessionId)
+    }
+    if (isNew) {
+      trackSessionCreate()
     }
     return resolvedSessionId
   }, [navigate, routeProjectContext])
@@ -3960,6 +3965,11 @@ export function ChatPage() {
           }
         : undefined
     void window.harnessclaw.send(payload, sid, sendOptions)
+    trackMessageSent({
+      message_length: trimmedText.length,
+      has_attachments: initialFiles.length > 0,
+      coordinator_mode: coordinatorMode,
+    })
   }, [ensureLocalSession, updateSession, modelCaps])
 
   const respondPermission = useCallback(async (requestId: string, approved: boolean, scope: 'once' | 'session') => {
@@ -6456,6 +6466,10 @@ export function ChatPage() {
     // Await the IPC so that an explicit `false` (e.g. transport-not-open
     // thrown inside the main process) immediately clears the thinking state.
     const sendOptions = wireImages.length > 0 ? { images: wireImages } : undefined
+    trackMessageSent({
+      message_length: fullMessage.length,
+      has_attachments: attachedFiles.length > 0,
+    })
     void window.harnessclaw.send(payload, sid, sendOptions).then((ok) => {
       if (ok) return
       const errorAt = Date.now()
@@ -7425,6 +7439,7 @@ function MessageBubble({
 }) {
   const { t, i18n } = useTranslation()
   const [copied, setCopied] = useState(false)
+  const [rating, setRating] = useState<'up' | 'down' | null>(null)
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
   const now = useSharedNowTicker(!isUser && !isSystem && !!message.isStreaming, 250)
@@ -7435,6 +7450,24 @@ function MessageBubble({
     navigator.clipboard.writeText(message.content)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
+  }
+
+  const handleRate = (newRating: 'up' | 'down') => {
+    const finalRating = rating === newRating ? null : newRating
+    setRating(finalRating)
+    if (finalRating) {
+      // 上报点赞点踩埋点
+      // session_id 从 message 里推断(message 属于哪个 session 在渲染时已知,但这里拿不到)
+      // 服务端可以从 device_id + timestamp 推断会话,或者 session_id 就是可选字段
+      window.appRuntime.telemetry.track({
+        category: 'feedback',
+        action: 'message_rated',
+        properties: {
+          rating: finalRating,
+          message_id: message.id
+        }
+      }).catch(() => {})
+    }
   }
 
   const renderErrorNoticeCard = (notice: SystemNoticeData) => (
@@ -8140,6 +8173,34 @@ function MessageBubble({
         {shouldShowBreathingDot && (
           <div className="mb-1.5 flex justify-end pr-1">
             <span className="streaming-breathing-dot" aria-label={t('chat.status.serviceContinuing')} />
+          </div>
+        )}
+
+        {/* 点赞点踩 — AI 回复正文下方常显按钮(流式结束后才出现) */}
+        {!isUser && !isSystem && !message.isStreaming && hasRenderableAssistantBody && (
+          <div className="mt-2 flex items-center gap-1.5">
+            <button
+              onClick={() => handleRate('up')}
+              className={cn(
+                "inline-flex h-7 w-7 items-center justify-center rounded-lg border border-border/60 transition-colors hover:bg-muted",
+                rating === 'up' && "border-green-300 bg-green-50 dark:border-green-800 dark:bg-green-950/30"
+              )}
+              aria-label={t('chat.actions.thumbsUp')}
+              title={t('chat.actions.thumbsUp')}
+            >
+              <ThumbsUp size={13} className={rating === 'up' ? "text-green-600 dark:text-green-400" : "text-muted-foreground"} />
+            </button>
+            <button
+              onClick={() => handleRate('down')}
+              className={cn(
+                "inline-flex h-7 w-7 items-center justify-center rounded-lg border border-border/60 transition-colors hover:bg-muted",
+                rating === 'down' && "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/30"
+              )}
+              aria-label={t('chat.actions.thumbsDown')}
+              title={t('chat.actions.thumbsDown')}
+            >
+              <ThumbsDown size={13} className={rating === 'down' ? "text-red-600 dark:text-red-400" : "text-muted-foreground"} />
+            </button>
           </div>
         )}
 

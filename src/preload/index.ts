@@ -55,6 +55,16 @@ const appRuntimeAPI = {
     details?: Record<string, unknown>
     sessionId?: string
   }) => ipcRenderer.invoke('app-runtime:trackUsage', entry),
+  telemetry: {
+    track: (input: {
+      category: string
+      action: string
+      properties?: Record<string, unknown>
+    }) => ipcRenderer.invoke('telemetry:track', input),
+    getConfig: () => ipcRenderer.invoke('telemetry:getConfig'),
+    setEnabled: (enabled: boolean) => ipcRenderer.invoke('telemetry:setEnabled', enabled),
+    setConsented: (consented: boolean) => ipcRenderer.invoke('telemetry:setConsented', consented),
+  },
   exportData: (type: 'logs' | 'chat' | 'config') => ipcRenderer.invoke('app-runtime:exportData', type),
   openExternal: (url: string) => ipcRenderer.invoke('app-runtime:openExternal', url),
   onStatus: (callback: (status: Record<string, unknown>) => void) => {
