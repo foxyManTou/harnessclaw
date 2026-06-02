@@ -86,6 +86,28 @@ interface AppRuntimeAPI {
     details?: Record<string, unknown>
     sessionId?: string
   }) => Promise<{ ok: boolean }>
+  telemetry: {
+    track: (input: {
+      category: string
+      action: string
+      properties?: Record<string, unknown>
+    }) => Promise<{ ok: boolean }>
+    getConfig: () => Promise<{
+      ok: boolean
+      config?: {
+        endpoint: string
+        enabled: boolean
+        consented: boolean
+      }
+      error?: string
+    }>
+    setEnabled: (enabled: boolean) => Promise<{
+      ok: boolean
+      config?: { endpoint: string; enabled: boolean; consented: boolean }
+      error?: string
+    }>
+    setConsented: (consented: boolean) => Promise<{ ok: boolean; error?: string }>
+  }
   exportData: (type: 'logs' | 'chat' | 'config') => Promise<{ ok: boolean; path?: string; error?: string }>
   openExternal: (url: string) => Promise<{ ok: boolean; error?: string }>
   onStatus: (callback: (status: AppRuntimeStatus) => void) => () => void

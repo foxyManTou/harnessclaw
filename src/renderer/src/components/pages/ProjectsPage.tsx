@@ -6,6 +6,7 @@ import { FolderKanban, MoreHorizontal, Plus, X } from 'lucide-react'
 import { DangerConfirmMenu } from '../common/DangerConfirmMenu'
 import { cn } from '../../lib/utils'
 import { getProjectDisplayDescription, getProjectDisplayName } from '../../lib/projectDisplay'
+import { trackProjectCreated } from '../../lib/telemetry'
 
 interface ProjectDraft {
   name: string
@@ -123,6 +124,7 @@ export function ProjectsPage() {
 
     setProjects((current) => [result.project!, ...current])
     closeCreateDialog()
+    trackProjectCreated()
   }
 
   const handleDeleteProject = async (projectId: string) => {

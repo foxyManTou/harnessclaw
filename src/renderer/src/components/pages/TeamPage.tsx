@@ -27,6 +27,7 @@ import {
   X,
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
+import { trackAgentCreated } from '../../lib/telemetry'
 
 type TeamView = 'agents' | 'teams'
 type AgentTypeOption = 'sync' | 'async' | 'teammate' | 'coordinator' | 'custom'
@@ -407,6 +408,9 @@ export function TeamPage() {
       }
 
       if (res.code === 'OK') {
+        if (!editingAgentId) {
+          trackAgentCreated({ agent_type: agentDraft.agent_type })
+        }
         setAgentDialogOpen(false)
         resetAgentDraft()
         void loadAgents()

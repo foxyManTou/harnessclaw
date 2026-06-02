@@ -25,6 +25,7 @@ import {
 import { cn } from '../../lib/utils'
 import { getProjectDisplayDescription, getProjectDisplayName } from '../../lib/projectDisplay'
 import { useHarnessclawStatus } from '../../hooks/useHarnessclawStatus'
+import { trackSearchUsed } from '../../lib/telemetry'
 import sidebarLogo from '../../assets/sidebar-logo.png'
 import { AvatarLightbox } from '../common/AvatarLightbox'
 import { ConfirmDeleteSessionDialog } from '../common/ConfirmDeleteSessionDialog'
@@ -241,6 +242,7 @@ export function Sidebar() {
     setSearchQuery('')
     setSearchActiveIndex(0)
     setRecentWindowStart(0)
+    trackSearchUsed()
   }
 
   const closeSearch = () => {

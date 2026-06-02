@@ -692,6 +692,8 @@
     },
     "actions": {
       "copyMessage": "复制消息",
+      "thumbsUp": "点赞",
+      "thumbsDown": "点踩",
       "copy": "复制",
       "export": "导出",
       "closePreview": "关闭文件预览",
@@ -1000,6 +1002,11 @@
         "info": "标准 (info)",
         "debug": "调试 (debug)",
         "trace": "追踪 (trace)"
+      },
+      "telemetry": {
+        "title": "使用情况统计",
+        "enabled": "发送匿名使用数据",
+        "enabledDesc": "帮助我们改进产品。仅采集功能使用频次与匿名设备 ID，不包含对话内容、文件或个人信息。可随时关闭。"
       }
     },
     "models": {

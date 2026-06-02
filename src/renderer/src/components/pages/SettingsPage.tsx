@@ -6503,13 +6503,25 @@ function SoftwareSection() {
   const { config, loading, updateConfig } = useAppConfig()
   const logging = (config?.logging || {}) as { level?: LogViewerLevel }
   const persistedLevel = logging.level || 'info'
-  // Link-open behavior for plain http(s) links inside conversation messages.
-  // Storage namespace stays under `ui.linkOpenBehavior` (where ChatPage reads
-  // it) even though the visible control now lives under 软件设置. Default
-  // 'drawer' — preview the URL in the built-in WebPreviewDrawer.
-  // 'external' — open in the system default browser via shell.openExternal.
   const ui = (config?.ui || {}) as { linkOpenBehavior?: string }
   const linkOpenBehavior = ui.linkOpenBehavior === 'external' ? 'external' : 'drawer'
+
+  const [telemetryEnabled, setTelemetryEnabled] = useState<boolean>(true)
+  const [telemetryLoaded, setTelemetryLoaded] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    void window.appRuntime.telemetry.getConfig().then((res) => {
+      if (cancelled) return
+      if (res.ok && res.config) setTelemetryEnabled(res.config.enabled)
+      setTelemetryLoaded(true)
+    })
+    return () => { cancelled = true }
+  }, [])
+
+  const handleTelemetryToggle = (next: boolean) => {
+    setTelemetryEnabled(next)
+    void window.appRuntime.telemetry.setEnabled(next)
+  }
 
   const handleLevelChange = (value: string) => {
     updateConfig({ logging: { ...logging, level: value as LogViewerLevel } })
@@ -6555,6 +6567,14 @@ function SoftwareSection() {
               { label: t('settings.software.logging.trace'), value: 'trace' },
             ]}
           />
+        </SettingRow>
+      </GroupCard>
+      <GroupCard title={t('settings.software.telemetry.title')}>
+        <SettingRow
+          label={t('settings.software.telemetry.enabled')}
+          description={t('settings.software.telemetry.enabledDesc')}
+        >
+          <Toggle checked={telemetryEnabled && telemetryLoaded} onChange={handleTelemetryToggle} />
         </SettingRow>
       </GroupCard>
     </div>
