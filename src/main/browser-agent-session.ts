@@ -35,6 +35,14 @@ export interface BrowserAgentWebContentsLike {
   on?(event: string, listener: (...args: unknown[]) => void): unknown
   setWindowOpenHandler?(handler: (details: { url: string }) => { action: 'deny' | 'allow' }): void
   send?(channel: string, payload: unknown): void
+  debugger?: BrowserAgentDebuggerLike
+}
+
+export interface BrowserAgentDebuggerLike {
+  isAttached?(): boolean
+  attach?(protocolVersion?: string): void
+  sendCommand?(command: string, params?: Record<string, unknown>): MaybePromise<unknown>
+  detach?(): void
 }
 
 export interface BrowserAgentWindowLike {
@@ -650,16 +658,20 @@ export function createRemoteDebuggingTargetResolver(
 ): BrowserAgentCDPEndpointResolver {
   const retries = options.retries ?? 20
   const delayMs = options.delayMs ?? 100
-  return async (markerURL: string): Promise<string> => {
+  return async (markerURL: string, window?: BrowserAgentWindowLike): Promise<string> => {
     let lastError: unknown
+    let targetID = ''
     for (let attempt = 0; attempt < retries; attempt += 1) {
       try {
+        if (!targetID) {
+          targetID = await resolveWindowTargetID(window)
+        }
         const res = await fetchImpl(`http://127.0.0.1:${port}/json/list`)
         if (!res.ok) {
           throw new BrowserAgentSessionError('cdp_list_failed', `CDP target list failed with HTTP ${res.status || 0}`)
         }
         const targets = await res.json()
-        const endpoint = findMatchingTargetEndpoint(targets, markerURL)
+        const endpoint = findMatchingTargetEndpoint(targets, markerURL, targetID)
         if (endpoint) {
           return endpoint
         }
@@ -771,7 +783,53 @@ function titleFromURL(raw: string): string {
   }
 }
 
-function findMatchingTargetEndpoint(targets: unknown, markerURL: string): string {
+async function resolveWindowTargetID(window?: BrowserAgentWindowLike): Promise<string> {
+  const dbg = window?.webContents?.debugger
+  if (!dbg || typeof dbg.sendCommand !== 'function') {
+    return ''
+  }
+  let attachedHere = false
+  try {
+    const isAttached = typeof dbg.isAttached === 'function' ? dbg.isAttached() : false
+    if (!isAttached) {
+      if (typeof dbg.attach !== 'function') {
+        return ''
+      }
+      dbg.attach('1.3')
+      attachedHere = true
+    }
+    const info = await dbg.sendCommand('Target.getTargetInfo')
+    return extractTargetID(info)
+  } catch {
+    return ''
+  } finally {
+    if (attachedHere && typeof dbg.detach === 'function') {
+      try {
+        dbg.detach()
+      } catch {
+        // The window may be closing while the resolver is retrying.
+      }
+    }
+  }
+}
+
+function extractTargetID(info: unknown): string {
+  if (!info || typeof info !== 'object') {
+    return ''
+  }
+  const direct = (info as Record<string, unknown>).targetId
+  if (typeof direct === 'string') {
+    return direct
+  }
+  const targetInfo = (info as Record<string, unknown>).targetInfo
+  if (!targetInfo || typeof targetInfo !== 'object') {
+    return ''
+  }
+  const nested = (targetInfo as Record<string, unknown>).targetId
+  return typeof nested === 'string' ? nested : ''
+}
+
+function findMatchingTargetEndpoint(targets: unknown, markerURL: string, targetID = ''): string {
   if (!Array.isArray(targets)) {
     return ''
   }
@@ -780,8 +838,12 @@ function findMatchingTargetEndpoint(targets: unknown, markerURL: string): string
       continue
     }
     const entry = target as Record<string, unknown>
+    const id = typeof entry.id === 'string' ? entry.id : ''
     const targetURL = typeof entry.url === 'string' ? entry.url : ''
     const endpoint = typeof entry.webSocketDebuggerUrl === 'string' ? entry.webSocketDebuggerUrl : ''
+    if (targetID && endpoint && (id === targetID || endpoint.endsWith(`/devtools/page/${targetID}`))) {
+      return endpoint
+    }
     if (endpoint && targetURL === markerURL) {
       return endpoint
     }

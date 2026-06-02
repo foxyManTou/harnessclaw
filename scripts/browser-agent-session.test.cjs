@@ -575,3 +575,48 @@ test('remote debugging resolver selects target by marker URL', async () => {
   const endpoint = await resolver('about:blank#harnessclaw-browser-session=sess_target')
   assert.equal(endpoint, 'ws://127.0.0.1:9333/devtools/page/target')
 })
+
+test('remote debugging resolver selects BrowserWindow target by webContents target id before URL is ready', async () => {
+  const attachCalls = []
+  const detachCalls = []
+  const window = {
+    webContents: {
+      debugger: {
+        isAttached() {
+          return false
+        },
+        attach(protocolVersion) {
+          attachCalls.push(protocolVersion)
+        },
+        async sendCommand(command) {
+          assert.equal(command, 'Target.getTargetInfo')
+          return { targetInfo: { targetId: 'target-from-webcontents' } }
+        },
+        detach() {
+          detachCalls.push(true)
+        },
+      },
+    },
+  }
+  const resolver = createRemoteDebuggingTargetResolver(9444, async (url) => {
+    assert.equal(url, 'http://127.0.0.1:9444/json/list')
+    return {
+      ok: true,
+      async json() {
+        return [
+          {
+            id: 'target-from-webcontents',
+            url: 'about:blank',
+            webSocketDebuggerUrl: 'ws://127.0.0.1:9444/devtools/page/target-from-webcontents',
+          },
+        ]
+      },
+    }
+  }, { retries: 1, delayMs: 1 })
+
+  const endpoint = await resolver('about:blank#harnessclaw-browser-session=sess_target_id', window)
+
+  assert.equal(endpoint, 'ws://127.0.0.1:9444/devtools/page/target-from-webcontents')
+  assert.deepEqual(attachCalls, ['1.3'])
+  assert.equal(detachCalls.length, 1)
+})
