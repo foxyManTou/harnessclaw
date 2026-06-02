@@ -4,6 +4,7 @@ import { FileText } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { localFileUrl } from '../../lib/utils'
+import { SafeHtmlContent } from '../common/SafeHtmlContent'
 import type { FilePreviewData } from '../pages/ChatPage'
 
 /**
@@ -101,9 +102,9 @@ export function FilePreviewModal({
             </div>
           ) : preview.previewKind === 'html' ? (
             <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
-              <div
+              <SafeHtmlContent
+                html={preview.content}
                 className="prose max-w-none break-words text-foreground prose-headings:text-foreground prose-p:text-foreground prose-strong:text-foreground prose-li:text-foreground prose-a:text-primary prose-blockquote:border-l-border prose-blockquote:text-muted-foreground prose-hr:my-4 prose-hr:border-border/70 prose-table:border prose-table:border-border prose-th:border prose-th:border-border prose-th:bg-muted prose-th:px-2 prose-th:py-1 prose-td:border prose-td:border-border prose-td:px-2 prose-td:py-1 prose-img:rounded-lg dark:prose-invert"
-                dangerouslySetInnerHTML={{ __html: preview.content }}
               />
             </div>
           ) : preview.previewKind === 'text' ? (

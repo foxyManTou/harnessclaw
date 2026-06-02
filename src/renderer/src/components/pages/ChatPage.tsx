@@ -32,6 +32,7 @@ import { PlanStatusButton } from '../common/PlanStatusButton'
 import { SessionStatsButton } from '../common/SessionStatsButton'
 import { AvatarLightbox } from '../common/AvatarLightbox'
 import { ConfirmDeleteSessionDialog } from '../common/ConfirmDeleteSessionDialog'
+import { SafeHtmlContent } from '../common/SafeHtmlContent'
 import { SystemNoticeModal, type SystemNotice } from '../common/SystemNoticeModal'
 import emmaAvatar from '../../assets/sidebar-logo.png'
 import analystAvatar from '../../assets/team/analyst.png'
@@ -277,8 +278,8 @@ export interface FilePreviewData {
    * When the main process was able to convert a binary file (docx / xlsx /
    * pptx / pdf) into something readable, `content` is populated and this
    * flag tells the renderer how to display it:
-   *   - 'html': dangerouslySetInnerHTML inside a prose container (docx via
-   *     mammoth, xlsx via SheetJS, pptx via the inline parser).
+   *   - 'html': sanitized rich preview rendered through `SafeHtmlContent`
+   *     (docx via mammoth, xlsx via SheetJS, pptx via the inline parser).
    *   - 'text': render in a whitespace-preserving prose surface (pdf via
    *     pdf-parse).
    * `isBinary` is still set so export copies the original file bytes
@@ -3316,9 +3317,9 @@ function WorkspaceInlinePreview({ file }: { file: { path: string; name: string }
             <video src={mediaUrl} controls className="max-h-full max-w-full rounded-md border border-border" />
           </div>
         ) : previewKind === 'html' ? (
-          <div
+          <SafeHtmlContent
+            html={content}
             className="prose prose-sm max-w-none px-4 py-3 text-foreground dark:prose-invert"
-            dangerouslySetInnerHTML={{ __html: content }}
           />
         ) : previewKind === 'text' ? (
           <pre className="whitespace-pre-wrap break-words px-4 py-3 text-[12px] leading-5 text-foreground">{content}</pre>
@@ -10012,15 +10013,13 @@ export function FilePreviewDrawer({
               </div>
             </div>
           ) : preview.previewKind === 'html' ? (
-            // 主进程已把 docx / xlsx / pptx 等转成语义化 HTML（mammoth /
-            // SheetJS / 自写 pptx 解析器），这里直接渲染。生成的 HTML 只
-            // 包含段落、标题、列表、表格、加粗、斜体、链接、内联图等常规
-            // 元素，不会注入脚本；用 prose 容器套一层让排版与 Markdown
-            // 预览保持一致，并补上 table 边框样式。
+            // 主进程会把 docx / xlsx / pptx 等转成语义化 HTML；渲染前在
+            // renderer 再做一次标签/属性白名单过滤，避免把原始 HTML 直接
+            // 注入 DOM。
             <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-              <div
+              <SafeHtmlContent
+                html={preview.content}
                 className="prose max-w-none break-words text-foreground prose-headings:text-foreground prose-p:text-foreground prose-strong:text-foreground prose-li:text-foreground prose-a:text-primary prose-blockquote:border-l-border prose-blockquote:text-muted-foreground prose-hr:my-4 prose-hr:border-border/70 prose-table:border prose-table:border-border prose-th:border prose-th:border-border prose-th:bg-muted prose-th:px-2 prose-th:py-1 prose-td:border prose-td:border-border prose-td:px-2 prose-td:py-1 prose-img:rounded-lg dark:prose-invert"
-                dangerouslySetInnerHTML={{ __html: preview.content }}
               />
             </div>
           ) : preview.previewKind === 'text' ? (

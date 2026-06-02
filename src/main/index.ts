@@ -607,7 +607,7 @@ function sniffMimeForBase64(filePath: string): string {
 
 // 富预览：用于 docx / xlsx / pptx / pdf 这几类「二进制但可读出可读内容」
 // 的文件。把它们在主进程统一转成 HTML 或纯文本字符串，前端按 kind 渲染：
-//   - 'html': 直接 dangerouslySetInnerHTML 到 prose 容器
+//   - 'html': 交给 renderer 侧的安全富文本预览组件渲染
 //   - 'text': pre-wrap 排版，保留换行与分页标记
 type RichPreviewKind = 'html' | 'text'
 type RichPreviewResult = { kind: RichPreviewKind; content: string }
