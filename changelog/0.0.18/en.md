@@ -5,3 +5,4 @@
 ### Fixed
 
 - Browser Agent windows now keep their own active CDP targets when popup windows are created, preventing simultaneous browser tasks from drifting onto the wrong window.
+- Release packaging now downloads the pinned target platform `agent-browser` binary instead of reusing the developer machine's local binary.
