@@ -2648,11 +2648,11 @@ function ModelSection({
         setAppConfig(normalizedAppConfig)
         setProviders(nextProviders)
         setDefaultProvider(nextDefaultProvider)
-        // `custom` is hidden from the sidebar, so if it would otherwise be
-        // the initially-selected provider, fall back to the first visible
-        // managed provider (currently iFlytek Spark) so the user lands on
-        // a real row.
-        setSelectedProvider(nextDefaultProvider === 'custom' ? 'xunfei' : nextDefaultProvider)
+        // Keep the current default provider selected, including `custom`.
+        // This matters for first-run onboarding: when the user configures a
+        // custom endpoint there, Models should open on that same provider so
+        // the just-saved model is immediately visible.
+        setSelectedProvider(nextDefaultProvider)
       } catch {
         setPersistState('error')
         setPersistMessage(t('models.persist.readFailed'))
@@ -3474,9 +3474,26 @@ function ModelSection({
       deletedModelIdsRef.current.delete(targetProvider)
     }
 
+    const currentProvider = providers[targetProvider]
+    const displayName = getDisplayName(targetProvider)
+    if (!currentProvider.apiKey.trim()) {
+      setToastNotice({ tone: 'error', message: t('models.validation.missingKey', { name: displayName }) })
+      return
+    }
+    const baseUrl = currentProvider.apiBase?.trim() || PROVIDER_DEFAULT_BASES[targetProvider] || ''
+    if (!baseUrl) {
+      setToastNotice({ tone: 'error', message: t('models.validation.missingBase', { name: displayName }) })
+      return
+    }
+
     setModelFetchState('loading')
     try {
-      const result = await window.agentApi.listRegistryModels()
+      const result = await window.agentApi.listProviderModels({
+        provider: targetProvider,
+        type: getEffectiveEngineType(targetProvider, currentProvider),
+        baseUrl,
+        apiKey: currentProvider.apiKey.trim(),
+      })
       if (!result.ok) {
         const friendly = result.error === 'network_error'
           ? t('models.engineError')
@@ -3489,25 +3506,20 @@ function ModelSection({
 
       const parsed = result.data
 
-      // Filter by selected provider for managed providers (anthropic / openai).
-      // For "custom" provider, include everything.
-      const filtered = targetProvider === 'custom'
-        ? parsed
-        : parsed.filter((m) => m.provider === targetProvider)
+      const filtered = parsed.filter((m) => m.provider === targetProvider)
 
       if (filtered.length === 0) {
         setToastNotice({
           tone: 'error',
-          message: targetProvider === 'custom'
-            ? t('models.noModelsInRegistry')
-            : t('models.noModelsForProvider', { name: getDisplayName(targetProvider) }),
+          message: t('models.noModelsForProvider', { name: displayName }),
         })
         return
       }
 
-      // Derive tags from registry supports flags. Keys match MODEL_TAGS
-      // (= server-side model_type tokens) so chip selections can pass
-      // straight through to PATCH /endpoint without translation.
+      // Derive tags from any capability metadata returned by the provider
+      // fetch. Keys match MODEL_TAGS (= server-side model_type tokens) so
+      // chip selections can pass straight through to PATCH /endpoint
+      // without translation.
       const deriveTags = (s?: Record<string, unknown>): string[] => {
         if (!s) return []
         const tags: string[] = []
@@ -3518,9 +3530,9 @@ function ModelSection({
         return tags
       }
 
-      // Pure merge: given the *current* model list + the registry
+      // Pure merge: given the *current* model list + the provider
       // payload + tombstones, return the next list and a count of
-      // genuinely-new registry entries. Called twice — once with the
+      // genuinely-new provider entries. Called twice — once with the
       // closure snapshot (for the toast counters, since React's setState
       // updater runs at commit time, not synchronously) and once
       // inside the setProviders updater so the persisted state reflects
@@ -3558,8 +3570,11 @@ function ModelSection({
         // regardless of how stale the fetch was.
         const tombstones = deletedModelIdsRef.current.get(targetProvider) ?? new Set<string>()
 
-        // Append registry entries that aren't in seenIds and weren't
-        // explicitly tombstoned.
+        // Append provider-reported entries that aren't in seenIds and weren't
+        // explicitly tombstoned. This is the fix for the
+        // "deleted-then-revived" race: a fetch in flight when the
+        // user 🗑'd a model used to come back with that model in the
+        // payload and re-add it as "new from registry".
         let addedCount = 0
         for (const m of filtered) {
           if (seenIds.has(m.model_id)) continue
@@ -3823,13 +3838,17 @@ function ModelSection({
   }
 
   const selected = providers[selectedProvider]
-  // Hide the generic "Custom" entry from the sidebar — vendor coverage
-  // (Anthropic / OpenAI / Google / DeepSeek / GLM / Kimi / MiniMax)
-  // already spans the registry, so the catch-all isn't useful in the UI.
-  // The underlying type / persistence still keeps `custom` so older
-  // configs aren't lost.
+  const showCustomProvider = selectedProvider === 'custom'
+    || defaultProvider === 'custom'
+    || Boolean(
+      providers.custom.apiKey.trim()
+      || providers.custom.apiBase?.trim()
+      || providers.custom.model?.trim()
+      || providers.custom.models.length > 0
+    )
   const providerKeys = MANAGED_PROVIDER_KEYS.filter((key) => {
-    if (key === 'custom') return false
+    if (key === selectedProvider) return true
+    if (key === 'custom' && !showCustomProvider) return false
     if (!searchQuery) return true
     const q = searchQuery.toLowerCase()
     return key.toLowerCase().includes(q) || getDisplayName(key).toLowerCase().includes(q)
@@ -6585,7 +6604,7 @@ function LauncherSection() {
   const { t } = useTranslation()
   const { config, loading, updateConfig } = useAppConfig()
   const launcher = (config?.launcher || {}) as { enabled?: boolean; hotkey?: string }
-  const launcherEnabled = launcher.enabled !== false
+  const launcherEnabled = launcher.enabled === true
   const launcherHotkey = typeof launcher.hotkey === 'string' && launcher.hotkey.trim().length > 0
     ? launcher.hotkey.trim()
     : 'Alt+Space'
