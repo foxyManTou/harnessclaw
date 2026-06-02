@@ -41,6 +41,7 @@ yarn-error.log*
 # Bundled engine binaries
 resources/bin/harnessclaw-engine
 resources/bin/harnessclaw-engine-*
+resources/bin/agent-browser-*
 
 # Test artifacts
 test_report.json

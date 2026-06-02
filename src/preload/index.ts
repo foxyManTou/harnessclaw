@@ -114,6 +114,8 @@ const browserAgentAPI = {
   listSessions: () => ipcRenderer.invoke('browser-agent:listSessions'),
   setVisibility: (sessionId: string, visible: boolean) =>
     ipcRenderer.invoke('browser-agent:setVisibility', { session_id: sessionId, visible }),
+  closeAll: () => ipcRenderer.invoke('browser-agent:closeAll'),
+  closeSessions: (sessionIds: string[]) => ipcRenderer.invoke('browser-agent:closeSessions', { session_ids: sessionIds }),
   onSessionChanged: (callback: (session: Record<string, unknown>) => void) => {
     const handler = (_: Electron.IpcRendererEvent, session: Record<string, unknown>): void => callback(session)
     ipcRenderer.on('browser-agent:session-changed', handler)

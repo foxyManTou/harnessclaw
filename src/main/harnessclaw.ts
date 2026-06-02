@@ -1221,7 +1221,16 @@ export class HarnessclawClient extends EventEmitter {
 
         if (target === 'client') {
           // v2 client tools: execute locally and send tool.result back.
-          void this.executeToolCall(sessionId, args.cardId, toolName, input, this.resolveAgentInfo(forest, args.agentId).isSubagent, card)
+          const awaitSessionId = typeof args.payload.await_session_id === 'string' ? args.payload.await_session_id : ''
+          if (!awaitSessionId) {
+            writeAppLog('error', 'harnessclaw-engine.session', 'Client tool missing await_session_id', {
+              sessionId,
+              toolUseId: args.cardId,
+              toolName,
+            })
+            return
+          }
+          void this.executeToolCall(sessionId, awaitSessionId, args.cardId, toolName, input, this.resolveAgentInfo(forest, args.agentId).isSubagent, card)
         }
         return
       }
@@ -2823,7 +2832,8 @@ export class HarnessclawClient extends EventEmitter {
   }
 
   private async executeToolCall(
-    sessionId: string,
+    displaySessionId: string,
+    awaitSessionId: string,
     toolUseId: string,
     toolName: string,
     input: Record<string, unknown>,
@@ -2842,8 +2852,8 @@ export class HarnessclawClient extends EventEmitter {
           message: `Tool "${toolName}" is denied by local policy`,
         },
       }
-      this.emitLocalToolResult(sessionId, toolUseId, toolName, deniedPayload, isSubagent, card)
-      this.sendToolResult(sessionId, toolUseId, deniedPayload)
+      this.emitLocalToolResult(displaySessionId, toolUseId, toolName, deniedPayload, isSubagent, card)
+      this.sendToolResult(awaitSessionId, toolUseId, deniedPayload)
       return
     }
 
@@ -2855,8 +2865,8 @@ export class HarnessclawClient extends EventEmitter {
           message: `Tool "${toolName}" is not in allowed_tools`,
         },
       }
-      this.emitLocalToolResult(sessionId, toolUseId, toolName, deniedPayload, isSubagent, card)
-      this.sendToolResult(sessionId, toolUseId, deniedPayload)
+      this.emitLocalToolResult(displaySessionId, toolUseId, toolName, deniedPayload, isSubagent, card)
+      this.sendToolResult(awaitSessionId, toolUseId, deniedPayload)
       return
     }
 
@@ -2894,7 +2904,7 @@ export class HarnessclawClient extends EventEmitter {
           result = await this.runBrowserSessionStateTool(input, card.traceId)
           break
         case 'browser_ask_human':
-          result = await this.runBrowserAskHumanTool(input, sessionId, toolUseId, card.traceId)
+          result = await this.runBrowserAskHumanTool(input, displaySessionId, toolUseId, card.traceId)
           break
         default:
           result = {
@@ -2915,8 +2925,8 @@ export class HarnessclawClient extends EventEmitter {
       }
     }
 
-    this.emitLocalToolResult(sessionId, toolUseId, toolName, result, isSubagent, card)
-    this.sendToolResult(sessionId, toolUseId, result)
+    this.emitLocalToolResult(displaySessionId, toolUseId, toolName, result, isSubagent, card)
+    this.sendToolResult(awaitSessionId, toolUseId, result)
   }
 
   private async runBrowserSessionCreateTool(input: Record<string, unknown>, turnId?: string): Promise<ToolResultPayload> {

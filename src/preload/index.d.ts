@@ -166,6 +166,12 @@ interface BrowserAgentSessionInfo {
 interface BrowserAgentAPI {
   listSessions: () => Promise<{ ok: boolean; sessions?: BrowserAgentSessionInfo[]; error?: string }>
   setVisibility: (sessionId: string, visible: boolean) => Promise<{ ok: boolean; session?: BrowserAgentSessionInfo; error?: string }>
+  closeAll: () => Promise<{ ok: boolean; error?: string }>
+  closeSessions: (sessionIds: string[]) => Promise<{
+    ok: boolean
+    result?: { closed_session_ids: string[]; missing_session_ids: string[] }
+    error?: string
+  }>
   onSessionChanged: (callback: (session: BrowserAgentSessionInfo) => void) => () => void
 }
 

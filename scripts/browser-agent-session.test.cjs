@@ -17,6 +17,7 @@ class FakeWindow {
     this.sent = []
     this.bounds = { width: 1280, height: 900 }
     this.listeners = new Map()
+    this.webContentsListeners = new Map()
     this.webContents = {
       loadURL: async (url) => this.loadURL(url),
       getURL: () => this.loaded[this.loaded.length - 1] || '',
@@ -27,7 +28,14 @@ class FakeWindow {
       goForward: () => {},
       reload: () => {},
       focus: () => {},
-      on: () => this.webContents,
+      on: (event, listener) => {
+        if (typeof listener === 'function') {
+          const listeners = this.webContentsListeners.get(event) || []
+          listeners.push(listener)
+          this.webContentsListeners.set(event, listeners)
+        }
+        return this.webContents
+      },
       setWindowOpenHandler: () => {},
       send: (channel, payload) => {
         this.sent.push({ channel, payload })
@@ -90,6 +98,12 @@ class FakeWindow {
 
   emit(event, ...args) {
     for (const listener of this.listeners.get(event) || []) {
+      listener(...args)
+    }
+  }
+
+  emitWebContents(event, ...args) {
+    for (const listener of this.webContentsListeners.get(event) || []) {
       listener(...args)
     }
   }
@@ -260,7 +274,7 @@ test('broadcasts closed session as soon as the browser window starts closing', a
   assert.equal(closed?.closed, true)
 })
 
-test('defaults new browser session to visible and rejects non-http start URL', async () => {
+test('defaults new browser session to hidden and rejects non-http start URL', async () => {
   const win = new FakeWindow(9, {})
   const manager = new BrowserAgentSessionManager({
     createWindow(options) {
@@ -276,10 +290,10 @@ test('defaults new browser session to visible and rejects non-http start URL', a
   })
 
   const result = await manager.createSession({})
-  assert.equal(result.visible, true)
-  assert.equal(win.options.show, true)
-  assert.equal(win.visible, true)
-  assert.equal(win.focused, true)
+  assert.equal(result.visible, false)
+  assert.equal(win.options.show, false)
+  assert.equal(win.visible, false)
+  assert.equal(win.focused, false)
 
   await assert.rejects(
     () => manager.createSession({ start_url: 'file:///etc/passwd' }),
@@ -335,6 +349,149 @@ test('toggles browser session visibility without destroying the window', async (
   assert.equal(hidden.visible, false)
   assert.equal(win.visible, false)
   assert.equal(win.destroyed, false)
+})
+
+test('applies browser session visibility and close to popup windows', async () => {
+  let nextId = 50
+  const windows = []
+  const manager = new BrowserAgentSessionManager({
+    createWindow(options) {
+      const win = new FakeWindow(nextId++, options)
+      windows.push(win)
+      return win
+    },
+    async resolveCDPEndpoint() {
+      return 'ws://127.0.0.1:9222/devtools/page/page-50'
+    },
+    createSessionID() {
+      return 'sess_multi_window'
+    },
+  })
+
+  await manager.createSession({ visibility: 'hidden' })
+  const parent = windows[0]
+  const popup = new FakeWindow(nextId++, { show: true })
+  popup.visible = true
+
+  parent.emitWebContents('did-create-window', popup)
+
+  assert.equal(parent.visible, false)
+  assert.equal(popup.visible, false)
+
+  const shown = manager.setVisibility({ session_id: 'sess_multi_window', visible: true })
+  assert.equal(shown.visible, true)
+  assert.equal(parent.visible, true)
+  assert.equal(popup.visible, true)
+
+  const hidden = manager.setVisibility({ session_id: 'sess_multi_window', visible: false })
+  assert.equal(hidden.visible, false)
+  assert.equal(parent.visible, false)
+  assert.equal(popup.visible, false)
+
+  manager.closeSession({ session_id: 'sess_multi_window' })
+  assert.equal(parent.destroyed, true)
+  assert.equal(popup.destroyed, true)
+})
+
+test('tracks popup windows as active tabs with their own CDP endpoints', async () => {
+  let nextId = 80
+  const windows = []
+  const manager = new BrowserAgentSessionManager({
+    createWindow(options) {
+      const win = new FakeWindow(nextId++, options)
+      windows.push(win)
+      return win
+    },
+    async resolveCDPEndpoint(targetURL, win) {
+      return `ws://127.0.0.1:9222/devtools/page/window-${win?.id || 'unknown'}-${encodeURIComponent(targetURL)}`
+    },
+    createSessionID() {
+      return 'sess_popup_target'
+    },
+  })
+
+  const created = await manager.createSession({ visibility: 'visible' })
+  const parent = windows[0]
+  const popup = new FakeWindow(nextId++, { show: true })
+  await popup.loadURL('https://popup.example/detail')
+
+  parent.emitWebContents('did-create-window', popup, { url: 'https://popup.example/detail' })
+  await new Promise((resolve) => setImmediate(resolve))
+
+  const state = manager.getSessionState({ session_id: created.session_id })
+  assert.equal(state.tabs.length, 2)
+  assert.equal(state.active_tab.url, 'https://popup.example/detail')
+  assert.equal(
+    state.active_tab.cdp_endpoint,
+    'ws://127.0.0.1:9222/devtools/page/window-81-https%3A%2F%2Fpopup.example%2Fdetail',
+  )
+})
+
+test('closeAll destroys every browser window attached to active sessions', async () => {
+  let nextId = 60
+  const windows = []
+  const changed = []
+  const manager = new BrowserAgentSessionManager({
+    createWindow(options) {
+      const win = new FakeWindow(nextId++, options)
+      windows.push(win)
+      return win
+    },
+    async resolveCDPEndpoint() {
+      return 'ws://127.0.0.1:9222/devtools/page/page-60'
+    },
+    createSessionID() {
+      return 'sess_close_all'
+    },
+    onSessionChanged(session) {
+      changed.push(session)
+    },
+  })
+
+  await manager.createSession({ visibility: 'visible' })
+  const parent = windows[0]
+  const popup = new FakeWindow(nextId++, { show: true })
+  popup.visible = true
+  parent.emitWebContents('did-create-window', popup)
+
+  manager.closeAll()
+
+  assert.equal(parent.destroyed, true)
+  assert.equal(popup.destroyed, true)
+  assert.equal(manager.listSessions().length, 0)
+  const closed = changed.find((session) => session.session_id === 'sess_close_all' && session.closed)
+  assert.equal(closed?.visible, false)
+})
+
+test('closeSessions destroys only requested browser sessions', async () => {
+  let nextId = 70
+  let nextSessionIndex = 0
+  const windows = []
+  const manager = new BrowserAgentSessionManager({
+    createWindow(options) {
+      const win = new FakeWindow(nextId++, options)
+      windows.push(win)
+      return win
+    },
+    async resolveCDPEndpoint(markerURL) {
+      return `ws://127.0.0.1:9222/devtools/page/${encodeURIComponent(markerURL)}`
+    },
+    createSessionID() {
+      nextSessionIndex += 1
+      return `sess_scoped_${nextSessionIndex}`
+    },
+  })
+
+  const first = await manager.createSession({ visibility: 'visible' })
+  const second = await manager.createSession({ visibility: 'visible' })
+
+  const result = manager.closeSessions({ session_ids: [first.session_id, 'missing_session'] })
+
+  assert.deepEqual(result.closed_session_ids, [first.session_id])
+  assert.equal(windows[0].destroyed, true)
+  assert.equal(windows[1].destroyed, false)
+  assert.equal(manager.getSession(first.session_id), undefined)
+  assert.equal(manager.getSession(second.session_id)?.session_id, second.session_id)
 })
 
 test('hides only browser sessions used by the completed turn', async () => {

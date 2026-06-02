@@ -1,7 +1,7 @@
 Place bundled native binaries in this directory.
 
-`harnessclaw-engine` is not stored in git anymore. The release workflow downloads the latest
-published binary from `harnessclaw/harnessclaw-engine` into this directory before packaging.
+Native binaries are not stored in git. The VS Code preparation task and release workflow must
+place `harnessclaw-engine-*` and `agent-browser-*` binaries in this directory before packaging.
 
 Recommended naming:
 
@@ -19,6 +19,11 @@ Examples:
 
 - `resolveBundledBinaryPath('myservice')`
 - `resolveBundledBinaryPath('nanobot')`
+
+Browser Agent note:
+
+- `agent-browser-*` is resolved by `harnessclaw-engine` directly from this directory.
+- It does not use PATH or the JavaScript shim at runtime.
 
 Notes:
 

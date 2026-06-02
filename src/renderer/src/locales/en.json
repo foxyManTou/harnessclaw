@@ -855,6 +855,8 @@
       "browserHidden": "Browser hidden",
       "browserShowAria": "Show browser window",
       "browserHideAria": "Hide browser window",
+      "browserCloseAllAria": "Close all browser windows",
+      "browserCloseAllConfirm": "This will close all current browser windows. Continue?",
       "stopAria": "Stop current task",
       "sendAria": "Send message",
       "dropToUpload": "Drop to upload files to this session",

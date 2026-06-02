@@ -1139,6 +1139,57 @@ let launcherWindow: BrowserWindow | null = null
 let mainWindowRef: BrowserWindow | null = null
 let browserAgentSessions: BrowserAgentSessionManager | null = null
 
+function extractBrowserAgentSessionIDsFromMessages(messages: ReturnType<typeof getMessages>): string[] {
+  const seen = new Set<string>()
+  const sessionIDs: string[] = []
+  for (const message of messages) {
+    const results = message.tools.filter((tool) => tool.type === 'result')
+    for (const tool of message.tools) {
+      if (tool.type !== 'call' || (tool.name || '').toLowerCase() !== 'browser_session_create') continue
+      const result = results.find((candidate) => candidate.call_id === tool.call_id)
+      const sessionID = extractBrowserAgentSessionIDFromResult(result)
+      if (!sessionID || seen.has(sessionID)) continue
+      seen.add(sessionID)
+      sessionIDs.push(sessionID)
+    }
+  }
+  return sessionIDs
+}
+
+function extractBrowserAgentSessionIDFromResult(
+  result?: ReturnType<typeof getMessages>[number]['tools'][number],
+): string {
+  if (!result) return ''
+  const metadata = parseJSONRecord(result.metadata_json)
+  const metadataSessionID = typeof metadata.session_id === 'string' ? metadata.session_id.trim() : ''
+  if (metadataSessionID) return metadataSessionID
+  const content = parseJSONRecord(result.content)
+  return typeof content.session_id === 'string' ? content.session_id.trim() : ''
+}
+
+function parseJSONRecord(raw: string | null): Record<string, unknown> {
+  if (!raw) return {}
+  try {
+    return asRecord(JSON.parse(raw))
+  } catch {
+    return {}
+  }
+}
+
+function closeBrowserAgentSessionsForDbSession(sessionId: string): void {
+  try {
+    if (!browserAgentSessions) return
+    const targetIDs = extractBrowserAgentSessionIDsFromMessages(getMessages(sessionId))
+    if (targetIDs.length === 0) return
+    browserAgentSessions.closeSessions({ session_ids: targetIDs })
+  } catch (error) {
+    writeAppLog('warn', 'browser-agent.session', 'Failed to close browser sessions for chat session', {
+      session_id: sessionId,
+      error: String(error),
+    })
+  }
+}
+
 function broadcastBrowserAgentSessionChanged(session: Record<string, unknown>): void {
   BrowserWindow.getAllWindows().forEach((win) => {
     if (!win.isDestroyed()) {
@@ -1452,6 +1503,23 @@ app.whenReady().then(() => {
     if (!browserAgentSessions) return { ok: false, error: 'Browser Agent session manager is not available' }
     try {
       return { ok: true, session: browserAgentSessions.setVisibility(input || {}) }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+  ipcMain.handle('browser-agent:closeAll', () => {
+    if (!browserAgentSessions) return { ok: false, error: 'Browser Agent session manager is not available' }
+    try {
+      browserAgentSessions.closeAll()
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+  ipcMain.handle('browser-agent:closeSessions', (_, input: Record<string, unknown>) => {
+    if (!browserAgentSessions) return { ok: false, error: 'Browser Agent session manager is not available' }
+    try {
+      return { ok: true, result: browserAgentSessions.closeSessions(input || {}) }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
@@ -1800,6 +1868,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle('db:deleteSession', (_, sessionId: string) => {
     try {
+      closeBrowserAgentSessionsForDbSession(sessionId)
       dbDeleteSession(sessionId)
       broadcastDbSessionsChanged()
       return { ok: true }
@@ -1857,6 +1926,9 @@ app.whenReady().then(() => {
 
   ipcMain.handle('db:deleteProject', (_, projectId: string) => {
     try {
+      for (const session of listProjectSessions(projectId)) {
+        closeBrowserAgentSessionsForDbSession(session.session_id)
+      }
       const result = softDeleteProjectWithSessions(projectId)
       broadcastDbSessionsChanged()
       return { ok: true, ...result }
@@ -3150,6 +3222,9 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('harnessclaw:stop', async (_, sessionId?: string) => {
+    if (sessionId) {
+      closeBrowserAgentSessionsForDbSession(sessionId)
+    }
     const ok = await harnessclawClient.stop(sessionId)
     return ok ? { ok: true } : { ok: false, error: 'Failed to interrupt Harnessclaw session' }
   })

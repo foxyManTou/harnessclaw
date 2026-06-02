@@ -82,6 +82,11 @@ export interface BrowserAgentCloseResult {
   window_id: string
 }
 
+export interface BrowserAgentCloseSessionsResult {
+  closed_session_ids: string[]
+  missing_session_ids: string[]
+}
+
 export interface BrowserAgentAskHumanResult {
   status: 'shown'
   session_id: string
@@ -99,6 +104,7 @@ export interface BrowserAgentSessionManagerLike {
   setVisibility(input: Record<string, unknown>): BrowserAgentSessionInfo
   hideSession(input: Record<string, unknown>): BrowserAgentSessionInfo
   hideSessionsForTurn(turnID: string): void
+  closeSessions(input: Record<string, unknown>): BrowserAgentCloseSessionsResult
   finishHumanTakeover(requestID: string, status: 'success' | 'cancelled'): void
   closeAll(): void
 }
@@ -111,6 +117,7 @@ export type BrowserAgentCDPEndpointResolver = (
 
 interface BrowserAgentTabRecord {
   tab_id: string
+  window_id: string
   title: string
   url: string
   marker_url: string
@@ -125,6 +132,7 @@ interface BrowserAgentSessionRecord {
   visible: boolean
   last_used_turn_id?: string
   window: BrowserAgentWindowLike
+  windows: Map<string, BrowserAgentWindowLike>
   tabs: BrowserAgentTabRecord[]
   active_tab_id: string
   human_takeover?: {
@@ -181,7 +189,7 @@ export class BrowserAgentSessionManager implements BrowserAgentSessionManagerLik
   async createSession(input: Record<string, unknown>): Promise<BrowserAgentSessionInfo> {
     const sessionID = this.normalizeSessionID(input.session_id)
     const startURL = optionalString(input.start_url)
-    const visibility = input.visibility === 'hidden' ? 'hidden' : 'visible'
+    const visibility = input.visibility === 'visible' ? 'visible' : 'hidden'
     const partition = this.resolvePartition()
     const lastUsedTurnID = optionalString(input.last_used_turn_id) || optionalString(input.turn_id)
     if (startURL) {
@@ -204,8 +212,6 @@ export class BrowserAgentSessionManager implements BrowserAgentSessionManagerLik
         partition,
       },
     })
-    win.on?.('close', () => this.handleWindowClosed(sessionID))
-    win.once?.('closed', () => this.handleWindowClosed(sessionID))
 
     const record: BrowserAgentSessionRecord = {
       session_id: sessionID,
@@ -214,9 +220,11 @@ export class BrowserAgentSessionManager implements BrowserAgentSessionManagerLik
       visible: visibility === 'visible',
       last_used_turn_id: lastUsedTurnID || undefined,
       window: win,
+      windows: new Map(),
       tabs: [],
       active_tab_id: '',
     }
+    this.attachWindow(record, win)
 
     try {
       const tab = await this.createWindowTab(record, startURL)
@@ -231,6 +239,9 @@ export class BrowserAgentSessionManager implements BrowserAgentSessionManagerLik
       this.publish(record)
       return publicSessionInfo(record)
     } catch (err) {
+      for (const windowID of record.windows.keys()) {
+        this.sessionsByWindowID.delete(windowID)
+      }
       if (!win.isDestroyed()) {
         win.destroy()
       }
@@ -243,9 +254,7 @@ export class BrowserAgentSessionManager implements BrowserAgentSessionManagerLik
     const closedInfo: BrowserAgentSessionInfo = { ...publicSessionInfo(record), visible: false, closed: true }
     this.onSessionChanged?.(closedInfo)
     this.forgetSession(record.session_id)
-    if (!record.window.isDestroyed()) {
-      record.window.destroy()
-    }
+    this.destroyRecordWindows(record)
     return {
       closed: true,
       session_id: record.session_id,
@@ -319,6 +328,28 @@ export class BrowserAgentSessionManager implements BrowserAgentSessionManagerLik
     }
   }
 
+  closeSessions(input: Record<string, unknown>): BrowserAgentCloseSessionsResult {
+    const sessionIDs = normalizeSessionIDs(input.session_ids)
+    const closed: string[] = []
+    const missing: string[] = []
+    for (const sessionID of sessionIDs) {
+      const record = this.sessionsByID.get(sessionID)
+      if (!record) {
+        missing.push(sessionID)
+        continue
+      }
+      const closedInfo: BrowserAgentSessionInfo = { ...publicSessionInfo(record), visible: false, closed: true }
+      this.onSessionChanged?.(closedInfo)
+      this.forgetSession(record.session_id)
+      this.destroyRecordWindows(record)
+      closed.push(record.session_id)
+    }
+    return {
+      closed_session_ids: closed,
+      missing_session_ids: missing,
+    }
+  }
+
   async navigate(input: Record<string, unknown>): Promise<BrowserAgentSessionInfo> {
     const record = this.requireSession(input)
     const url = optionalString(input.url)
@@ -363,10 +394,32 @@ export class BrowserAgentSessionManager implements BrowserAgentSessionManagerLik
 
   closeAll(): void {
     for (const record of [...this.sessionsByID.values()]) {
+      const closedInfo: BrowserAgentSessionInfo = { ...publicSessionInfo(record), visible: false, closed: true }
+      this.onSessionChanged?.(closedInfo)
       this.forgetSession(record.session_id)
-      if (!record.window.isDestroyed()) {
-        record.window.destroy()
-      }
+      this.destroyRecordWindows(record)
+    }
+  }
+
+  private attachWindow(record: BrowserAgentSessionRecord, win: BrowserAgentWindowLike): void {
+    if (win.isDestroyed()) return
+    const windowID = String(win.id)
+    if (record.windows.has(windowID)) return
+    record.windows.set(windowID, win)
+    this.sessionsByWindowID.set(windowID, record.session_id)
+    win.on?.('close', () => this.handleWindowClosed(record.session_id, windowID))
+    win.once?.('closed', () => this.handleWindowClosed(record.session_id, windowID))
+    win.on?.('focus', () => this.activateWindowTab(record, windowID))
+    win.webContents?.on?.('did-create-window', (createdWindow: unknown, details: unknown) => {
+      const child = asBrowserAgentWindow(createdWindow)
+      if (!child) return
+      this.attachWindow(record, child)
+      void this.registerWindowTab(record, child, windowOpenURL(details))
+    })
+    if (record.visible) {
+      this.showWindow(win)
+    } else {
+      this.hideWindow(win)
     }
   }
 
@@ -386,6 +439,7 @@ export class BrowserAgentSessionManager implements BrowserAgentSessionManagerLik
     const cdpEndpoint = await this.resolveCDPEndpoint(markerURL, record.window)
     const tab: BrowserAgentTabRecord = {
       tab_id: tabID,
+      window_id: record.window_id,
       title: 'New Tab',
       url: markerURL,
       marker_url: markerURL,
@@ -396,6 +450,53 @@ export class BrowserAgentSessionManager implements BrowserAgentSessionManagerLik
       await this.loadTabURL(tab, url)
     }
     return tab
+  }
+
+  private async registerWindowTab(
+    record: BrowserAgentSessionRecord,
+    win: BrowserAgentWindowLike,
+    urlHint?: string,
+  ): Promise<void> {
+    if (!win.webContents || win.isDestroyed()) {
+      return
+    }
+    const windowID = String(win.id)
+    const tabID = `tab_${record.session_id}_${windowID}`
+    const url = urlHint || win.webContents.getURL?.() || 'about:blank'
+    let cdpEndpoint: string
+    try {
+      cdpEndpoint = await this.resolveCDPEndpoint(url, win)
+    } catch {
+      return
+    }
+    const existing = record.tabs.find((candidate) => candidate.tab_id === tabID)
+    if (existing) {
+      existing.url = url
+      existing.title = win.webContents.getTitle?.() || titleFromURL(url)
+      existing.cdp_endpoint = cdpEndpoint
+      record.active_tab_id = existing.tab_id
+      this.publish(record)
+      return
+    }
+    const tab: BrowserAgentTabRecord = {
+      tab_id: tabID,
+      window_id: windowID,
+      title: win.webContents.getTitle?.() || titleFromURL(url),
+      url,
+      marker_url: '',
+      cdp_endpoint: cdpEndpoint,
+      webContents: win.webContents,
+    }
+    record.tabs.push(tab)
+    record.active_tab_id = tab.tab_id
+    const publishIfRegistered = (): void => {
+      if (!record.tabs.some((candidate) => candidate.tab_id === tabID)) return
+      record.active_tab_id = tabID
+      this.publish(record)
+    }
+    win.webContents.on?.('page-title-updated', publishIfRegistered)
+    win.webContents.on?.('did-navigate', publishIfRegistered)
+    this.publish(record)
   }
 
   private async loadTabURL(tab: BrowserAgentTabRecord, url: string): Promise<void> {
@@ -419,6 +520,15 @@ export class BrowserAgentSessionManager implements BrowserAgentSessionManagerLik
       throw new BrowserAgentSessionError('session_not_ready', `Browser session has no tabs: ${record.session_id}`)
     }
     return tab
+  }
+
+  private activateWindowTab(record: BrowserAgentSessionRecord, windowID: string): void {
+    const tab = record.tabs.find((candidate) => candidate.window_id === windowID)
+    if (!tab) {
+      return
+    }
+    record.active_tab_id = tab.tab_id
+    this.publish(record)
   }
 
   private requireSession(input: Record<string, unknown>): BrowserAgentSessionRecord {
@@ -452,17 +562,41 @@ export class BrowserAgentSessionManager implements BrowserAgentSessionManagerLik
   }
 
   private showRecord(record: BrowserAgentSessionRecord): void {
-    if (!record.window.isDestroyed()) {
-      record.window.show()
-      record.window.focus?.()
-      record.visible = true
+    let shown = false
+    for (const win of record.windows.values()) {
+      if (win.isDestroyed()) continue
+      this.showWindow(win)
+      shown = true
     }
+    const primary = record.windows.get(record.window_id)
+    if (primary && !primary.isDestroyed()) {
+      primary.focus?.()
+    }
+    if (shown) record.visible = true
   }
 
   private hideRecord(record: BrowserAgentSessionRecord): void {
-    if (!record.window.isDestroyed()) {
-      record.window.hide?.()
-      record.visible = false
+    for (const win of record.windows.values()) {
+      this.hideWindow(win)
+    }
+    record.visible = false
+  }
+
+  private showWindow(win: BrowserAgentWindowLike): void {
+    if (win.isDestroyed()) return
+    win.show()
+  }
+
+  private hideWindow(win: BrowserAgentWindowLike): void {
+    if (win.isDestroyed()) return
+    win.hide?.()
+  }
+
+  private destroyRecordWindows(record: BrowserAgentSessionRecord): void {
+    for (const win of [...record.windows.values()]) {
+      if (!win.isDestroyed()) {
+        win.destroy()
+      }
     }
   }
 
@@ -473,14 +607,28 @@ export class BrowserAgentSessionManager implements BrowserAgentSessionManagerLik
     this.onSessionChanged?.(info)
   }
 
-  private handleWindowClosed(sessionID: string): void {
+  private handleWindowClosed(sessionID: string, windowID?: string): void {
     const record = this.sessionsByID.get(sessionID)
     if (!record) return
-    if (record.tabs.length > 0) {
+    const closedWindowID = windowID || record.window_id
+    record.windows.delete(closedWindowID)
+    this.sessionsByWindowID.delete(closedWindowID)
+    const primaryClosed = closedWindowID === record.window_id
+    if (primaryClosed || record.windows.size === 0) {
       record.visible = false
-      this.onSessionChanged?.({ ...publicSessionInfo(record), visible: false, closed: true })
+      if (record.tabs.length > 0) {
+        this.onSessionChanged?.({ ...publicSessionInfo(record), visible: false, closed: true })
+      }
+      this.forgetSession(sessionID)
+      this.destroyRecordWindows(record)
+      return
     }
-    this.forgetSession(sessionID)
+    record.tabs = record.tabs.filter((tab) => tab.window_id !== closedWindowID)
+    if (!record.tabs.some((tab) => tab.tab_id === record.active_tab_id)) {
+      record.active_tab_id = record.tabs[0]?.tab_id || ''
+    }
+    record.visible = [...record.windows.values()].some((win) => !win.isDestroyed() && win.isVisible?.() === true)
+    this.publish(record)
   }
 
   private forgetSession(sessionID: string): void {
@@ -489,7 +637,9 @@ export class BrowserAgentSessionManager implements BrowserAgentSessionManagerLik
       return
     }
     this.sessionsByID.delete(sessionID)
-    this.sessionsByWindowID.delete(record.window_id)
+    for (const windowID of record.windows.keys()) {
+      this.sessionsByWindowID.delete(windowID)
+    }
   }
 }
 
@@ -564,8 +714,37 @@ function publicTabInfo(record: BrowserAgentSessionRecord, tab: BrowserAgentTabRe
   }
 }
 
+function asBrowserAgentWindow(value: unknown): BrowserAgentWindowLike | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const candidate = value as Partial<BrowserAgentWindowLike>
+  if (typeof candidate.id !== 'number') return undefined
+  if (typeof candidate.show !== 'function') return undefined
+  if (typeof candidate.destroy !== 'function') return undefined
+  if (typeof candidate.isDestroyed !== 'function') return undefined
+  return candidate as BrowserAgentWindowLike
+}
+
+function windowOpenURL(details: unknown): string | undefined {
+  if (!details || typeof details !== 'object') return undefined
+  const url = (details as Record<string, unknown>).url
+  return typeof url === 'string' && url.trim() ? url.trim() : undefined
+}
+
 function optionalString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizeSessionIDs(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const sessionIDs: string[] = []
+  for (const item of value) {
+    const sessionID = optionalString(item)
+    if (!sessionID || seen.has(sessionID)) continue
+    seen.add(sessionID)
+    sessionIDs.push(sessionID)
+  }
+  return sessionIDs
 }
 
 function validateHTTPURL(raw: string, field: string): void {

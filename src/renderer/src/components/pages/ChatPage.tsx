@@ -2607,6 +2607,26 @@ function extractBrowserSessionIDs(messages: Message[]): string[] {
   return ids
 }
 
+function normalizeBrowserSessionIDs(sessionIDs: string[]): string[] {
+  const seen = new Set<string>()
+  const next: string[] = []
+  for (const raw of sessionIDs) {
+    const sessionID = typeof raw === 'string' ? raw.trim() : ''
+    if (!sessionID || seen.has(sessionID)) continue
+    seen.add(sessionID)
+    next.push(sessionID)
+  }
+  return next
+}
+
+async function closeBrowserSessionIDs(sessionIDs: string[]): Promise<boolean> {
+  if (!window.browserAgent) return false
+  const targetIDs = normalizeBrowserSessionIDs(sessionIDs)
+  if (targetIDs.length === 0) return true
+  const res = await window.browserAgent.closeSessions(targetIDs)
+  return res.ok
+}
+
 function upsertBrowserSession(
   sessions: BrowserSessionCardState[],
   incoming: BrowserSessionCardState,
@@ -2633,6 +2653,7 @@ function useBrowserSessionIndicator(sessionIDs: string[]): {
   session?: BrowserSessionCardState
   busy: boolean
   toggle: () => Promise<void>
+  closeAll: () => Promise<void>
 } {
   const [sessions, setSessions] = useState<BrowserSessionCardState[]>([])
   const [busy, setBusy] = useState(false)
@@ -2701,51 +2722,86 @@ function useBrowserSessionIndicator(sessionIDs: string[]): {
     }
   }, [busy, session])
 
-  return { session, busy, toggle }
+  const closeAll = useCallback(async () => {
+    const targetIDs = sessions
+      .filter((candidate) => !candidate.closed)
+      .map((candidate) => candidate.session_id)
+    if (busy || targetIDs.length === 0) return
+    setBusy(true)
+    try {
+      if (await closeBrowserSessionIDs(targetIDs)) {
+        setSessions([])
+      }
+    } finally {
+      setBusy(false)
+    }
+  }, [busy, sessions])
+
+  return { session, busy, toggle, closeAll }
 }
 
 function BrowserSessionIndicatorButton({
   session,
   busy,
   onToggle,
+  onCloseAll,
 }: {
   session?: BrowserSessionCardState
   busy: boolean
   onToggle: () => void
+  onCloseAll: () => void
 }) {
   const { t } = useTranslation()
   if (!session) return null
   const visible = session.visible
   const title = visible ? t('chat.composer.browserHideAria') : t('chat.composer.browserShowAria')
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      disabled={busy || session.closed === true}
+    <span
       className={cn(
-        'inline-flex h-11 min-w-11 items-center justify-center gap-2 rounded-full border px-3 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60',
+        'group inline-flex h-11 items-center overflow-hidden rounded-full border text-xs font-medium transition-colors focus-within:ring-2 focus-within:ring-ring/30',
         visible
           ? 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-900/50 dark:bg-blue-950/30 dark:text-blue-200 dark:hover:bg-blue-950/50'
           : 'border-border bg-muted/45 text-muted-foreground hover:border-primary/50 hover:text-foreground'
       )}
-      title={title}
-      aria-label={title}
-      aria-pressed={visible}
     >
-      <span className="relative inline-flex h-5 w-5 items-center justify-center">
-        <Globe size={16} aria-hidden="true" />
-        <span
-          className={cn(
-            'absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-card',
-            visible ? 'bg-blue-500' : 'bg-slate-400'
-          )}
-          aria-hidden="true"
-        />
-      </span>
-      <span className="hidden sm:inline">
-        {visible ? t('chat.composer.browserVisible') : t('chat.composer.browserHidden')}
-      </span>
-    </button>
+      <button
+        type="button"
+        onClick={onToggle}
+        disabled={busy || session.closed === true}
+        className="inline-flex h-full min-w-11 items-center justify-center gap-2 px-3 transition-opacity disabled:cursor-not-allowed disabled:opacity-60"
+        title={title}
+        aria-label={title}
+        aria-pressed={visible}
+      >
+        <span className="relative inline-flex h-5 w-5 items-center justify-center">
+          <Globe size={16} aria-hidden="true" />
+          <span
+            className={cn(
+              'absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-card',
+              visible ? 'bg-blue-500' : 'bg-slate-400'
+            )}
+            aria-hidden="true"
+          />
+        </span>
+        <span className="hidden sm:inline">
+          {visible ? t('chat.composer.browserVisible') : t('chat.composer.browserHidden')}
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          if (window.confirm(t('chat.composer.browserCloseAllConfirm'))) {
+            onCloseAll()
+          }
+        }}
+        disabled={busy || session.closed === true}
+        className="inline-flex h-full w-0 items-center justify-center overflow-hidden border-l border-transparent text-muted-foreground opacity-0 transition-all duration-200 ease-out hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed group-hover:w-9 group-hover:border-current/10 group-hover:opacity-100 group-focus-within:w-9 group-focus-within:border-current/10 group-focus-within:opacity-100 dark:hover:bg-red-950/30 dark:hover:text-red-300"
+        title={t('chat.composer.browserCloseAllAria')}
+        aria-label={t('chat.composer.browserCloseAllAria')}
+      >
+        <X size={15} aria-hidden="true" />
+      </button>
+    </span>
   )
 }
 
@@ -6759,6 +6815,7 @@ export function ChatPage() {
       currentThinking: '',
       pauseReason: t('chat.status.stoppingSession'),
     }))
+    void closeBrowserSessionIDs(activeBrowserSessionIDs)
     void window.harnessclaw.stop(activeSessionId)
   }
 
@@ -7261,6 +7318,7 @@ export function ChatPage() {
                           session={browserSessionIndicator.session}
                           busy={browserSessionIndicator.busy}
                           onToggle={() => void browserSessionIndicator.toggle()}
+                          onCloseAll={() => void browserSessionIndicator.closeAll()}
                         />
                       </div>
 

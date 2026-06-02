@@ -128,14 +128,18 @@ tools:
     # max_results: 5
   browser_agent:
     enabled: false
-    binary_path: "agent-browser"
-    default_visibility: "visible"
+    default_visibility: "hidden"
     max_steps: 30
-    preferred_search_engine: "duckduckgo"
     blocked_domains: []
     human_takeover_timeout: "120s"
     session_persistence: true
     cli_timeout: "25s"
+    skill_max_bytes: 200000
+    content_boundaries: true
+    max_output_bytes: 50000
+    allowed_domains: []
+    action_policy_path: ""
+    confirm_actions: []
 
 # --- Skills ---
 # Skills are loaded from the directories listed below, in order.
