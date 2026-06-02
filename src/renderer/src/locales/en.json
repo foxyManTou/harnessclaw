@@ -1502,6 +1502,9 @@
       "opsDetail": "Focused on stable collaboration and batch processing, maintaining concise default values."
     },
     "modelIdHint": "Use a model ID supported by your provider, e.g. gpt-4o-mini or claude-sonnet-4.",
+    "modelGroupLabel": "Group name (optional)",
+    "modelGroupHint": "Optional display group; only affects how the client lists models. The engine ignores it. Leave blank to auto-infer by series.",
+    "modelGroupPlaceholder": "e.g. GPT-5",
     "prompts": {
       "categories": {
         "dev": "Engineering",

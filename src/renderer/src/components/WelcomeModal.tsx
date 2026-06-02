@@ -24,6 +24,7 @@ interface SetupDraft {
   apiBase: string
   apiKey: string
   modelId: string
+  modelGroup: string
   // Only meaningful when engineMode === 'custom' (mirrors Settings'
   // protocol toggle inside the custom-provider editor).
   protocol: ProtocolProviderKey
@@ -111,12 +112,18 @@ function buildWelcomeProviders(
   const apiBase = draft.apiBase.trim() || getDefaultApiBase(key)
   const apiKey = draft.apiKey.trim()
   const modelId = draft.modelId.trim()
+  const modelGroup = draft.modelGroup.trim()
+
+  const models = modelId
+    ? [{ id: modelId, enabled: true, ...(modelGroup ? { group: modelGroup } : {}) }]
+    : []
 
   providers[key] = {
     ...providers[key],
     apiKey,
     apiBase: apiBase || providers[key].apiBase,
     model: modelId || null,
+    models,
     protocol: key === 'anthropic' ? 'anthropic' : key === 'custom' ? draft.protocol : 'openai',
     enabled: true,
   }
@@ -170,6 +177,10 @@ async function registerEngineProvider(
   const baseUrl = cfg.apiBase?.trim() || PROVIDER_DEFAULT_BASES[key] || ''
   const apiKey = cfg.apiKey.trim()
   const modelId = cfg.model?.trim() || ''
+  // Find the matching ProviderModelEntry to pull its group (set via
+  // buildWelcomeProviders); fall back to empty if missing.
+  const modelEntry = cfg.models?.find((m) => m.id === modelId)
+  const group = modelEntry?.group?.trim() || ''
   if (!apiKey && !baseUrl) return
 
   try {
@@ -216,6 +227,7 @@ async function registerEngineProvider(
       name: endpointName,
       model: modelId,
       disabled: false,
+      ...(group ? { group } : {}),
     })
     let endpointReady = epRes.ok
     if (!epRes.ok) {
@@ -357,6 +369,7 @@ export function WelcomeModal() {
     apiBase: '',
     apiKey: '',
     modelId: '',
+    modelGroup: '',
     protocol: 'openai',
     profile: null,
   })
@@ -597,6 +610,13 @@ export function WelcomeModal() {
                 placeholder="model-id"
                 required
                 onChange={(v) => setDraft((d) => ({ ...d, modelId: v }))}
+              />
+              <FormField
+                label={t('welcome.modelGroupLabel')}
+                hint={t('welcome.modelGroupHint')}
+                value={draft.modelGroup}
+                placeholder={t('welcome.modelGroupPlaceholder')}
+                onChange={(v) => setDraft((d) => ({ ...d, modelGroup: v }))}
               />
             </div>
           )}

@@ -499,6 +499,10 @@ interface ProviderEndpointInfo {
   in_chain: boolean
   // Engine 2026-05-19+: per-endpoint capability override tokens.
   model_type?: string[]
+  // Engine 2026-05-30+: optional display-only tag persisted on the
+  // endpoint. Empty/absent = ungrouped (renderer falls back to
+  // getModelGroup(id) heuristic).
+  group?: string
 }
 
 interface ProviderInfo {
@@ -557,6 +561,8 @@ interface EndpointCreatePayload {
   temperature?: number
   enable_thinking?: boolean | null
   disabled?: boolean
+  // Engine 2026-05-30+: optional display-only tag. Free text.
+  group?: string
 }
 
 interface EndpointPatchPayload {
@@ -567,6 +573,9 @@ interface EndpointPatchPayload {
   disabled?: boolean
   // Engine 2026-05-19+: per-endpoint capability override. [] clears it.
   model_type?: string[]
+  // Engine 2026-05-30+: free-text display tag. Sending `""` explicitly
+  // clears it (yaml key removed); omitting leaves it unchanged.
+  group?: string
 }
 
 // Engine 2026-05-14+ top-level `agent` block. The full payload of

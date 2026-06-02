@@ -237,7 +237,14 @@ function parseGitHubRepository(inputUrl: string, branchOverride?: string, basePa
   basePath: string
 } {
   const trimmed = normalizeRepositoryUrl(inputUrl)
-  const normalizedInput = /^[\w.-]+\/[\w.-]+$/.test(trimmed) ? `https://github.com/${trimmed}` : trimmed
+  let normalizedInput: string
+  if (/^[\w.-]+\/[\w.-]+$/.test(trimmed)) {
+    normalizedInput = `https://github.com/${trimmed}`
+  } else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
+    normalizedInput = trimmed
+  } else {
+    normalizedInput = `https://${trimmed.replace(/^\/+/, '')}`
+  }
   const url = new URL(normalizedInput)
   if (url.hostname !== 'github.com') {
     throw new Error('当前仅支持 GitHub 仓库地址')

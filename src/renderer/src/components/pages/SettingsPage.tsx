@@ -572,6 +572,24 @@ function ProviderStrategyRow({
   const getPrimarySpotlightTargets = useCallback((): HTMLElement[] => {
     return primarySelectRef.current ? [primarySelectRef.current] : []
   }, [])
+  // Renderer-side enabled flags live in appConfig.modelProviders.<key>.enabled.
+  // We treat that as a hard override on top of the engine's
+  // `provider.disabled`: if the user turned the ON badge OFF in the
+  // Models tab, the provider must NEVER appear in the primary picker
+  // even if the engine's PATCH /providers/{p} {disabled:true} hasn't
+  // been confirmed yet (e.g. the PATCH failed with 404 because the
+  // provider was never created engine-side, or returned an older
+  // payload without the `disabled` field).
+  const { config: appConfigData } = useAppConfig()
+  const rendererDisabledNames = useMemo(() => {
+    const out = new Set<string>()
+    const modelProviders = asRecord((appConfigData ?? {}).modelProviders)
+    for (const [name, raw] of Object.entries(modelProviders)) {
+      const rec = asRecord(raw)
+      if (rec.enabled === false) out.add(name)
+    }
+    return out
+  }, [appConfigData])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [chain, setChain] = useState<string[]>([])
   const [chainEntries, setChainEntries] = useState<ProviderChainEntry[]>([])
@@ -642,6 +660,13 @@ function ProviderStrategyRow({
   const allEndpoints = useMemo<ProviderEndpointRef[]>(() => {
     const out: ProviderEndpointRef[] = []
     for (const p of providers) {
+      // Effective disabled = engine flag OR renderer-side enabled=false.
+      // The latter catches the gap where the user turned OFF the
+      // provider in the Models tab but the engine response either
+      // hasn't refreshed yet or didn't include the `disabled` field at
+      // all (older engines / 404 on PATCH because the provider was
+      // never created server-side).
+      const effectiveDisabled = p.disabled === true || rendererDisabledNames.has(p.name)
       for (const e of p.endpoints) {
         out.push({
           ref: `${p.name}:${e.name}`,
@@ -649,12 +674,12 @@ function ProviderStrategyRow({
           endpoint: e.name,
           model: e.model,
           type: p.type,
-          providerDisabled: p.disabled === true,
+          providerDisabled: effectiveDisabled,
         })
       }
     }
     return out
-  }, [providers])
+  }, [providers, rendererDisabledNames])
 
   // Split the flat chain into primary (head) + fallback (tail). The
   // engine enforces `fallback_chain` entries must be distinct from
@@ -2637,6 +2662,78 @@ function ModelSection({
     })()
   }, [])
 
+  // After the initial local-yaml load completes, reconcile each
+  // ProviderModelEntry.group with the engine's authoritative value
+  // (engine = source of truth per spec 2026-05-30). When the engine
+  // has no group but the renderer does, we keep the renderer value
+  // AND backfill it via a PATCH so the engine becomes consistent on
+  // the next round-trip. Engine unreachable → silent skip; user can
+  // still operate offline.
+  //
+  // Single-shot: runs once after `loading` flips to false. Doing this
+  // here (vs inside the initial-load effect) keeps the initial-load
+  // code synchronous in its UI commit and avoids racing the
+  // setProviders update.
+  const reconciledGroupsRef = useRef(false)
+  useEffect(() => {
+    if (loading || reconciledGroupsRef.current) return
+    reconciledGroupsRef.current = true
+    void (async () => {
+      const res = await window.agentApi.listProviders()
+      if (!res.ok) return // engine unreachable — silent skip
+      const enginePayload = Array.isArray(res.data?.providers) ? res.data.providers : []
+
+      // Compute reconciled state + backfill plan purely against the
+      // current `providers` closure value. Doing this OUTSIDE the
+      // setProviders updater avoids React 18 Strict Mode dev's
+      // double-invoke trap (which would push backfill entries twice
+      // and fire 2× PATCHes). Safe because `loading === false` means
+      // the initial-load setProviders has already committed.
+      const next = { ...providers }
+      const backfillPlan: Array<{ provider: ManagedProviderKey; endpoint: string; group: string }> = []
+      let mutated = false
+      for (const ep of enginePayload) {
+        const pname = ep.name as ManagedProviderKey
+        if (!isManagedProviderKey(pname)) continue
+        const slot = next[pname]
+        if (!slot) continue
+        let slotMutated = false
+        const updatedModels = slot.models.map((m) => {
+          const match = ep.endpoints.find((e) => e.name === m.id)
+          if (!match) return m
+          const engineGroup = (match.group ?? '').trim()
+          const localGroup = m.group?.trim() ?? ''
+          if (engineGroup) {
+            // Engine authoritative — overwrite when different.
+            if (engineGroup === localGroup) return m
+            slotMutated = true
+            return { ...m, group: engineGroup }
+          }
+          // Engine empty + local non-empty → keep local, schedule backfill PATCH.
+          if (localGroup) {
+            backfillPlan.push({
+              provider: pname,
+              endpoint: match.name,
+              group: localGroup,
+            })
+          }
+          return m
+        })
+        if (slotMutated) {
+          next[pname] = { ...slot, models: updatedModels }
+          mutated = true
+        }
+      }
+      if (mutated) setProviders(next)
+      // Fire-and-forget backfill; ignore individual failures so one bad
+      // endpoint doesn't block the rest. Failures (e.g. 404) just mean
+      // the field stays unsynced; the next manual edit will pick it up.
+      for (const item of backfillPlan) {
+        void window.agentApi.patchEndpoint(item.provider, item.endpoint, { group: item.group })
+      }
+    })()
+  }, [loading, providers])
+
   // Persist only the renderer-side UI state (appConfig). The engine YAML
   // is owned by the Providers Management API — every mutation goes
   // through the HTTP endpoints (PATCH /providers, POST/PATCH/DELETE
@@ -2817,6 +2914,7 @@ function ModelSection({
       modelId: string,
       maxTokens?: number,
       tags?: string[],
+      group?: string,
     ): Promise<void> => {
       // Guard: the engine rejects POST endpoint when the provider entry
       // doesn't exist. Create it first if needed.
@@ -2828,6 +2926,7 @@ function ModelSection({
         model: string
         max_tokens?: number
         disabled?: boolean
+        group?: string
       } = {
         name: modelId,
         model: modelId,
@@ -2836,6 +2935,8 @@ function ModelSection({
         disabled: false,
       }
       if (typeof maxTokens === 'number' && maxTokens > 0) payload.max_tokens = maxTokens
+      // POST has no "clear" state — omit empty to avoid sending group: "".
+      if (group !== undefined && group !== '') payload.group = group
       const res = await window.agentApi.createEndpoint(key, payload)
       let endpointReady = res.ok
 
@@ -2850,9 +2951,12 @@ function ModelSection({
         if (list.ok && list.data.endpoints.some((e) => e.name === modelId)) {
           endpointReady = true
           // Endpoint already on engine — make sure it's not paused.
-          // The user clicked enable, so reset `disabled=false`.
+          // The user clicked enable, so reset `disabled=false`. Forward
+          // group too — this is still an enable path, so empty means
+          // "no group requested" (not a 3-state clear).
           const patchRes = await window.agentApi.patchEndpoint(key, modelId, {
             disabled: false,
+            ...(group !== undefined && group !== '' ? { group } : {}),
           })
           if (!patchRes.ok && patchRes.status !== 404 && patchRes.status !== 0) {
             reportHotReloadError(
@@ -2965,7 +3069,7 @@ function ModelSection({
       key: ManagedProviderKey,
       previousId: string,
       nextId: string,
-      patch: { model?: string; max_tokens?: number; model_type?: string[] },
+      patch: { model?: string; max_tokens?: number; model_type?: string[]; group?: string },
     ): Promise<void> => {
       if (previousId !== nextId) {
         // Renames are local-only now. The original endpoint stays on
@@ -3032,7 +3136,10 @@ function ModelSection({
     const currentModels = providers[selectedProvider]?.models
     if (currentModels && currentModels.length > 0) return
     autoRefreshedRef.current.add(selectedProvider)
-    void handleFetchModels()
+    // Auto-refresh: preserve tombstones so a stale fetch doesn't
+    // resurrect entries the user 🗑-removed in this session (e.g.,
+    // when navigating Models tab away & back triggers a fresh mount).
+    void handleFetchModels({ autoRefresh: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, selectedProvider, providers])
 
@@ -3348,7 +3455,7 @@ function ModelSection({
     setTimeout(() => setTestState('idle'), 2500)
   }
 
-  const handleFetchModels = async () => {
+  const handleFetchModels = async (opts: { autoRefresh?: boolean } = {}) => {
     // Snapshot the provider we're fetching for. The actual model-list
     // merge happens via setProviders((prev) => ...) below so we
     // reconcile against the *latest* state — important because the
@@ -3356,14 +3463,16 @@ function ModelSection({
     // flight (race condition that previously revived deleted entries).
     const targetProvider = selectedProvider
 
-    // Clear this provider's tombstones — a manual refresh is the user's
-    // explicit "give me the full registry view" intent, so previously-
-    // deleted ids should be eligible to re-appear. Without this,
-    // 🗑 + 刷新 looks like the refresh did nothing because every
-    // deleted entry stays suppressed. Auto-refresh (the useEffect at
-    // mount) keeps the tombstones so a stale fetch can't revive an
-    // entry mid-delete.
-    deletedModelIdsRef.current.delete(targetProvider)
+    // Tombstone policy depends on the trigger:
+    //   - Manual refresh (button click): clear tombstones — the user
+    //     explicitly asked for the full registry view, so previously-
+    //     deleted ids should be eligible to re-appear.
+    //   - Auto refresh (on mount when the provider has no models yet):
+    //     preserve tombstones — otherwise navigating Models tab away
+    //     & back would silently revive entries the user just removed.
+    if (!opts.autoRefresh) {
+      deletedModelIdsRef.current.delete(targetProvider)
+    }
 
     setModelFetchState('loading')
     try {
@@ -3409,22 +3518,23 @@ function ModelSection({
         return tags
       }
 
-      // Track whether we *added* any registry-new entries (only after
-      // reconciling against latest state — see below). Used for the
-      // success toast.
-      let addedCount = 0
-      let finalLength = 0
-
-      setProviders((prev) => {
-        const current = prev[targetProvider]
-        if (!current) return prev
-
+      // Pure merge: given the *current* model list + the registry
+      // payload + tombstones, return the next list and a count of
+      // genuinely-new registry entries. Called twice — once with the
+      // closure snapshot (for the toast counters, since React's setState
+      // updater runs at commit time, not synchronously) and once
+      // inside the setProviders updater so the persisted state reflects
+      // the *latest* prev (correct under concurrent edits).
+      const mergeWithRegistry = (existingModels: ProviderModelEntry[]): {
+        merged: ProviderModelEntry[]
+        addedCount: number
+      } => {
         const merged: ProviderModelEntry[] = []
         const seenIds = new Set<string>()
 
         // First include existing entries in their current order,
         // enriching registry-known ones.
-        for (const existing of current.models) {
+        for (const existing of existingModels) {
           const match = filtered.find((m) => m.model_id === existing.id)
           if (match) {
             const entry: ProviderModelEntry = { id: existing.id }
@@ -3449,11 +3559,8 @@ function ModelSection({
         const tombstones = deletedModelIdsRef.current.get(targetProvider) ?? new Set<string>()
 
         // Append registry entries that aren't in seenIds and weren't
-        // explicitly tombstoned. This is the fix for the
-        // "deleted-then-revived" race: a fetch in flight when the
-        // user 🗑'd a model used to come back with that model in the
-        // payload and re-add it as "new from registry".
-        addedCount = 0
+        // explicitly tombstoned.
+        let addedCount = 0
         for (const m of filtered) {
           if (seenIds.has(m.model_id)) continue
           if (tombstones.has(m.model_id)) continue
@@ -3467,7 +3574,22 @@ function ModelSection({
           addedCount++
         }
 
-        finalLength = merged.length
+        return { merged, addedCount }
+      }
+
+      // Toast counts must be computed BEFORE setProviders schedules a
+      // re-render — the updater closure that mutates external vars
+      // doesn't run until React commits, which is AFTER setToastNotice
+      // would read them. So we compute against the current snapshot
+      // here, and re-merge inside setProviders for state correctness.
+      const snapshotEntries = providers[targetProvider]?.models ?? []
+      const { addedCount, merged: snapshotMerged } = mergeWithRegistry(snapshotEntries)
+      const finalLength = snapshotMerged.length
+
+      setProviders((prev) => {
+        const current = prev[targetProvider]
+        if (!current) return prev
+        const { merged } = mergeWithRegistry(current.models)
         const updated: Record<ManagedProviderKey, ProviderConfig> = {
           ...prev,
           [targetProvider]: {
@@ -3537,9 +3659,11 @@ function ModelSection({
       if (previousEntry?.enabled) {
         const visible = addModelTags.filter((t) => VISIBLE_MODEL_TYPE_TOKENS.has(t))
         const modelType = [...visible, ...hiddenModelTypeTokens]
+        const groupValue = addModelGroup.trim()
         void hotPatchEndpoint(selectedProvider, editingModelId, id, {
           model: id,
           model_type: modelType,
+          group: groupValue, // "" 显式清空, 与后端三态语义一致
         })
       }
       closeAddModal()
@@ -3670,7 +3794,14 @@ function ModelSection({
     // open the edit form just to push capability flags through.
     if (willEnable) {
       const tags = previousEntry?.tags
-      void hotCreateEndpoint(selectedProvider, id, undefined, tags)
+      void hotCreateEndpoint(
+        selectedProvider,
+        id,
+        undefined,
+        tags,
+        // omit empty — POST has no clear semantics.
+        previousEntry?.group?.trim() || undefined,
+      )
     } else {
       void hotSetEndpointDisabled(selectedProvider, id, true)
     }
@@ -4014,7 +4145,7 @@ function ModelSection({
                   </div>
                   <button
                     type="button"
-                    onClick={handleFetchModels}
+                    onClick={() => handleFetchModels()}
                     disabled={modelFetchState === 'loading'}
                     title={t('models.modelsLabel')}
                     className={cn(

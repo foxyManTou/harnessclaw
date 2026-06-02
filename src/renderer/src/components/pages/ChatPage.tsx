@@ -9978,7 +9978,7 @@ export function FilePreviewDrawer({
                 </button>
                 <span
                   role="tooltip"
-                  className="pointer-events-none absolute left-1/2 top-full z-20 mt-1.5 -translate-x-1/2 whitespace-nowrap rounded-md bg-foreground px-2 py-1 text-[11px] font-medium text-background opacity-0 shadow-sm transition-opacity duration-150 delay-[100ms] group-hover:opacity-100"
+                  className="pointer-events-none absolute left-1/2 top-full z-20 mt-1.5 -translate-x-1/2 whitespace-nowrap rounded-md bg-foreground px-2 py-1 text-[11px] font-medium text-background opacity-0 shadow-sm transition-opacity duration-150 delay-100 group-hover:opacity-100"
                 >
                   {t('chat.actions.copy')}
                 </span>
@@ -9995,7 +9995,7 @@ export function FilePreviewDrawer({
                 </button>
                 <span
                   role="tooltip"
-                  className="pointer-events-none absolute left-1/2 top-full z-20 mt-1.5 -translate-x-1/2 whitespace-nowrap rounded-md bg-foreground px-2 py-1 text-[11px] font-medium text-background opacity-0 shadow-sm transition-opacity duration-150 delay-[100ms] group-hover:opacity-100"
+                  className="pointer-events-none absolute left-1/2 top-full z-20 mt-1.5 -translate-x-1/2 whitespace-nowrap rounded-md bg-foreground px-2 py-1 text-[11px] font-medium text-background opacity-0 shadow-sm transition-opacity duration-150 delay-100 group-hover:opacity-100"
                 >
                   {t('chat.actions.export')}
                 </span>
