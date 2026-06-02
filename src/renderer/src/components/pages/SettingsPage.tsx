@@ -11,7 +11,7 @@ import {
   Pause, Play, RotateCcw, AlertTriangle,
   ChevronDown, ChevronRight, ExternalLink,
   SlidersHorizontal, RefreshCw, Settings2,
-  Globe, Sun, GripVertical, Plus,
+  Globe, Image, Sun, GripVertical, Plus,
   // Keyboard = typing hint icon shown inside the hotkey-capture input
   // while we're waiting for the user to press a combination.
   Keyboard,
@@ -33,6 +33,8 @@ import {
   buildAppProviderRaw,
   createEmptyProviderConfig,
   getEffectiveEngineType,
+  isAgentProviderKey,
+  isImageGenerationProviderKey,
   isManagedProviderKey,
   resolveProviderProtocol,
   type ManagedProviderKey,
@@ -1549,11 +1551,13 @@ const PROVIDER_LOGO_BG: Record<ManagedProviderKey, string> = {
   xunfei: '#1A6BFF',
   anthropic: '#F4F1EE',
   openai: '#000000',
+  'gpt-image': '#000000',
   google: '#FFFFFF',
   deepseek: '#4D6BFE',
   zhipu: '#3859FF',
   moonshot: '#6D28D9',
   minimax: '#00B97F',
+  doubao: '#111827',
   custom: '#F1F5F9',
 }
 
@@ -1679,11 +1683,13 @@ const PROVIDER_TO_BRAND: Record<ManagedProviderKey, BrandKey> = {
   xunfei: 'spark',
   anthropic: 'anthropic',
   openai: 'openai',
+  'gpt-image': 'openai',
   google: 'gemini',
   deepseek: 'deepseek',
   zhipu: 'glm',
   moonshot: 'kimi',
   minimax: 'minimax',
+  doubao: 'generic',
   custom: 'custom',
 }
 
@@ -1709,11 +1715,13 @@ const PROVIDER_APIKEY_PAGES: Record<ManagedProviderKey, string> = {
   xunfei: 'https://console.xfyun.cn/services/bm4',
   anthropic: 'https://console.anthropic.com/settings/keys',
   openai: 'https://platform.openai.com/api-keys',
+  'gpt-image': 'https://platform.openai.com/api-keys',
   google: 'https://aistudio.google.com/app/apikey',
   deepseek: 'https://platform.deepseek.com/api_keys',
   zhipu: 'https://open.bigmodel.cn/usercenter/apikeys',
   moonshot: 'https://platform.moonshot.cn/console/api-keys',
   minimax: 'https://platform.minimaxi.com/user-center/basic-information/interface-key',
+  doubao: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apikey',
   custom: '',
 }
 
@@ -1721,11 +1729,13 @@ const PROVIDER_DOCS_PAGES: Record<ManagedProviderKey, string> = {
   xunfei: 'https://www.xfyun.cn/doc/spark/X2-Flash.html',
   anthropic: 'https://docs.anthropic.com/',
   openai: 'https://platform.openai.com/docs',
+  'gpt-image': 'https://developers.openai.com/api/docs/models/gpt-image-2',
   google: 'https://ai.google.dev/gemini-api/docs',
   deepseek: 'https://api-docs.deepseek.com/',
   zhipu: 'https://open.bigmodel.cn/dev/api',
   moonshot: 'https://platform.moonshot.cn/docs',
   minimax: 'https://platform.minimaxi.com/document/',
+  doubao: 'https://www.volcengine.com/docs/82379/1824692',
   custom: '',
 }
 
@@ -1733,11 +1743,13 @@ const PROVIDER_MODELS_PAGES: Record<ManagedProviderKey, string> = {
   xunfei: 'https://www.xfyun.cn/doc/spark/X2-Flash.html',
   anthropic: 'https://docs.anthropic.com/en/docs/about-claude/models',
   openai: 'https://platform.openai.com/docs/models',
+  'gpt-image': 'https://developers.openai.com/api/docs/models/gpt-image-2',
   google: 'https://ai.google.dev/gemini-api/docs/models/gemini',
   deepseek: 'https://api-docs.deepseek.com/quick_start/pricing',
   zhipu: 'https://open.bigmodel.cn/dev/howuse/model',
   moonshot: 'https://platform.moonshot.cn/docs/pricing/chat',
   minimax: 'https://platform.minimaxi.com/document/Models',
+  doubao: 'https://www.volcengine.com/docs/82379/1824692',
   custom: '',
 }
 
@@ -2017,6 +2029,7 @@ interface ModelTagDef {
 const MODEL_TAGS: ModelTagDef[] = [
   { key: 'vision',    label: 'models.capabilities.vision',    icon: Eye,    fg: '#16A34A', bg: '#DCFCE7', border: '#BBF7D0' },
   { key: 'search',    label: 'models.capabilities.search',    icon: Globe,  fg: '#2563EB', bg: '#DBEAFE', border: '#BFDBFE' },
+  { key: 'image_generation', label: 'models.capabilities.image_generation', icon: Image, fg: '#BE123C', bg: '#FFE4E6', border: '#FDA4AF' },
   { key: 'reasoning', label: 'models.capabilities.reasoning', icon: Sun,    fg: '#7C3AED', bg: '#EDE9FE', border: '#DDD6FE' },
   { key: 'tools',     label: 'models.capabilities.tools',     icon: Wrench, fg: '#EA580C', bg: '#FFEDD5', border: '#FED7AA' },
 ]
@@ -2034,6 +2047,14 @@ const VISIBLE_MODEL_TYPE_TOKENS: ReadonlySet<string> = new Set(MODEL_TAGS.map((t
 
 const MODEL_TAG_MAP: Record<string, ModelTagDef> =
   Object.fromEntries(MODEL_TAGS.map((t) => [t.key, t]))
+
+function isImageGenerationModel(entry?: ProviderModelEntry | null): boolean {
+  return Boolean(entry?.tags?.includes('image_generation'))
+}
+
+function isAgentRoutableModel(provider: ManagedProviderKey, entry?: ProviderModelEntry | null): boolean {
+  return !isImageGenerationProviderKey(provider) && !isImageGenerationModel(entry)
+}
 
 function ModelTagBadge({ tagKey, t }: { tagKey: string; t: (key: string) => string }) {
   const [tooltipPos, setTooltipPos] = useState<{ left: number; top: number } | null>(null)
@@ -2465,7 +2486,9 @@ function getManagedDefaultProvider(
 ): ManagedProviderKey {
   const modelProviders = getAppModelProvidersConfig(appConfig)
   const defaultSelection = modelProviders.defaultSelection
-  if (typeof defaultSelection === 'string' && isManagedProviderKey(defaultSelection)) {
+  if (typeof defaultSelection === 'string'
+      && isManagedProviderKey(defaultSelection)
+      && isAgentProviderKey(defaultSelection)) {
     return defaultSelection
   }
 
@@ -2478,7 +2501,7 @@ function getManagedDefaultProvider(
   }
 
   const appDefault = asRecord(asRecord(appConfig.agents).defaults).provider
-  if (typeof appDefault === 'string' && isManagedProviderKey(appDefault)) {
+  if (typeof appDefault === 'string' && isManagedProviderKey(appDefault) && isAgentProviderKey(appDefault)) {
     return appDefault
   }
 
@@ -2900,14 +2923,18 @@ function ModelSection({
     [providers, reportHotReloadError, t],
   )
 
-  // POST /api/v1/providers/{p}/endpoints + append to fallback-chain.
+  // POST /api/v1/providers/{p}/endpoints + append Agent-routable models
+  // to fallback-chain. Image-generation-only models are still persisted as
+  // disabled endpoints so credentials/model metadata remain editable here,
+  // but they are not eligible for Agent LLM routing.
   // When POST returns 400 update_failed (most often because the
   // endpoint already exists on the engine side), we transparently fall
   // back to "just add to chain" instead of surfacing an error.
   //
   // Idempotent: when the endpoint already exists we still PATCH
-  // `disabled=false` so re-enabling a previously-paused model
-  // (the new canonical flow) routes again.
+  // `disabled` to match the model category, so re-enabling a previously
+  // paused Agent model routes again while image-generation models stay
+  // out of the dispatcher.
   const hotCreateEndpoint = useCallback(
     async (
       key: ManagedProviderKey,
@@ -2915,6 +2942,7 @@ function ModelSection({
       maxTokens?: number,
       tags?: string[],
       group?: string,
+      routeToAgent = true,
     ): Promise<void> => {
       // Guard: the engine rejects POST endpoint when the provider entry
       // doesn't exist. Create it first if needed.
@@ -2930,9 +2958,10 @@ function ModelSection({
       } = {
         name: modelId,
         model: modelId,
-        // Explicitly mark active so the dispatcher routes immediately
-        // (engine default is also false; we send it for clarity).
-        disabled: false,
+        // Image-generation-only models are configuration entries for
+        // future image tools, not Agent LLM endpoints. Keep them out of
+        // the dispatcher even when the Settings row is enabled.
+        disabled: !routeToAgent,
       }
       if (typeof maxTokens === 'number' && maxTokens > 0) payload.max_tokens = maxTokens
       // POST has no "clear" state — omit empty to avoid sending group: "".
@@ -2950,12 +2979,11 @@ function ModelSection({
         const list = await window.agentApi.listEndpoints(key)
         if (list.ok && list.data.endpoints.some((e) => e.name === modelId)) {
           endpointReady = true
-          // Endpoint already on engine — make sure it's not paused.
-          // The user clicked enable, so reset `disabled=false`. Forward
-          // group too — this is still an enable path, so empty means
-          // "no group requested" (not a 3-state clear).
+          // Endpoint already on engine — make sure its route state matches
+          // the model category. Forward group too; empty still means "no
+          // group requested" here, not a 3-state clear.
           const patchRes = await window.agentApi.patchEndpoint(key, modelId, {
-            disabled: false,
+            disabled: !routeToAgent,
             ...(group !== undefined && group !== '' ? { group } : {}),
           })
           if (!patchRes.ok && patchRes.status !== 404 && patchRes.status !== 0) {
@@ -2997,6 +3025,8 @@ function ModelSection({
           }
         }
       }
+
+      if (!routeToAgent) return
 
       // After create (or detected-exists), append to chain so the
       // endpoint actually routes. Canonical chain ref separator is `:`
@@ -3222,11 +3252,11 @@ function ModelSection({
       // Promote / demote `defaultProvider` to stay aligned with the
       // enabled set.
       let nextDefault = defaultProvider
-      if (nextEnabled && !Object.values(prev).some((p) => p.enabled)) {
+      if (nextEnabled && isAgentProviderKey(key) && !Object.values(prev).some((p) => p.enabled)) {
         nextDefault = key
       } else if (!nextEnabled && defaultProvider === key) {
         const nextActive = (Object.entries(updated) as Array<[ManagedProviderKey, ProviderConfig]>)
-          .find(([, p]) => p.enabled)
+          .find(([providerKey, p]) => p.enabled && isAgentProviderKey(providerKey))
         if (nextActive) nextDefault = nextActive[0]
       }
       if (nextDefault !== defaultProvider) setDefaultProvider(nextDefault)
@@ -3312,18 +3342,23 @@ function ModelSection({
         const chainNeedsRefs: string[] = []
         for (const model of previous.models) {
           if (!model.enabled) continue
+          const routeToAgent = isAgentRoutableModel(key, model)
+          const modelType = model.tags?.filter((tag) => VISIBLE_MODEL_TYPE_TOKENS.has(tag)) ?? []
           const ep = endpointMap.get(model.id)
           if (!ep) {
             const postRes = await window.agentApi.createEndpoint(key, {
               name: model.id,
               model: model.id,
-              disabled: false,
+              disabled: !routeToAgent,
             })
             if (!postRes.ok && postRes.status !== 404 && postRes.status !== 0) {
               if (postRes.status === 400 && /exist/i.test(postRes.message || '')) {
                 // race: another caller created it — make sure it's
-                // not paused.
-                await window.agentApi.patchEndpoint(key, model.id, { disabled: false })
+                // in the route state this model type expects.
+                await window.agentApi.patchEndpoint(key, model.id, {
+                  disabled: !routeToAgent,
+                  ...(modelType.length > 0 ? { model_type: modelType } : {}),
+                })
               } else {
                 reportHotReloadError(
                   t('models.hotReloadLabels.modelCreate'),
@@ -3333,26 +3368,33 @@ function ModelSection({
                 continue
               }
             }
+            if (postRes.ok && modelType.length > 0) {
+              await window.agentApi.patchEndpoint(key, model.id, { model_type: modelType })
+            }
             // Engine doesn't auto-chain newly created endpoints —
             // collect refs and PUT them in one chain update at the end.
-            chainNeedsRefs.push(`${key}:${model.id}`)
-          } else if (ep.disabled === true) {
-            const patchRes = await window.agentApi.patchEndpoint(key, model.id, {
-              disabled: false,
-            })
-            if (!patchRes.ok && patchRes.status !== 404 && patchRes.status !== 0
-                && patchRes.error !== 'update_failed') {
-              reportHotReloadError(
-                t('models.hotReloadLabels.enable'),
-                patchRes.error || `http_${patchRes.status}`,
-                patchRes.message,
-              )
+            if (routeToAgent) chainNeedsRefs.push(`${key}:${model.id}`)
+          } else {
+            const patchBody: { disabled?: boolean; model_type?: string[] } = {}
+            if (routeToAgent && ep.disabled === true) patchBody.disabled = false
+            if (!routeToAgent && ep.disabled !== true) patchBody.disabled = true
+            if (modelType.length > 0) patchBody.model_type = modelType
+            if (Object.keys(patchBody).length > 0) {
+              const patchRes = await window.agentApi.patchEndpoint(key, model.id, patchBody)
+              if (
+                !patchRes.ok
+                && patchRes.status !== 404
+                && patchRes.status !== 0
+                && patchRes.error !== 'update_failed'
+              ) {
+                reportHotReloadError(
+                  t('models.hotReloadLabels.enable'),
+                  patchRes.error || `http_${patchRes.status}`,
+                  patchRes.message,
+                )
+              }
             }
-            if (!ep.in_chain) chainNeedsRefs.push(`${key}:${model.id}`)
-          } else if (!ep.in_chain) {
-            // Already enabled engine-side but somehow not in chain
-            // (e.g. yaml-edited). Just queue the chain append.
-            chainNeedsRefs.push(`${key}:${model.id}`)
+            if (routeToAgent && !ep.in_chain) chainNeedsRefs.push(`${key}:${model.id}`)
           }
         }
 
@@ -3525,6 +3567,7 @@ function ModelSection({
         const tags: string[] = []
         if (s.vision === true) tags.push('vision')
         if (s.web_search === true) tags.push('search')
+        if (s.image_generation === true) tags.push('image_generation')
         if (s.reasoning === true) tags.push('reasoning')
         if (s.function_calling === true) tags.push('tools')
         return tags
@@ -3816,6 +3859,7 @@ function ModelSection({
         tags,
         // omit empty — POST has no clear semantics.
         previousEntry?.group?.trim() || undefined,
+        isAgentRoutableModel(selectedProvider, previousEntry),
       )
     } else {
       void hotSetEndpointDisabled(selectedProvider, id, true)
@@ -3857,7 +3901,9 @@ function ModelSection({
   // Show the "去配置 Agent LLM 节点" affordance only when the
   // currently-viewed provider is enabled — the prompt is contextual
   // to the row the user is editing, not the global enabled set.
-  const selectedProviderEnabled = Boolean(providers[selectedProvider]?.enabled)
+  const selectedProviderEnabled = Boolean(
+    providers[selectedProvider]?.enabled && isAgentProviderKey(selectedProvider)
+  )
 
   if (loading) {
     return <div className="flex items-center justify-center py-20"><Loader2 size={20} className="animate-spin text-muted-foreground" /></div>

@@ -460,6 +460,7 @@ interface RegistryModelSupports {
   audio_input?: boolean
   audio_output?: boolean
   video_input?: boolean
+  image_generation?: boolean
   streaming?: boolean
   function_calling?: boolean
   parallel_function_calling?: boolean

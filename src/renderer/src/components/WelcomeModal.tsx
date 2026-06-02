@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { ArrowRight, Check, ChevronLeft, ChevronRight, Languages, Loader2, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
+  AGENT_PROVIDER_KEYS,
   MANAGED_PROVIDER_KEYS,
   PROVIDER_DEFAULT_BASES,
   PROVIDER_DISPLAY_NAMES,
@@ -304,19 +305,21 @@ export function WelcomeModal() {
     }
   }
 
-  // Full managed provider list — mirrors `Settings > Models` so the
-  // welcome flow can configure any vendor the user normally would.
+  // Agent provider list — image-generation-only providers still live in
+  // Settings > Models, but the first-run flow configures the primary LLM brain.
   // Detail strings live under `welcome.engineOptions.<key>Detail` in
   // both locale files.
   const ENGINE_DETAIL_KEYS: Record<ManagedProviderKey, string> = useMemo(() => ({
     xunfei: 'welcome.engineOptions.xunfeiDetail',
     anthropic: 'welcome.engineOptions.anthropicDetail',
     openai: 'welcome.engineOptions.openaiDetail',
+    'gpt-image': 'welcome.engineOptions.gptImageDetail',
     google: 'welcome.engineOptions.googleDetail',
     deepseek: 'welcome.engineOptions.deepseekDetail',
     zhipu: 'welcome.engineOptions.zhipuDetail',
     moonshot: 'welcome.engineOptions.moonshotDetail',
     minimax: 'welcome.engineOptions.minimaxDetail',
+    doubao: 'welcome.engineOptions.doubaoDetail',
     custom: 'welcome.engineOptions.customDetail',
   }), [])
 
@@ -324,7 +327,7 @@ export function WelcomeModal() {
     key: ManagedProviderKey
     title: string
     detail: string
-  }> = useMemo(() => MANAGED_PROVIDER_KEYS.map((key) => ({
+  }> = useMemo(() => AGENT_PROVIDER_KEYS.map((key) => ({
     key,
     title: PROVIDER_DISPLAY_NAMES[key],
     detail: t(ENGINE_DETAIL_KEYS[key]),
@@ -1049,5 +1052,4 @@ function FormField({
     </label>
   )
 }
-
 
