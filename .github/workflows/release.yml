@@ -172,7 +172,7 @@ jobs:
           echo "Using macOS notarization mode: ${MACOS_NOTARIZE_MODE:-disabled}"
 
       - name: Prepare bundled native binaries
-        run: node scripts/prepare-bundled-binaries.cjs --platform "${{ matrix.platform }}" --arch "${{ matrix.arch }}" --output-dir resources/bin
+        run: node scripts/prepare-bundled-binaries.cjs --engine-source release --platform "${{ matrix.platform }}" --arch "${{ matrix.arch }}" --output-dir resources/bin
 
       - name: Prepare GitHub release notes
         if: github.ref_type == 'tag'
