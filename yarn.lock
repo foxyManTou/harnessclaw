@@ -5683,6 +5683,11 @@ ws@^8.19.0:
   version "8.21.0"
   resolved "8.21.0"
 
+"xlsx@npm:@e965/xlsx@0.20.3":
+  version "0.20.3"
+  resolved "https://registry.npmmirror.com/@e965/xlsx/-/xlsx-0.20.3.tgz#4577f2c7691137d3e315018218ba2b76e4721ba9"
+  integrity sha512-703RN/3OdsRD5mtse2HBX7Um7xwaP9tlswEG6svOtjqokXoX7rJdQj7DyabD2I+xk22RgaIIU+R6BHgkpZGB/w==
+
 xmlbuilder@^10.0.0:
   version "10.1.1"
   resolved "https://registry.npmmirror.com/xmlbuilder/-/xmlbuilder-10.1.1.tgz"
