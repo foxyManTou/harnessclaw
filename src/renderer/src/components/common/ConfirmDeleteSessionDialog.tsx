@@ -39,12 +39,16 @@ export function ConfirmDeleteSessionDialog({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/45 px-4 backdrop-blur-[6px]"
+      className="titlebar-no-drag fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/45 px-4 backdrop-blur-[6px]"
+      style={{ WebkitAppRegion: 'no-drag', pointerEvents: 'auto' } as React.CSSProperties}
       onPointerDown={(event) => {
         if (event.target === event.currentTarget) onCancel()
       }}
     >
-      <div className="w-full max-w-sm rounded-2xl border border-border/80 bg-card p-5 shadow-[0_24px_80px_rgba(15,23,42,0.28)]">
+      <div
+        className="w-full max-w-sm rounded-2xl border border-border/80 bg-card p-5 shadow-[0_24px_80px_rgba(15,23,42,0.28)]"
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+      >
         <div className="flex items-start gap-3">
           <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-2xl bg-red-50 text-red-500 dark:bg-red-950/40 dark:text-red-300">
             <Trash2 size={18} />
