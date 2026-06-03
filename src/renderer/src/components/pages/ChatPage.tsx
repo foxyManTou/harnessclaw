@@ -7704,6 +7704,33 @@ function MessageBubble({
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
   const now = useSharedNowTicker(!isUser && !isSystem && !!message.isStreaming, 250)
+  const openFilePathPreview = useCallback(async (path: string) => {
+    try {
+      const result = await window.files.read(path)
+      const resolvedPath = result?.path || path
+      const fileName = resolvedPath.split(/[\\/]/).pop() || resolvedPath
+      onOpenFilePreview({
+        path: resolvedPath,
+        fileName,
+        operation: 'read_file',
+        content: result?.ok && typeof result.content === 'string' ? result.content : '',
+        isBinary: result?.ok ? Boolean(result.isBinary) : false,
+        previewKind: result?.ok && (result.previewKind === 'html' || result.previewKind === 'text')
+          ? result.previewKind
+          : undefined,
+      })
+    } catch (error) {
+      console.error('Failed to read file path:', error)
+      const fileName = path.split(/[\\/]/).pop() || path
+      onOpenFilePreview({ path, fileName, operation: 'read_file', content: '' })
+    }
+  }, [onOpenFilePreview])
+
+  // Link-open preference + drawer opener consumed by the markdown `a`
+  // renderer below. Lifted out of the JSX so we don't subscribe to context
+  // for every paragraph/code-block React renders.
+  const linkOpenBehavior = useContext(LinkOpenBehaviorContext)
+  const openWebPreviewFromCtx = useOpenWebPreview()
   const systemNotice = message.systemNotice
   const errorNotice = systemNotice?.kind === 'error' ? systemNotice : undefined
 
@@ -7916,34 +7943,6 @@ function MessageBubble({
   if (!isUser && !isSystem && !message.isStreaming && !hasRenderableAssistantBody) {
     return null
   }
-
-  const openFilePathPreview = useCallback(async (path: string) => {
-    try {
-      const result = await window.files.read(path)
-      const resolvedPath = result?.path || path
-      const fileName = resolvedPath.split(/[\\/]/).pop() || resolvedPath
-      onOpenFilePreview({
-        path: resolvedPath,
-        fileName,
-        operation: 'read_file',
-        content: result?.ok && typeof result.content === 'string' ? result.content : '',
-        isBinary: result?.ok ? Boolean(result.isBinary) : false,
-        previewKind: result?.ok && (result.previewKind === 'html' || result.previewKind === 'text')
-          ? result.previewKind
-          : undefined,
-      })
-    } catch (error) {
-      console.error('Failed to read file path:', error)
-      const fileName = path.split(/[\\/]/).pop() || path
-      onOpenFilePreview({ path, fileName, operation: 'read_file', content: '' })
-    }
-  }, [onOpenFilePreview])
-
-  // Link-open preference + drawer opener consumed by the markdown `a`
-  // renderer below. Lifted out of the JSX so we don't subscribe to context
-  // for every paragraph/code-block React renders.
-  const linkOpenBehavior = useContext(LinkOpenBehaviorContext)
-  const openWebPreviewFromCtx = useOpenWebPreview()
 
   const renderTextBlock = (text: string, key: string, compact = false) => (
     <div
