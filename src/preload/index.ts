@@ -110,6 +110,19 @@ const harnessclawAPI = {
   },
 }
 
+const browserAgentAPI = {
+  listSessions: () => ipcRenderer.invoke('browser-agent:listSessions'),
+  setVisibility: (sessionId: string, visible: boolean) =>
+    ipcRenderer.invoke('browser-agent:setVisibility', { session_id: sessionId, visible }),
+  closeAll: () => ipcRenderer.invoke('browser-agent:closeAll'),
+  closeSessions: (sessionIds: string[]) => ipcRenderer.invoke('browser-agent:closeSessions', { session_ids: sessionIds }),
+  onSessionChanged: (callback: (session: Record<string, unknown>) => void) => {
+    const handler = (_: Electron.IpcRendererEvent, session: Record<string, unknown>): void => callback(session)
+    ipcRenderer.on('browser-agent:session-changed', handler)
+    return () => ipcRenderer.removeListener('browser-agent:session-changed', handler)
+  },
+}
+
 const skillsAPI = {
   list: () => ipcRenderer.invoke('skills:list'),
   read: (id: string) => ipcRenderer.invoke('skills:read', id),
@@ -395,6 +408,7 @@ if (process.contextIsolated) {
     contextBridge.exposeInMainWorld('appConfig', appConfigAPI)
     contextBridge.exposeInMainWorld('appRuntime', appRuntimeAPI)
     contextBridge.exposeInMainWorld('harnessclaw', harnessclawAPI)
+    contextBridge.exposeInMainWorld('browserAgent', browserAgentAPI)
     contextBridge.exposeInMainWorld('skills', skillsAPI)
     contextBridge.exposeInMainWorld('db', dbAPI)
     contextBridge.exposeInMainWorld('files', filesAPI)
@@ -424,6 +438,8 @@ if (process.contextIsolated) {
   window.appRuntime = appRuntimeAPI
   // @ts-ignore (define in dts)
   window.harnessclaw = harnessclawAPI
+  // @ts-ignore (define in dts)
+  window.browserAgent = browserAgentAPI
   // @ts-ignore (define in dts)
   window.skills = skillsAPI
   // @ts-ignore (define in dts)

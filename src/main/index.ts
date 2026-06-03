@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, dialog, nativeImage, screen, globalShortcut, protocol, net } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog, nativeImage, screen, globalShortcut, protocol, net, type BrowserWindowConstructorOptions } from 'electron'
 import { basename, dirname, extname, isAbsolute, join } from 'path'
 import { homedir } from 'os'
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync, copyFileSync } from 'fs'
@@ -6,6 +6,11 @@ import { spawn, ChildProcess } from 'child_process'
 import { pathToFileURL } from 'url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { harnessclawClient } from './harnessclaw'
+import {
+  BrowserAgentSessionManager,
+  DEFAULT_BROWSER_AGENT_CDP_PORT,
+  createRemoteDebuggingTargetResolver,
+} from './browser-agent-session'
 import { manuallyCheckForUpdates, setupAutoUpdater } from './updater'
 import {
   HARNESSCLAW_DIR,
@@ -1132,6 +1137,66 @@ function createWindow(): BrowserWindow {
 
 let launcherWindow: BrowserWindow | null = null
 let mainWindowRef: BrowserWindow | null = null
+let browserAgentSessions: BrowserAgentSessionManager | null = null
+
+function extractBrowserAgentSessionIDsFromMessages(messages: ReturnType<typeof getMessages>): string[] {
+  const seen = new Set<string>()
+  const sessionIDs: string[] = []
+  for (const message of messages) {
+    const results = message.tools.filter((tool) => tool.type === 'result')
+    for (const tool of message.tools) {
+      if (tool.type !== 'call' || (tool.name || '').toLowerCase() !== 'browser_session_create') continue
+      const result = results.find((candidate) => candidate.call_id === tool.call_id)
+      const sessionID = extractBrowserAgentSessionIDFromResult(result)
+      if (!sessionID || seen.has(sessionID)) continue
+      seen.add(sessionID)
+      sessionIDs.push(sessionID)
+    }
+  }
+  return sessionIDs
+}
+
+function extractBrowserAgentSessionIDFromResult(
+  result?: ReturnType<typeof getMessages>[number]['tools'][number],
+): string {
+  if (!result) return ''
+  const metadata = parseJSONRecord(result.metadata_json)
+  const metadataSessionID = typeof metadata.session_id === 'string' ? metadata.session_id.trim() : ''
+  if (metadataSessionID) return metadataSessionID
+  const content = parseJSONRecord(result.content)
+  return typeof content.session_id === 'string' ? content.session_id.trim() : ''
+}
+
+function parseJSONRecord(raw: string | null): Record<string, unknown> {
+  if (!raw) return {}
+  try {
+    return asRecord(JSON.parse(raw))
+  } catch {
+    return {}
+  }
+}
+
+function closeBrowserAgentSessionsForDbSession(sessionId: string): void {
+  try {
+    if (!browserAgentSessions) return
+    const targetIDs = extractBrowserAgentSessionIDsFromMessages(getMessages(sessionId))
+    if (targetIDs.length === 0) return
+    browserAgentSessions.closeSessions({ session_ids: targetIDs })
+  } catch (error) {
+    writeAppLog('warn', 'browser-agent.session', 'Failed to close browser sessions for chat session', {
+      session_id: sessionId,
+      error: String(error),
+    })
+  }
+}
+
+function broadcastBrowserAgentSessionChanged(session: Record<string, unknown>): void {
+  BrowserWindow.getAllWindows().forEach((win) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('browser-agent:session-changed', session)
+    }
+  })
+}
 
 const LAUNCHER_WIDTH = 710
 const LAUNCHER_HEIGHT = 90
@@ -1140,6 +1205,22 @@ const LAUNCHER_HEIGHT = 90
 // The user pins this at 140px so the bar feels anchored just below
 // the top of the screen — a familiar Spotlight-ish anchor point.
 const LAUNCHER_TOP_OFFSET = 140
+
+function resolveBrowserAgentCDPPort(): number {
+  const raw = process.env.HARNESSCLAW_BROWSER_CDP_PORT
+  if (!raw) {
+    return DEFAULT_BROWSER_AGENT_CDP_PORT
+  }
+  const parsed = Number(raw)
+  if (Number.isInteger(parsed) && parsed > 0 && parsed < 65536) {
+    return parsed
+  }
+  return DEFAULT_BROWSER_AGENT_CDP_PORT
+}
+
+const browserAgentCDPPort = resolveBrowserAgentCDPPort()
+app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1')
+app.commandLine.appendSwitch('remote-debugging-port', String(browserAgentCDPPort))
 
 function createLauncherWindow(): BrowserWindow {
   // Anchor the launcher to whichever display currently has the cursor
@@ -1403,6 +1484,45 @@ app.whenReady().then(() => {
       is_first_launch: isFirstLaunchForTelemetry,
       startup_duration_ms: Date.now() - appStartTimestamp,
     },
+  })
+
+  browserAgentSessions = new BrowserAgentSessionManager({
+    createWindow: (options) => new BrowserWindow(options as BrowserWindowConstructorOptions),
+    resolveCDPEndpoint: createRemoteDebuggingTargetResolver(browserAgentCDPPort),
+    onSessionChanged: (session) => broadcastBrowserAgentSessionChanged(session as unknown as Record<string, unknown>),
+  })
+  harnessclawClient.setBrowserAgentSessionManager(browserAgentSessions)
+  writeAppLog('info', 'browser-agent.session', 'Browser Agent client session manager ready', {
+    cdp_port: browserAgentCDPPort,
+  })
+
+  ipcMain.handle('browser-agent:listSessions', () => {
+    return { ok: true, sessions: browserAgentSessions?.listSessions() || [] }
+  })
+  ipcMain.handle('browser-agent:setVisibility', (_, input: Record<string, unknown>) => {
+    if (!browserAgentSessions) return { ok: false, error: 'Browser Agent session manager is not available' }
+    try {
+      return { ok: true, session: browserAgentSessions.setVisibility(input || {}) }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+  ipcMain.handle('browser-agent:closeAll', () => {
+    if (!browserAgentSessions) return { ok: false, error: 'Browser Agent session manager is not available' }
+    try {
+      browserAgentSessions.closeAll()
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+  ipcMain.handle('browser-agent:closeSessions', (_, input: Record<string, unknown>) => {
+    if (!browserAgentSessions) return { ok: false, error: 'Browser Agent session manager is not available' }
+    try {
+      return { ok: true, result: browserAgentSessions.closeSessions(input || {}) }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
   })
 
   app.on('browser-window-created', (_, window) => {
@@ -1748,6 +1868,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle('db:deleteSession', (_, sessionId: string) => {
     try {
+      closeBrowserAgentSessionsForDbSession(sessionId)
       dbDeleteSession(sessionId)
       broadcastDbSessionsChanged()
       return { ok: true }
@@ -1805,6 +1926,9 @@ app.whenReady().then(() => {
 
   ipcMain.handle('db:deleteProject', (_, projectId: string) => {
     try {
+      for (const session of listProjectSessions(projectId)) {
+        closeBrowserAgentSessionsForDbSession(session.session_id)
+      }
       const result = softDeleteProjectWithSessions(projectId)
       broadcastDbSessionsChanged()
       return { ok: true, ...result }
@@ -3098,6 +3222,9 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('harnessclaw:stop', async (_, sessionId?: string) => {
+    if (sessionId) {
+      closeBrowserAgentSessionsForDbSession(sessionId)
+    }
     const ok = await harnessclawClient.stop(sessionId)
     return ok ? { ok: true } : { ok: false, error: 'Failed to interrupt Harnessclaw session' }
   })
@@ -3260,6 +3387,8 @@ app.on('before-quit', (event) => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
+  browserAgentSessions?.closeAll()
+  harnessclawClient.setBrowserAgentSessionManager(null)
   harnessclawClient.disconnect()
   stopHarnessclawEngine()
   closeDb()

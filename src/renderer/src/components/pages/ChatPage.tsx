@@ -2558,6 +2558,253 @@ function getToolResultSummary(t: (key: string) => string, call: ToolActivity, re
   return t('chat.toolResult.stepCompleted')
 }
 
+interface BrowserSessionCardState {
+  session_id: string
+  visible: boolean
+  closed?: boolean
+}
+
+function normalizeBrowserSession(raw: unknown): BrowserSessionCardState | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const candidate = raw as Record<string, unknown>
+  const sessionID = typeof candidate.session_id === 'string' ? candidate.session_id.trim() : ''
+  if (!sessionID) return undefined
+  return {
+    session_id: sessionID,
+    visible: candidate.visible === true,
+    closed: candidate.closed === true,
+  }
+}
+
+function extractBrowserSessionID(call: ToolActivity, result?: ToolActivity): string {
+  if ((call.name || '').toLowerCase() !== 'browser_session_create') return ''
+  const metadataSessionID = typeof result?.metadata?.session_id === 'string' ? result.metadata.session_id.trim() : ''
+  if (metadataSessionID) return metadataSessionID
+  if (!result?.content) return ''
+  try {
+    const parsed = JSON.parse(result.content) as Record<string, unknown>
+    return typeof parsed.session_id === 'string' ? parsed.session_id.trim() : ''
+  } catch {
+    return ''
+  }
+}
+
+function extractBrowserSessionIDs(messages: Message[]): string[] {
+  const seen = new Set<string>()
+  const ids: string[] = []
+  for (const message of messages) {
+    const tools = message.tools || []
+    const results = tools.filter((tool) => tool.type === 'result')
+    for (const tool of tools) {
+      if (tool.type !== 'call') continue
+      const result = results.find((candidate) => candidate.callId === tool.callId)
+      const sessionID = extractBrowserSessionID(tool, result)
+      if (!sessionID || seen.has(sessionID)) continue
+      seen.add(sessionID)
+      ids.push(sessionID)
+    }
+  }
+  return ids
+}
+
+function normalizeBrowserSessionIDs(sessionIDs: string[]): string[] {
+  const seen = new Set<string>()
+  const next: string[] = []
+  for (const raw of sessionIDs) {
+    const sessionID = typeof raw === 'string' ? raw.trim() : ''
+    if (!sessionID || seen.has(sessionID)) continue
+    seen.add(sessionID)
+    next.push(sessionID)
+  }
+  return next
+}
+
+async function closeBrowserSessionIDs(sessionIDs: string[]): Promise<boolean> {
+  if (!window.browserAgent) return false
+  const targetIDs = normalizeBrowserSessionIDs(sessionIDs)
+  if (targetIDs.length === 0) return true
+  const res = await window.browserAgent.closeSessions(targetIDs)
+  return res.ok
+}
+
+function upsertBrowserSession(
+  sessions: BrowserSessionCardState[],
+  incoming: BrowserSessionCardState,
+): BrowserSessionCardState[] {
+  if (incoming.closed) {
+    return sessions.filter((session) => session.session_id !== incoming.session_id)
+  }
+  const index = sessions.findIndex((session) => session.session_id === incoming.session_id)
+  if (index === -1) return [...sessions, incoming]
+  const next = sessions.slice()
+  next[index] = incoming
+  return next
+}
+
+function selectBrowserSession(sessions: BrowserSessionCardState[]): BrowserSessionCardState | undefined {
+  const active = sessions.filter((session) => !session.closed)
+  for (let index = active.length - 1; index >= 0; index -= 1) {
+    if (active[index].visible) return active[index]
+  }
+  return active[active.length - 1]
+}
+
+function useBrowserSessionIndicator(sessionIDs: string[]): {
+  session?: BrowserSessionCardState
+  busy: boolean
+  toggle: () => Promise<void>
+  closeAll: () => Promise<void>
+} {
+  const [sessions, setSessions] = useState<BrowserSessionCardState[]>([])
+  const [busy, setBusy] = useState(false)
+  const session = useMemo(() => selectBrowserSession(sessions), [sessions])
+  const sessionIDKey = useMemo(() => sessionIDs.join('\n'), [sessionIDs])
+
+  useEffect(() => {
+    const allowed = new Set(sessionIDs)
+    if (allowed.size === 0) {
+      setSessions([])
+      return undefined
+    }
+    if (!window.browserAgent) {
+      setSessions([])
+      return undefined
+    }
+    const browserAgent = window.browserAgent
+    let cancelled = false
+    const refresh = async (): Promise<void> => {
+      const res = await browserAgent.listSessions()
+      if (cancelled || !res.ok) return
+      const nextSessions = (res.sessions || [])
+        .map(normalizeBrowserSession)
+        .filter((item): item is BrowserSessionCardState => Boolean(item && !item.closed && allowed.has(item.session_id)))
+      setSessions(nextSessions)
+    }
+    void refresh()
+    const unsubscribe = browserAgent.onSessionChanged((next) => {
+      if (cancelled) return
+      const normalized = normalizeBrowserSession(next)
+      if (!normalized) return
+      if (!allowed.has(normalized.session_id)) return
+      setSessions((current) => upsertBrowserSession(current, normalized))
+    })
+    const refreshOnFocus = (): void => {
+      void refresh()
+    }
+    const refreshOnVisibilityChange = (): void => {
+      if (document.visibilityState === 'visible') void refresh()
+    }
+    window.addEventListener('focus', refreshOnFocus)
+    document.addEventListener('visibilitychange', refreshOnVisibilityChange)
+    const refreshTimer = window.setInterval(refreshOnFocus, 1500)
+    return () => {
+      cancelled = true
+      unsubscribe()
+      window.removeEventListener('focus', refreshOnFocus)
+      document.removeEventListener('visibilitychange', refreshOnVisibilityChange)
+      window.clearInterval(refreshTimer)
+    }
+  }, [sessionIDKey])
+
+  const toggle = useCallback(async () => {
+    if (!session || !window.browserAgent || busy) return
+    if (session?.closed) return
+    setBusy(true)
+    try {
+      const nextVisible = !(session?.visible ?? false)
+      const res = await window.browserAgent.setVisibility(session.session_id, nextVisible)
+      if (res.ok && res.session) {
+        const normalized = normalizeBrowserSession(res.session)
+        if (normalized) setSessions((current) => upsertBrowserSession(current, normalized))
+      }
+    } finally {
+      setBusy(false)
+    }
+  }, [busy, session])
+
+  const closeAll = useCallback(async () => {
+    const targetIDs = sessions
+      .filter((candidate) => !candidate.closed)
+      .map((candidate) => candidate.session_id)
+    if (busy || targetIDs.length === 0) return
+    setBusy(true)
+    try {
+      if (await closeBrowserSessionIDs(targetIDs)) {
+        setSessions([])
+      }
+    } finally {
+      setBusy(false)
+    }
+  }, [busy, sessions])
+
+  return { session, busy, toggle, closeAll }
+}
+
+function BrowserSessionIndicatorButton({
+  session,
+  busy,
+  onToggle,
+  onCloseAll,
+}: {
+  session?: BrowserSessionCardState
+  busy: boolean
+  onToggle: () => void
+  onCloseAll: () => void
+}) {
+  const { t } = useTranslation()
+  if (!session) return null
+  const visible = session.visible
+  const title = visible ? t('chat.composer.browserHideAria') : t('chat.composer.browserShowAria')
+  return (
+    <span
+      className={cn(
+        'group inline-flex h-11 items-center overflow-hidden rounded-full border text-xs font-medium transition-colors focus-within:ring-2 focus-within:ring-ring/30',
+        visible
+          ? 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-900/50 dark:bg-blue-950/30 dark:text-blue-200 dark:hover:bg-blue-950/50'
+          : 'border-border bg-muted/45 text-muted-foreground hover:border-primary/50 hover:text-foreground'
+      )}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        disabled={busy || session.closed === true}
+        className="inline-flex h-full min-w-11 items-center justify-center gap-2 px-3 transition-opacity disabled:cursor-not-allowed disabled:opacity-60"
+        title={title}
+        aria-label={title}
+        aria-pressed={visible}
+      >
+        <span className="relative inline-flex h-5 w-5 items-center justify-center">
+          <Globe size={16} aria-hidden="true" />
+          <span
+            className={cn(
+              'absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-card',
+              visible ? 'bg-blue-500' : 'bg-slate-400'
+            )}
+            aria-hidden="true"
+          />
+        </span>
+        <span className="hidden sm:inline">
+          {visible ? t('chat.composer.browserVisible') : t('chat.composer.browserHidden')}
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          if (window.confirm(t('chat.composer.browserCloseAllConfirm'))) {
+            onCloseAll()
+          }
+        }}
+        disabled={busy || session.closed === true}
+        className="inline-flex h-full w-0 items-center justify-center overflow-hidden border-l border-transparent text-muted-foreground opacity-0 transition-all duration-200 ease-out hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed group-hover:w-9 group-hover:border-current/10 group-hover:opacity-100 group-focus-within:w-9 group-focus-within:border-current/10 group-focus-within:opacity-100 dark:hover:bg-red-950/30 dark:hover:text-red-300"
+        title={t('chat.composer.browserCloseAllAria')}
+        aria-label={t('chat.composer.browserCloseAllAria')}
+      >
+        <X size={15} aria-hidden="true" />
+      </button>
+    </span>
+  )
+}
+
 /**
  * v2 §12 ErrorInfo presentation table. Maps `error.type` → icon, short
  * label, and a Tailwind color key consumed by `getToolErrorColorClasses`.
@@ -4055,6 +4302,11 @@ export function ChatPage() {
   }, [updateSession])
 
   const activeSession = getSession(activeSessionId)
+  const activeBrowserSessionIDs = useMemo(
+    () => extractBrowserSessionIDs(activeSession.messages),
+    [activeSession.messages],
+  )
+  const browserSessionIndicator = useBrowserSessionIndicator(activeBrowserSessionIDs)
   const hasActiveSessionMessages = activeSession.messages.some((message) => message.role !== 'system')
   const hasDraftComposerState = Boolean(input.trim()) || attachments.length > 0 || selectedSkills.length > 0
   const isActiveSessionPristine =
@@ -6563,6 +6815,7 @@ export function ChatPage() {
       currentThinking: '',
       pauseReason: t('chat.status.stoppingSession'),
     }))
+    void closeBrowserSessionIDs(activeBrowserSessionIDs)
     void window.harnessclaw.stop(activeSessionId)
   }
 
@@ -7051,15 +7304,23 @@ export function ChatPage() {
                       }}
                     />
                     <div className="mt-2 flex items-center justify-between gap-3">
-                      <button
-                        onClick={handlePickFiles}
-                        disabled={activeSession.isProcessing || harnessclawStatus !== 'connected'}
-                        className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-border text-muted-foreground transition-colors hover:border-primary hover:text-foreground disabled:opacity-50"
-                        title={t('chat.composer.addFilesAria')}
-                        aria-label={t('chat.composer.addFilesAria')}
-                      >
-                        <Plus size={16} />
-                      </button>
+                      <div className="flex min-w-0 items-center gap-2">
+                        <button
+                          onClick={handlePickFiles}
+                          disabled={activeSession.isProcessing || harnessclawStatus !== 'connected'}
+                          className="inline-flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground transition-colors hover:border-primary hover:text-foreground disabled:opacity-50"
+                          title={t('chat.composer.addFilesAria')}
+                          aria-label={t('chat.composer.addFilesAria')}
+                        >
+                          <Plus size={16} />
+                        </button>
+                        <BrowserSessionIndicatorButton
+                          session={browserSessionIndicator.session}
+                          busy={browserSessionIndicator.busy}
+                          onToggle={() => void browserSessionIndicator.toggle()}
+                          onCloseAll={() => void browserSessionIndicator.closeAll()}
+                        />
+                      </div>
 
                       <div className="flex items-center gap-2">
                         {activeSession.isProcessing && !isAwaitingPromptResponse ? (
