@@ -11,12 +11,11 @@ server:
 log:
   level: "info"          # debug, info, warn, error
   format: "console"      # json, console
-  output: "stdout"       # stdout, file
-  # file_path: "/var/log/harnessclaw-engine/service.log"
+  output: "file"       # stdout, file
+  file_path: "~/.harnessclaw/log/service.log"
 
 # --- LLM Provider (all providers are routed through Bifrost SDK) ---
 llm:
-  default_provider: "anthropic"              # Switch to "openai" to use OpenAI
   max_retries: 3
   api_timeout: "900s"
   # First-byte watchdog: max wait between Chat() returning and the first
@@ -31,19 +30,15 @@ llm:
   #   X-Custom: "value"
   providers:
     anthropic:
-      base_url: "your-api-url"
-      api_key: "your-api-key-here"
-      model: "your-model-id"
-      max_tokens: 16384
-#    openai:
-#      base_url: "https://api.openai.com"
-#      api_key: "your-openai-api-key"
-#      model: "gpt-4o"
-#      max_tokens: 4096
+
+agent:
+  max_tokens: 50000
+  temperature: 0.35
+  context_window: 100000
+  max_turns: 50
 
 # --- Query Engine ---
 engine:
-  max_turns: 50
   auto_compact_threshold: 0.8
   tool_timeout: "120s"
 
@@ -149,13 +144,7 @@ tools:
 # Default: ~/.harnessclaw/workspace/skills/ (when dirs is null or empty)
 skills:
   dirs:
-  # - "~/.harnessclaw/workspace/skills/"
-
-# --- Console Management API ---
-console:
-  enabled: true
-  host: "0.0.0.0"
-  port: 8090
+   - "~/.harnessclaw/workspace/skills/"
 
 # --- Permission ---
 permission:
