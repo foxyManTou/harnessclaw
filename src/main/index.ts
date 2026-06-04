@@ -1,6 +1,7 @@
 import { app, shell, BrowserWindow, ipcMain, dialog, nativeImage, screen, globalShortcut, protocol, net, type BrowserWindowConstructorOptions } from 'electron'
 import { basename, dirname, extname, isAbsolute, join } from 'path'
 import { homedir } from 'os'
+import { connect as connectTcp } from 'node:net'
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync, copyFileSync } from 'fs'
 import { spawn, ChildProcess } from 'child_process'
 import { pathToFileURL } from 'url'
@@ -954,6 +955,52 @@ function startHarnessclawEngine(): void {
   })
 }
 
+function resolveEngineProbeTarget(): { host: string; port: number } {
+  const cfg = asRecord(readEngineConfig({}))
+  const channels = asRecord(cfg.channels)
+  const websocket = asRecord(channels.websocket)
+  const rawHost = typeof websocket.host === 'string' && websocket.host.trim()
+    ? websocket.host.trim()
+    : '127.0.0.1'
+  const host = rawHost === '0.0.0.0' || rawHost === '::' ? '127.0.0.1' : rawHost
+  const port = typeof websocket.port === 'number' && Number.isFinite(websocket.port)
+    ? websocket.port
+    : 8081
+  return { host, port }
+}
+
+function probeEnginePort(host: string, port: number, timeoutMs = 350): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connectTcp({ host, port })
+    let settled = false
+    const finish = (ok: boolean) => {
+      if (settled) return
+      settled = true
+      socket.removeAllListeners()
+      socket.destroy()
+      resolve(ok)
+    }
+    socket.setTimeout(timeoutMs)
+    socket.once('connect', () => finish(true))
+    socket.once('error', () => finish(false))
+    socket.once('timeout', () => finish(false))
+  })
+}
+
+async function shouldUseExistingDevEngine(): Promise<boolean> {
+  if (!is.dev || app.isPackaged) return false
+  if (process.env.HARNESSCLAW_FORCE_BUNDLED_ENGINE === '1') return false
+  const { host, port } = resolveEngineProbeTarget()
+  const available = await probeEnginePort(host, port)
+  if (available) {
+    writeAppLog('info', 'harnessclaw-engine.process', 'Using existing dev engine', {
+      host,
+      port,
+    })
+  }
+  return available
+}
+
 async function stopHarnessclawEngine(): Promise<void> {
   if (!harnessclawEngineProcess) return
   writeAppLog('info', 'harnessclaw-engine.process', 'Stopping engine')
@@ -999,17 +1046,23 @@ async function stopHarnessclawEngine(): Promise<void> {
   }
 }
 
-function startHarnessclawRuntime(): void {
-  startHarnessclawEngine()
+async function startHarnessclawRuntimeAsync(): Promise<void> {
+  if (!(await shouldUseExistingDevEngine())) {
+    startHarnessclawEngine()
+  }
   harnessclawClient.connect()
   broadcastAppRuntimeStatus()
+}
+
+function startHarnessclawRuntime(): void {
+  void startHarnessclawRuntimeAsync()
 }
 
 async function restartHarnessclawRuntime(): Promise<void> {
   harnessclawClient.disconnect()
   broadcastAppRuntimeStatus()
   await stopHarnessclawEngine()
-  startHarnessclawRuntime()
+  await startHarnessclawRuntimeAsync()
 }
 
 function createWindow(): BrowserWindow {

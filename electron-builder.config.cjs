@@ -25,11 +25,6 @@ const config = {
       filter: ['**/*'],
     },
     {
-      from: 'resources/skills',
-      to: 'skills',
-      filter: ['**/*'],
-    },
-    {
       from: 'resources/templates',
       to: 'templates',
       filter: ['**/*'],
