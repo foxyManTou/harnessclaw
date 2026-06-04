@@ -12,8 +12,12 @@ Recommended naming:
 
 Runtime lookup rules:
 
-1. Main process first looks for `<baseName>-<platform>-<arch>[.exe]`
-2. If not found, it falls back to `<baseName>[.exe]`
+1. Main process looks for the exact `<baseName>-<platform>-<arch>[.exe]`
+   filename for bundled engine binaries.
+2. Browser Agent uses its upstream platform token for Windows:
+   `agent-browser-win32-x64.exe`.
+3. Missing bundled runtime files are treated as packaging errors; runtime lookup
+   does not scan this directory for legacy names.
 
 Examples:
 
@@ -22,7 +26,9 @@ Examples:
 
 Browser Agent note:
 
-- `agent-browser-*` is resolved by `harnessclaw-engine` directly from this directory.
+- The desktop app resolves the packaged `agent-browser-*` file here and injects
+  its absolute path through `CLAUDE_TOOLS_BROWSER_AGENT_BINARY_PATH` before
+  starting `harnessclaw-engine`.
 - It does not use PATH or the JavaScript shim at runtime.
 - `harnessclaw-runtime-manifest.json` may be generated here to cache the prepared
   runtime version; it is produced by the engine runtime preparation script.

@@ -16,6 +16,7 @@ import { manuallyCheckForUpdates, setupAutoUpdater } from './updater'
 import {
   HARNESSCLAW_DIR,
   ENGINE_CONFIG_PATH,
+  resolveBundledAgentBrowserPath,
   resolveBundledBinaryPath,
   ensureDir,
   ensureHarnessclawConfigInitialized,
@@ -418,6 +419,7 @@ function getToolFilePath(source: Record<string, unknown>): string | undefined {
 
 const HARNESSCLAW_LAUNCHED_FLAG = join(HARNESSCLAW_DIR, '.launched')
 const HARNESSCLAW_ENGINE_BIN = resolveBundledBinaryPath('harnessclaw-engine')
+const HARNESSCLAW_AGENT_BROWSER_BIN = resolveBundledAgentBrowserPath()
 let harnessclawEngineProcess: ChildProcess | null = null
 
 let telemetryReporter: TelemetryReporter | null = null
@@ -927,13 +929,24 @@ function startHarnessclawEngine(): void {
     })
     return
   }
+  if (!HARNESSCLAW_AGENT_BROWSER_BIN || !existsSync(HARNESSCLAW_AGENT_BROWSER_BIN)) {
+    writeAppLog('warn', 'harnessclaw-engine.process', 'Agent Browser binary not found', {
+      path: HARNESSCLAW_AGENT_BROWSER_BIN || '<missing>',
+    })
+    return
+  }
   writeAppLog('info', 'harnessclaw-engine.process', 'Starting engine', {
     binary: HARNESSCLAW_ENGINE_BIN,
+    agentBrowserBinary: HARNESSCLAW_AGENT_BROWSER_BIN,
     configPath: ENGINE_CONFIG_PATH,
   })
   harnessclawEngineProcess = spawn(HARNESSCLAW_ENGINE_BIN, ['-config', ENGINE_CONFIG_PATH], {
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false,
+    env: {
+      ...process.env,
+      CLAUDE_TOOLS_BROWSER_AGENT_BINARY_PATH: HARNESSCLAW_AGENT_BROWSER_BIN,
+    },
   })
   harnessclawEngineProcess.stdout?.on('data', (data) => {
     logProcessStream('debug', 'harnessclaw-engine.stdout', data)
