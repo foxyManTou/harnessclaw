@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, with versions tracked in the repository and published to GitHub Releases.
 
+## [0.0.19] - 2026-06-04
+
+### Changed
+
+- Release packaging now consumes the engine-owned runtime bundle instead of downloading the engine and Browser Agent binaries separately. Local packaging must point at an explicit engine checkout via `HARNESSCLAW_ENGINE_SOURCE_DIR` or `--engine-source-dir`, so developer directory layouts are no longer guessed.
+- Browser Agent skill files are no longer bundled from the desktop app; the engine now owns the embedded Browser Agent skill, references, and templates.
+
+### Fixed
+
+- Packaged apps now include the engine runtime bundle with the pinned `agent-browser` sidecar for the target platform before Electron Builder runs, keeping local packaging and GitHub Actions on the same runtime handoff.
+
 ## [0.0.18] - 2026-06-03
 
 ### Added
