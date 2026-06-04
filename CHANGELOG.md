@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, with versions tracked in the repository and published to GitHub Releases.
 
+## [0.0.20] - 2026-06-04
+
+### Fixed
+
+- Packaged Browser Agent now always launches the `agent-browser` binary bundled with the desktop app. Stale local engine configs that point to a bare `agent-browser` command no longer override the packaged runtime.
+- Bundled runtime lookup now requires exact platform filenames, preventing legacy fallback paths from hiding missing release assets.
+
+### Changed
+
+- This release replaces the withdrawn `0.0.19` desktop release.
+
 ## [0.0.19] - 2026-06-04
 
 ### Changed
