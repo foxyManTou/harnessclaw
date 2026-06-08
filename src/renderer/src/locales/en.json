@@ -314,6 +314,7 @@
     "emptyDesc": "Go to the Skill Market to pick the capabilities you need. They will appear here immediately after installation. Installing your first Skill will expand how HarnessClaw works.",
     "goToMarket": "Go to Skill Market",
     "autoAppear": "They will appear here after selection and installation",
+    "usageHint": "To invoke a skill in chat, type \"/\" in the composer and pick it from the autocomplete — typing the slash text by hand sends it as plain content, without applying the skill prompt.",
     "confirm": "Confirm",
     "cancel": "Cancel",
     "delete": "Delete",

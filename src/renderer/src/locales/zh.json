@@ -327,6 +327,7 @@
     "emptyDesc": "去 Skill 市场挑选需要的能力，安装后会立即出现在这里。第一次安装一个 Skill，就能开始扩展 HarnessClaw 的工作方式。",
     "goToMarket": "前往 Skill 市场",
     "autoAppear": "挑选并安装后，这里会自动出现",
+    "usageHint": "要在聊天里调用某个 skill，请在输入框打 \"/\" 后从自动补全里选 —— 手打整段斜杠文本会被当作普通内容发送，不会套用 skill 的 prompt。",
     "confirm": "确认",
     "cancel": "取消",
     "delete": "删除",
