@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowRight, Check, ChevronLeft, ChevronRight, Languages, Loader2, Sparkles } from 'lucide-react'
+import { ArrowRight, Check, ChevronLeft, ChevronRight, Loader2, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
   MANAGED_PROVIDER_KEYS,
@@ -292,8 +292,18 @@ function buildAppConfig(previous: ConfigRecord, draft: SetupDraft): ConfigRecord
 export function WelcomeModal() {
   const { t, i18n } = useTranslation()
 
-  const toggleLanguage = async () => {
-    const next = i18n.language.startsWith('zh') ? 'en' : 'zh'
+  // Selecting a language from the onboarding header:
+  //   1. Switch i18next immediately so the wizard re-renders in the
+  //      target language without waiting for the appConfig write.
+  //   2. Persist `ui.language` into appConfig so Sidebar's hydration
+  //      pass and the next launch both pick up the user's choice — the
+  //      localStorage cache that i18next maintains is per-renderer and
+  //      can drift if the user reinstalls or wipes browser data.
+  //
+  // Replaces the old single-icon toggle whose intent was easy to miss
+  // (#74). Two explicit buttons make the choice discoverable.
+  const setLanguage = async (next: 'zh' | 'en') => {
+    if (i18n.language === next) return
     await i18n.changeLanguage(next)
     try {
       const cfg = await window.appConfig.read()
@@ -303,6 +313,8 @@ export function WelcomeModal() {
       // ignore — language change still takes effect for the current session
     }
   }
+
+  const isZh = i18n.language.startsWith('zh')
 
   // Full managed provider list — mirrors `Settings > Models` so the
   // welcome flow can configure any vendor the user normally would.
@@ -503,15 +515,38 @@ export function WelcomeModal() {
             </h2>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void toggleLanguage()}
-              title={i18n.language.startsWith('zh') ? t('sidebar.switchToEnglish') : t('sidebar.switchToChinese')}
-              aria-label={i18n.language.startsWith('zh') ? t('sidebar.switchToEnglish') : t('sidebar.switchToChinese')}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            <div
+              role="group"
+              aria-label={t('sidebar.switchToChinese')}
+              className="inline-flex items-center rounded-lg border border-border bg-muted/40 p-0.5 text-[11px] font-medium"
             >
-              <Languages size={15} aria-hidden="true" />
-            </button>
+              <button
+                type="button"
+                onClick={() => void setLanguage('zh')}
+                aria-pressed={isZh}
+                className={cn(
+                  'rounded-md px-2 py-0.5 transition-colors',
+                  isZh
+                    ? 'bg-card text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                中文
+              </button>
+              <button
+                type="button"
+                onClick={() => void setLanguage('en')}
+                aria-pressed={!isZh}
+                className={cn(
+                  'rounded-md px-2 py-0.5 transition-colors',
+                  !isZh
+                    ? 'bg-card text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                English
+              </button>
+            </div>
             <span className="text-xs tabular-nums text-muted-foreground">
               {stageIndex + 1} / {stages.length}
             </span>
