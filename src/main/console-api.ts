@@ -270,13 +270,15 @@ export interface ProviderEndpointInfo {
   disabled?: boolean
   in_chain: boolean
   // Engine 2026-05-19+: per-endpoint capability override. Tokens from
-  // {vision, pdf, audio, video, reasoning, tools, search}; empty / absent
-  // means "inherit manifest baseline".
+  // {vision, pdf, audio, video, reasoning, tools, search,
+  // image_generation}; empty / absent means "inherit manifest baseline".
   model_type?: string[]
   // Engine 2026-05-30+: optional display-only tag persisted on the
   // endpoint. Empty/absent = ungrouped (renderer falls back to
   // getModelGroup(id) heuristic).
   group?: string
+  // Full image generation target URL resolved by the engine registry.
+  image_generation_url?: string
 }
 
 export interface ProviderInfo {
@@ -324,6 +326,7 @@ export interface ProviderChain {
 export interface AgentConfig {
   primary: string
   fallback_chain: string[]
+  image_generation?: string
   max_tokens?: number
   temperature?: number
   context_window?: number
@@ -333,6 +336,7 @@ export interface AgentConfig {
 export interface AgentPatch {
   primary?: string
   fallback_chain?: string[]
+  image_generation?: string
   max_tokens?: number
   temperature?: number
   context_window?: number
@@ -398,8 +402,8 @@ export interface EndpointPatch {
   // Engine 2026-05-19+: capability token override. Sending an empty
   // array explicitly clears the override (reverts to manifest baseline);
   // omitting the key leaves it unchanged. Allowed tokens:
-  // vision/pdf/audio/video/reasoning/tools/search. Unknown tokens →
-  // 400 invalid_model_type.
+  // vision/pdf/audio/video/reasoning/tools/search/image_generation.
+  // Unknown tokens → 400 invalid_model_type.
   model_type?: string[]
   // Engine 2026-05-30+: free-text display tag. Sending `""` explicitly
   // clears it (yaml key removed); omitting leaves it unchanged.

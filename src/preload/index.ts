@@ -329,6 +329,7 @@ const agentAPI = {
   patchAgentConfig: (patch: {
     primary?: string
     fallback_chain?: string[]
+    image_generation?: string
     max_tokens?: number
     temperature?: number
     context_window?: number

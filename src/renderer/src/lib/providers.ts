@@ -33,7 +33,7 @@ export interface ProviderConfig {
   // `custom`). Defaults to PROVIDER_ENGINE_TYPES[key]; the user can
   // override per-provider via the API-地址 row dropdown. See engine
   // docs (`type` enum: openai | anthropic | gemini).
-  engineType?: 'openai' | 'anthropic' | 'gemini'
+  engineType?: ProviderType
   extraHeaders: Record<string, string> | null
   raw: Record<string, unknown>
   enabled?: boolean
@@ -57,6 +57,7 @@ export type ManagedProviderKey =
 
 export type ProtocolProviderKey = 'anthropic' | 'openai'
 export type AgentProviderKey = Exclude<ManagedProviderKey, 'gpt-image' | 'doubao'>
+export type ProviderType = 'openai' | 'anthropic' | 'gemini'
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -64,7 +65,6 @@ export const MANAGED_PROVIDER_KEYS: ManagedProviderKey[] = [
   'xunfei',
   'anthropic',
   'openai',
-  'gpt-image',
   'google',
   'deepseek',
   'zhipu',
@@ -111,16 +111,64 @@ export const PROVIDER_DEFAULT_BASES: Record<ManagedProviderKey, string> = {
   custom: '',
 }
 
+const PROVIDER_MODEL_PRESETS: Partial<Record<ManagedProviderKey, ProviderModelEntry[]>> = {
+  openai: [
+    {
+      id: 'gpt-image-2',
+      name: 'GPT Image 2',
+      group: 'GPT Image',
+      tags: ['vision', 'image_generation'],
+    },
+  ],
+  // Legacy hidden bucket for previously persisted appConfig/provider rows.
+  // New GPT Image configuration is presented under the OpenAI provider.
+  'gpt-image': [
+    {
+      id: 'gpt-image-2',
+      name: 'GPT Image 2',
+      group: 'gpt-image',
+      tags: ['vision', 'image_generation'],
+    },
+  ],
+  doubao: [
+    {
+      id: 'doubao-seedream-5-0-260128',
+      name: 'Doubao Seedream 5.0',
+      group: 'seedream-5',
+      tags: ['vision', 'image_generation'],
+    },
+    {
+      id: 'doubao-seedream-5-0-lite-260128',
+      name: 'Doubao Seedream 5.0 Lite',
+      group: 'seedream-5',
+      tags: ['vision', 'image_generation'],
+    },
+    {
+      id: 'doubao-seedream-4-5-251128',
+      name: 'Doubao Seedream 4.5',
+      group: 'seedream-4',
+      tags: ['vision', 'image_generation'],
+    },
+    {
+      id: 'doubao-seedream-4-0-250828',
+      name: 'Doubao Seedream 4.0',
+      group: 'seedream-4',
+      tags: ['vision', 'image_generation'],
+    },
+  ],
+}
+
 // Engine `type` to send to `POST/PATCH /providers`. See
 // harnessclaw-engine/docs/api/providers-management-api.md (`type` enum:
 // openai / anthropic / gemini).
 //
 // OpenAI-compatible vendors (DeepSeek, Kimi=moonshot, GLM=zhipu, MiniMax,
 // 讯飞=xunfei, Doubao image generation) all use `openai` and only differ by
-// `base_url`. Google goes to `gemini` — NOT `google`. `gpt-image` also uses
-// OpenAI credentials but is kept as a separate settings bucket because it is
-// image-generation-only and must not become an Agent LLM provider. `custom` is
-// resolved at call time from the user-selected protocol (openai | anthropic).
+// `base_url`. Google goes to `gemini` — NOT `google`. `gpt-image` remains a
+// legacy hidden bucket; new GPT Image models are listed under OpenAI and are
+// kept out of Agent chat routing by their `image_generation` capability.
+// `custom` is resolved at call time from the user-selected protocol
+// (openai | anthropic).
 export const PROVIDER_ENGINE_TYPES: Record<
   Exclude<ManagedProviderKey, 'custom'>,
   'openai' | 'anthropic' | 'gemini'
@@ -163,6 +211,13 @@ export function isImageGenerationProviderKey(value: ManagedProviderKey): boolean
   return IMAGE_GENERATION_PROVIDER_KEYS.includes(value as 'gpt-image' | 'doubao')
 }
 
+export function getProviderDefaultModels(key: ManagedProviderKey): ProviderModelEntry[] {
+  return (PROVIDER_MODEL_PRESETS[key] ?? []).map((entry) => ({
+    ...entry,
+    ...(entry.tags ? { tags: [...entry.tags] } : {}),
+  }))
+}
+
 // Resolve the effective engine type for a provider:
 //   1. explicit cfg.engineType override (user toggled the badge)
 //   2. cfg.protocol when key === 'custom' (the legacy "OpenAI 协议 /
@@ -183,7 +238,7 @@ export function createEmptyProviderConfig(key: ManagedProviderKey): ProviderConf
     apiKey: '',
     apiBase: PROVIDER_DEFAULT_BASES[key] || null,
     model: null,
-    models: [],
+    models: getProviderDefaultModels(key),
     protocol: key === 'anthropic' ? 'anthropic' : 'openai',
     extraHeaders: null,
     raw: {},

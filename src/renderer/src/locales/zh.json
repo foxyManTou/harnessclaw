@@ -570,7 +570,8 @@
       "TaskList": "任务列表",
       "SendMessage": "发送消息",
       "TeamCreate": "创建团队",
-      "TeamDelete": "删除团队"
+      "TeamDelete": "删除团队",
+      "ImageGenerate": "生成图片"
     },
     "status": {
       "executingSubAgent": "正在执行子 Agent 任务",
@@ -780,6 +781,7 @@
       "markdownSummary": "已抓取并整理为 Markdown 内容。",
       "terminalSummary": "命令执行已完成。",
       "agentSummary": "子 Agent 已返回摘要。",
+      "imageGenerated": "已生成 {{n}} 张图片。",
       "writeSummary": "文件写入已完成。",
       "editSummary": "文件变更已生成。",
       "stepCompleted": "这个步骤已执行完成。"
@@ -1021,6 +1023,8 @@
       "title": "模型配置",
       "subtitle": "管理您的模型供应商、API 密钥与连接端点",
       "primaryProvider": "主 Provider",
+      "imageGenerationProvider": "图片生成模型",
+      "imageGenerationProviderDesc": "供 image_generate 工具使用，不参与主回答模型和 fallback_chain",
       "jumpToSettings": "跳转设置",
       "fallbackEnabled": "Provider 负载兜底",
       "fallbackEnabledDesc": "当主模型不可用时按 fallback_chain 顺序降级",

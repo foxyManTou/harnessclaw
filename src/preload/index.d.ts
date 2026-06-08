@@ -543,6 +543,8 @@ interface ProviderEndpointInfo {
   // endpoint. Empty/absent = ungrouped (renderer falls back to
   // getModelGroup(id) heuristic).
   group?: string
+  // Full image generation target URL resolved by the engine registry.
+  image_generation_url?: string
 }
 
 interface ProviderInfo {
@@ -612,6 +614,7 @@ interface EndpointPatchPayload {
   enable_thinking?: boolean | null
   disabled?: boolean
   // Engine 2026-05-19+: per-endpoint capability override. [] clears it.
+  // Allowed tokens include image_generation for image tool models.
   model_type?: string[]
   // Engine 2026-05-30+: free-text display tag. Sending `""` explicitly
   // clears it (yaml key removed); omitting leaves it unchanged.
@@ -625,6 +628,7 @@ interface EndpointPatchPayload {
 interface AgentConfigInfo {
   primary: string
   fallback_chain: string[]
+  image_generation?: string
   max_tokens?: number
   // Canonical range [0, 1]; engine rescales per provider type
   // (anthropic ×1, openai/gemini ×2). 0 means "fall back to endpoint
@@ -639,6 +643,7 @@ interface AgentConfigInfo {
 interface AgentPatchPayload {
   primary?: string
   fallback_chain?: string[]
+  image_generation?: string
   max_tokens?: number
   temperature?: number
   context_window?: number
