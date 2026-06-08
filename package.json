@@ -7,7 +7,9 @@
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
+    "dev:vscode": "yarn ensure:electron-native && yarn dev",
     "build": "electron-vite build",
+    "ensure:electron-native": "node scripts/ensure-electron-native.cjs",
     "postinstall": "electron-builder install-app-deps",
     "rebuild:electron-native": "electron-builder install-app-deps",
     "changelog:build": "node scripts/build-changelog.cjs",

@@ -560,7 +560,8 @@
       "TaskList": "Task List",
       "SendMessage": "Send Message",
       "TeamCreate": "Create Team",
-      "TeamDelete": "Delete Team"
+      "TeamDelete": "Delete Team",
+      "ImageGenerate": "Generate Image"
     },
     "status": {
       "executingSubAgent": "Executing Sub-agent task",
@@ -770,6 +771,7 @@
       "markdownSummary": "Fetched and organized as Markdown.",
       "terminalSummary": "Command execution completed.",
       "agentSummary": "Sub Agent summary returned.",
+      "imageGenerated": "Generated {{n}} image(s).",
       "writeSummary": "File write completed.",
       "editSummary": "File changes generated.",
       "stepCompleted": "This step has completed."
@@ -1011,6 +1013,8 @@
       "title": "Models",
       "subtitle": "Manage your providers, API keys, and endpoints",
       "primaryProvider": "Primary Provider",
+      "imageGenerationProvider": "Image Generation Model",
+      "imageGenerationProviderDesc": "Used by image_generate; separate from the primary answer model and fallback chain",
       "jumpToSettings": "Jump to Settings",
       "fallbackEnabled": "Provider Fallback",
       "fallbackEnabledDesc": "Automatic fallback chain when primary model is unavailable",
