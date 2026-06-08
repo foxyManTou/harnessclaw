@@ -261,12 +261,27 @@ function buildAppConfig(previous: ConfigRecord, draft: SetupDraft): ConfigRecord
   const base = buildAppModelConfig(previous, providers, draft.engineMode)
 
   // buildAppModelConfig already filled modelProviders + agents.defaults
-  // (provider + model). Layer onboarding metadata + profile preset on
-  // top so the wizard's choices stick.
+  // (provider + model). Layer onboarding metadata + (optional) profile
+  // preset on top so the wizard's choices stick.
   const baseAgents = asRecord(base.agents)
   const baseDefaults = asRecord(baseAgents.defaults)
   const onboarding = asRecord(previous.onboarding)
-  const profilePreset = getProfilePreset(draft.profile)
+
+  // Profile is optional (#73). When the user skips it, leave
+  // workspace / maxToolIterations / reasoningEffort untouched so a
+  // returning user's Settings → Agents tweaks aren't silently
+  // clobbered. Only apply the preset when an explicit profile was
+  // picked.
+  const presetDefaults = draft.profile
+    ? (() => {
+        const preset = getProfilePreset(draft.profile)
+        return {
+          workspace: preset.workspace,
+          maxToolIterations: preset.maxToolIterations,
+          reasoningEffort: preset.reasoningEffort,
+        }
+      })()
+    : {}
 
   return {
     ...base,
@@ -274,9 +289,7 @@ function buildAppConfig(previous: ConfigRecord, draft: SetupDraft): ConfigRecord
       ...baseAgents,
       defaults: {
         ...baseDefaults,
-        workspace: profilePreset.workspace,
-        maxToolIterations: profilePreset.maxToolIterations,
-        reasoningEffort: profilePreset.reasoningEffort,
+        ...presetDefaults,
       },
     },
     onboarding: {
@@ -410,7 +423,14 @@ export function WelcomeModal() {
     emma: true,
     engine: Boolean(draft.engineMode),
     connection: Boolean(draft.apiKey.trim() && draft.modelId.trim()),
-    profile: Boolean(draft.profile),
+    // Profile is optional (#73): users reported the wizard wouldn't
+    // let them past this step, and the chosen value had no obvious
+    // edit surface afterwards. The Stepper / Next button now treat
+    // it as always-complete; `buildAppConfig` skips the preset
+    // overwrite when the user leaves it null, so the engine YAML
+    // keeps whatever workspace / iterations / reasoning defaults the
+    // user (or Settings → Agents) already set.
+    profile: true,
   }), [draft])
 
   const allStagesDone = stageDone.engine && stageDone.connection && stageDone.profile
@@ -622,49 +642,79 @@ export function WelcomeModal() {
           )}
 
           {currentStage.key === 'profile' && (
-            <div className="grid grid-cols-3 gap-3">
-              {profileOptions.map((option) => {
-                const selected = draft.profile === option.key
-                return (
-                  <button
-                    key={option.key}
-                    type="button"
-                    onClick={() => setDraft((d) => ({ ...d, profile: option.key }))}
-                    className={cn(
-                      'group relative flex h-full flex-col items-start gap-2 rounded-2xl border px-4 py-4 text-left transition-all',
-                      selected
-                        ? 'border-primary/70 bg-primary/8 shadow-sm ring-1 ring-primary/30'
-                        : 'border-border bg-background hover:-translate-y-0.5 hover:border-primary/40 hover:bg-muted/30 hover:shadow-sm'
-                    )}
-                  >
-                    <span
+            <div className="space-y-3">
+              <p className="text-[11px] leading-5 text-muted-foreground">
+                {t('welcome.profileOptions.optional')}
+              </p>
+              <div className="grid grid-cols-3 gap-3">
+                {profileOptions.map((option) => {
+                  const selected = draft.profile === option.key
+                  return (
+                    <button
+                      key={option.key}
+                      type="button"
+                      onClick={() => setDraft((d) => ({
+                        ...d,
+                        // Allow toggling the same card off so users
+                        // can change their mind and finish without a
+                        // preset overwrite (mirrors the optional
+                        // semantics introduced for #73).
+                        profile: d.profile === option.key ? null : option.key,
+                      }))}
                       className={cn(
-                        'absolute right-3 top-3 flex h-5 w-5 items-center justify-center rounded-full border transition-colors',
-                        selected ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background opacity-0 group-hover:opacity-100'
-                      )}
-                      aria-hidden="true"
-                    >
-                      {selected && <Check size={12} strokeWidth={3} />}
-                    </span>
-                    <span
-                      className={cn(
-                        'rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider transition-colors',
+                        'group relative flex h-full flex-col items-start gap-2 rounded-2xl border px-4 py-4 text-left transition-all',
                         selected
-                          ? 'border-primary/40 bg-primary/15 text-primary'
-                          : 'border-border bg-muted/60 text-muted-foreground'
+                          ? 'border-primary/70 bg-primary/8 shadow-sm ring-1 ring-primary/30'
+                          : 'border-border bg-background hover:-translate-y-0.5 hover:border-primary/40 hover:bg-muted/30 hover:shadow-sm'
                       )}
                     >
-                      {option.key}
-                    </span>
-                    <div className="mt-1 text-sm font-semibold leading-tight text-foreground">
-                      {option.title}
-                    </div>
-                    <div className="text-[11px] leading-5 text-muted-foreground">
-                      {option.detail}
-                    </div>
-                  </button>
-                )
-              })}
+                      <span
+                        className={cn(
+                          'absolute right-3 top-3 flex h-5 w-5 items-center justify-center rounded-full border transition-colors',
+                          selected ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background opacity-0 group-hover:opacity-100'
+                        )}
+                        aria-hidden="true"
+                      >
+                        {selected && <Check size={12} strokeWidth={3} />}
+                      </span>
+                      <span
+                        className={cn(
+                          'rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider transition-colors',
+                          selected
+                            ? 'border-primary/40 bg-primary/15 text-primary'
+                            : 'border-border bg-muted/60 text-muted-foreground'
+                        )}
+                      >
+                        {option.key}
+                      </span>
+                      <div className="mt-1 text-sm font-semibold leading-tight text-foreground">
+                        {option.title}
+                      </div>
+                      <div className="text-[11px] leading-5 text-muted-foreground">
+                        {option.detail}
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+              <div className="flex items-center justify-between gap-3 pt-1">
+                <p className="text-[11px] leading-5 text-muted-foreground">
+                  {t('welcome.profileOptions.editLater')}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setDraft((d) => ({ ...d, profile: null }))}
+                  className={cn(
+                    'inline-flex shrink-0 items-center rounded-md border border-border bg-background px-2.5 py-1 text-[11px] font-medium transition-colors',
+                    draft.profile === null
+                      ? 'text-foreground'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  )}
+                  aria-pressed={draft.profile === null}
+                >
+                  {t('welcome.profileOptions.skip')}
+                </button>
+              </div>
             </div>
           )}
 

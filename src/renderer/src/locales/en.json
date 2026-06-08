@@ -1505,7 +1505,10 @@
       "researchTitle": "Data Collection and Research Analysis",
       "researchDetail": "Focused on multi-round retrieval and organization, maintaining medium reasoning intensity.",
       "opsTitle": "Complex Daily Workflow",
-      "opsDetail": "Focused on stable collaboration and batch processing, maintaining concise default values."
+      "opsDetail": "Focused on stable collaboration and batch processing, maintaining concise default values.",
+      "optional": "Optional — pick a preset for sensible defaults, or skip and tune them yourself later.",
+      "skip": "Skip — keep current defaults",
+      "editLater": "These map to workspace / Max Tool Iterations / Reasoning Effort under Settings → Agents, editable any time."
     },
     "modelIdHint": "Use a model ID supported by your provider, e.g. gpt-4o-mini or claude-sonnet-4.",
     "modelGroupLabel": "Group name (optional)",
