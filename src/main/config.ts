@@ -8,11 +8,14 @@ import {
   type ConfigScope,
   type ConfigStorageFormat,
 } from './db'
+import { migrateEngineConfigPayloadText } from './engine-config-migration'
 
 const yaml = require('js-yaml') as {
   load: (source: string) => unknown
   dump: (value: unknown, options?: Record<string, unknown>) => string
 }
+
+const ENGINE_CONFIG_SCHEMA_VERSION = 2
 
 export const HARNESSCLAW_DIR = join(homedir(), '.harnessclaw')
 export const ENGINE_CONFIG_PATH = join(HARNESSCLAW_DIR, 'harnessclaw-engine.yaml')
@@ -118,12 +121,14 @@ function persistConfigDocument(
   scope: ConfigScope,
   storageFormat: ConfigStorageFormat,
   payloadText: string,
+  schemaVersion?: number,
 ): { ok: boolean; error?: string } {
   try {
     saveConfigDocument({
       scope,
       storageFormat,
       payloadText,
+      schemaVersion,
     })
     return { ok: true }
   } catch (err) {
@@ -169,7 +174,11 @@ function seedAppConfigDocument(): { ok: boolean; payloadText?: string; error?: s
 function seedEngineConfigDocument(): { ok: boolean; payloadText?: string; error?: string } {
   try {
     if (existsSync(ENGINE_CONFIG_PATH)) {
-      return { ok: true, payloadText: readText(ENGINE_CONFIG_PATH) }
+      const migrated = migrateEngineConfigPayloadText(readText(ENGINE_CONFIG_PATH), 'yaml')
+      if (migrated.changed) {
+        writeText(ENGINE_CONFIG_PATH, migrated.payloadText)
+      }
+      return { ok: true, payloadText: migrated.payloadText }
     }
 
     if (!existsSync(ENGINE_CONFIG_TEMPLATE_PATH)) {
@@ -180,7 +189,70 @@ function seedEngineConfigDocument(): { ok: boolean; payloadText?: string; error?
     }
 
     copyFileSync(ENGINE_CONFIG_TEMPLATE_PATH, ENGINE_CONFIG_PATH)
-    return { ok: true, payloadText: readText(ENGINE_CONFIG_PATH) }
+    const migrated = migrateEngineConfigPayloadText(readText(ENGINE_CONFIG_PATH), 'yaml')
+    if (migrated.changed) {
+      writeText(ENGINE_CONFIG_PATH, migrated.payloadText)
+    }
+    return { ok: true, payloadText: migrated.payloadText }
+  } catch (err) {
+    return { ok: false, error: String(err) }
+  }
+}
+
+function parseConfigDocumentPayload(
+  storageFormat: ConfigStorageFormat,
+  payloadText: string,
+  fallback: Record<string, unknown>,
+): Record<string, unknown> {
+  return storageFormat === 'yaml'
+    ? parseYamlText(payloadText, fallback)
+    : parseJsonText(payloadText, fallback)
+}
+
+function engineConfigFileTextFromDocument(
+  storageFormat: ConfigStorageFormat,
+  payloadText: string,
+  fallback: Record<string, unknown>,
+): string {
+  return storageFormat === 'yaml'
+    ? payloadText
+    : serializeYaml(parseJsonText(payloadText, fallback))
+}
+
+function migrateStoredEngineConfigDocument(
+  storageFormat: ConfigStorageFormat,
+  payloadText: string,
+  schemaVersion: number,
+): { ok: boolean; payloadText: string; changed: boolean; error?: string } {
+  if (schemaVersion >= ENGINE_CONFIG_SCHEMA_VERSION) {
+    return { ok: true, payloadText, changed: false }
+  }
+
+  const migrated = migrateEngineConfigPayloadText(payloadText, storageFormat)
+  const persisted = persistConfigDocument('engine', storageFormat, migrated.payloadText, ENGINE_CONFIG_SCHEMA_VERSION)
+  return {
+    ok: persisted.ok,
+    payloadText: migrated.payloadText,
+    changed: migrated.changed,
+    error: persisted.error,
+  }
+}
+
+function migrateEngineConfigFileIfPresent(shouldMigrate: boolean): { ok: boolean; changed?: boolean; error?: string } {
+  if (!existsSync(ENGINE_CONFIG_PATH)) {
+    return { ok: true, changed: false }
+  }
+
+  if (!shouldMigrate) {
+    return { ok: true, changed: false }
+  }
+
+  try {
+    const migrated = migrateEngineConfigPayloadText(readText(ENGINE_CONFIG_PATH), 'yaml')
+    if (migrated.changed) {
+      writeText(ENGINE_CONFIG_PATH, migrated.payloadText)
+    }
+    return { ok: true, changed: migrated.changed }
   } catch (err) {
     return { ok: false, error: String(err) }
   }
@@ -216,23 +288,29 @@ export function readEngineConfig(fallback: Record<string, unknown> = {}): Record
 
   const stored = getConfigDocument('engine')
   if (stored) {
+    const shouldMigrate = stored.schema_version < ENGINE_CONFIG_SCHEMA_VERSION
+    const migrated = migrateStoredEngineConfigDocument(stored.storage_format, stored.payload_text, stored.schema_version)
+    if (!migrated.ok) return { ...fallback, _error: migrated.error || 'Unable to migrate engine config document' }
+
+    const fileMigration = migrateEngineConfigFileIfPresent(shouldMigrate)
+    if (!fileMigration.ok) return { ...fallback, _error: fileMigration.error || 'Unable to migrate engine config file' }
+
     if (!existsSync(ENGINE_CONFIG_PATH)) {
-      const syncText = stored.storage_format === 'yaml'
-        ? stored.payload_text
-        : serializeYaml(parseJsonText(stored.payload_text, fallback))
-      writeText(ENGINE_CONFIG_PATH, syncText)
+      writeText(ENGINE_CONFIG_PATH, engineConfigFileTextFromDocument(stored.storage_format, migrated.payloadText, fallback))
     }
 
-    return stored.storage_format === 'yaml'
-      ? parseYamlText(stored.payload_text, fallback)
-      : parseJsonText(stored.payload_text, fallback)
+    return parseConfigDocumentPayload(stored.storage_format, migrated.payloadText, fallback)
   }
 
-  const fileConfig = readYamlConfig(ENGINE_CONFIG_PATH, fallback)
   if (existsSync(ENGINE_CONFIG_PATH)) {
-    void persistConfigDocument('engine', 'yaml', readText(ENGINE_CONFIG_PATH))
+    const migrated = migrateEngineConfigPayloadText(readText(ENGINE_CONFIG_PATH), 'yaml')
+    if (migrated.changed) {
+      writeText(ENGINE_CONFIG_PATH, migrated.payloadText)
+    }
+    void persistConfigDocument('engine', 'yaml', migrated.payloadText, ENGINE_CONFIG_SCHEMA_VERSION)
+    return parseYamlText(migrated.payloadText, fallback)
   }
-  return fileConfig
+  return fallback
 }
 
 export function saveEngineConfig(data: unknown): { ok: boolean; error?: string } {
@@ -240,7 +318,7 @@ export function saveEngineConfig(data: unknown): { ok: boolean; error?: string }
   if (!initialized.ok) return initialized
 
   const payloadText = serializeYaml(data)
-  const persisted = persistConfigDocument('engine', 'yaml', payloadText)
+  const persisted = persistConfigDocument('engine', 'yaml', payloadText, ENGINE_CONFIG_SCHEMA_VERSION)
   if (!persisted.ok) return persisted
 
   return saveYamlConfig(ENGINE_CONFIG_PATH, data)
@@ -250,21 +328,32 @@ export function ensureEngineConfigInitialized(): { ok: boolean; created?: boolea
   ensureDir(HARNESSCLAW_DIR)
   const stored = getConfigDocument('engine')
 
-  if (stored && !existsSync(ENGINE_CONFIG_PATH)) {
-    const payloadText = stored.storage_format === 'yaml'
-      ? stored.payload_text
-      : serializeYaml(parseJsonText(stored.payload_text, {}))
-    writeText(ENGINE_CONFIG_PATH, payloadText)
-    return { ok: true, created: true }
-  }
+  if (stored) {
+    const shouldMigrate = stored.schema_version < ENGINE_CONFIG_SCHEMA_VERSION
+    const migrated = migrateStoredEngineConfigDocument(stored.storage_format, stored.payload_text, stored.schema_version)
+    if (!migrated.ok) {
+      return { ok: false, error: migrated.error }
+    }
 
-  if (existsSync(ENGINE_CONFIG_PATH) && stored) {
+    const fileMigration = migrateEngineConfigFileIfPresent(shouldMigrate)
+    if (!fileMigration.ok) {
+      return { ok: false, error: fileMigration.error }
+    }
+
+    if (!existsSync(ENGINE_CONFIG_PATH)) {
+      writeText(ENGINE_CONFIG_PATH, engineConfigFileTextFromDocument(stored.storage_format, migrated.payloadText, {}))
+      return { ok: true, created: true }
+    }
+
     return { ok: true, created: false }
   }
 
-  if (existsSync(ENGINE_CONFIG_PATH) && !stored) {
-    const payloadText = readText(ENGINE_CONFIG_PATH)
-    const persisted = persistConfigDocument('engine', 'yaml', payloadText)
+  if (existsSync(ENGINE_CONFIG_PATH)) {
+    const migrated = migrateEngineConfigPayloadText(readText(ENGINE_CONFIG_PATH), 'yaml')
+    if (migrated.changed) {
+      writeText(ENGINE_CONFIG_PATH, migrated.payloadText)
+    }
+    const persisted = persistConfigDocument('engine', 'yaml', migrated.payloadText, ENGINE_CONFIG_SCHEMA_VERSION)
     return {
       ok: persisted.ok,
       created: false,
@@ -272,17 +361,18 @@ export function ensureEngineConfigInitialized(): { ok: boolean; created?: boolea
     }
   }
 
-  const initialized = ensureConfigDocumentInitialized('engine', 'yaml', seedEngineConfigDocument)
-  if (!initialized.ok) {
-    return initialized
+  const seeded = seedEngineConfigDocument()
+  if (!seeded.ok || typeof seeded.payloadText !== 'string') {
+    return { ok: false, error: seeded.error || 'Unable to seed engine config' }
   }
 
-  const payloadText = getConfigDocument('engine')?.payload_text
-  if (typeof payloadText === 'string') {
-    writeText(ENGINE_CONFIG_PATH, payloadText)
+  const persisted = persistConfigDocument('engine', 'yaml', seeded.payloadText, ENGINE_CONFIG_SCHEMA_VERSION)
+  if (!persisted.ok) {
+    return { ok: false, error: persisted.error }
   }
 
-  return initialized
+  writeText(ENGINE_CONFIG_PATH, seeded.payloadText)
+  return { ok: true, created: true }
 }
 
 // Backward-compatible aliases. Renderer and older code may still use the nanobot name.
