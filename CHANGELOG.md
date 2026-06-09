@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, with versions tracked in the repository and published to GitHub Releases.
 
+## [0.0.21-beta.0] - 2026-06-09
+
+### Added
+
+- Agent image generation now has a dedicated model selector backed by provider state.
+- Generated image tool results now render as preview cards in chat.
+- Image-capable provider entries now show backend-resolved target URLs on the image capability badge.
+
+### Fixed
+
+- Packaged Browser Agent is enabled by default for new and upgraded desktop configs.
+- Local dev startup now rebuilds Electron native dependencies when needed and clears stale engine port listeners before spawning the bundled engine.
+
 ## [0.0.20] - 2026-06-04
 
 ### Fixed
