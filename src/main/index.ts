@@ -768,7 +768,7 @@ function initializeTelemetry(): void {
     const deviceId = getOrCreateDeviceId(HARNESSCLAW_DIR)
     const clientSessionId = generateClientSessionId()
     telemetryConfigManager = new TelemetryConfigManager(HARNESSCLAW_DIR)
-    telemetryReporter = new TelemetryReporter(deviceId, clientSessionId, telemetryConfigManager)
+    telemetryReporter = new TelemetryReporter(deviceId, clientSessionId, telemetryConfigManager, HARNESSCLAW_DIR)
     setSharedReporter(telemetryReporter)
     writeAppLog('info', 'telemetry', 'Telemetry initialized', {
       device_id: deviceId,
@@ -1107,10 +1107,20 @@ function createWindow(): BrowserWindow {
     minHeight: MIN_WINDOW_HEIGHT,
     show: false,
     autoHideMenuBar: true,
-    titleBarStyle: 'hiddenInset',
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     trafficLightPosition: { x: 16, y: 16 },
     backgroundColor: '#F5F5F7',
-    ...(process.platform === 'darwin' ? {} : devIconPath ? { icon: devIconPath } : {}),
+    ...(process.platform === 'darwin'
+      ? {}
+      : {
+          // Windows/Linux: 隐藏左侧图标+标题文字,保留右上角的最小化/最大化/关闭按钮
+          titleBarOverlay: {
+            color: '#F5F5F7',
+            symbolColor: '#1A1A1A',
+            height: 32,
+          },
+          ...(devIconPath ? { icon: devIconPath } : {}),
+        }),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,

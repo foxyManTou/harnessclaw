@@ -48,11 +48,12 @@ export type ManagedProviderKey =
   | 'openai'
   | 'gpt-image'
   | 'google'
-  | 'deepseek'
+  | 'qwen'
+  | 'minimax'
   | 'zhipu'
   | 'moonshot'
-  | 'minimax'
   | 'doubao'
+  | 'deepseek'
   | 'custom'
 
 export type ProtocolProviderKey = 'anthropic' | 'openai'
@@ -66,11 +67,12 @@ export const MANAGED_PROVIDER_KEYS: ManagedProviderKey[] = [
   'anthropic',
   'openai',
   'google',
-  'deepseek',
+  'qwen',
+  'minimax',
   'zhipu',
   'moonshot',
-  'minimax',
   'doubao',
+  'deepseek',
   'custom',
 ]
 
@@ -89,10 +91,11 @@ export const PROVIDER_DISPLAY_NAMES: Record<ManagedProviderKey, string> = {
   openai: 'OpenAI',
   'gpt-image': 'GPT Image',
   google: 'Google',
-  deepseek: 'DeepSeek',
+  qwen: '通义千问',
+  minimax: 'MiniMax',
   zhipu: '智谱 GLM',
   moonshot: 'Kimi',
-  minimax: 'MiniMax',
+  deepseek: 'DeepSeek',
   doubao: 'Doubao Seedream',
   custom: 'Custom',
 }
@@ -103,11 +106,12 @@ export const PROVIDER_DEFAULT_BASES: Record<ManagedProviderKey, string> = {
   openai: 'https://api.openai.com',
   'gpt-image': 'https://api.openai.com',
   google: 'https://generativelanguage.googleapis.com',
-  deepseek: 'https://api.deepseek.com',
+  qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  minimax: 'https://api.minimax.chat',
   zhipu: 'https://open.bigmodel.cn/api/paas/v4',
   moonshot: 'https://api.moonshot.cn',
-  minimax: 'https://api.minimax.chat',
   doubao: 'https://ark.cn-beijing.volces.com/api/v3',
+  deepseek: 'https://api.deepseek.com',
   custom: '',
 }
 
@@ -178,11 +182,12 @@ export const PROVIDER_ENGINE_TYPES: Record<
   openai: 'openai',
   'gpt-image': 'openai',
   google: 'gemini',
-  deepseek: 'openai',
+  qwen: 'openai',
+  minimax: 'openai',
   zhipu: 'openai',
   moonshot: 'openai',
-  minimax: 'openai',
   doubao: 'openai',
+  deepseek: 'openai',
 }
 
 export const ENGINE_TYPE_OPTIONS: ReadonlyArray<'openai' | 'anthropic' | 'gemini'> = [
@@ -265,7 +270,7 @@ export function buildAppProviderRaw(next: ProviderConfig): Record<string, unknow
 // Determine the engine-level protocol slot a managed provider maps onto.
 // - `anthropic` uses the Anthropic Messages protocol.
 // - `custom` uses whatever protocol the user toggled.
-// - Everyone else (openai, deepseek, zhipu, moonshot, minimax, google) is
+// - Everyone else (openai, qwen, minimax, zhipu, moonshot, google) is
 //   OpenAI-compatible from the engine's perspective.
 export function resolveProviderProtocol(
   key: ManagedProviderKey,

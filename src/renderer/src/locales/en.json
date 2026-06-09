@@ -1520,6 +1520,20 @@
     "modelGroupLabel": "Group name (optional)",
     "modelGroupHint": "Optional display group; only affects how the client lists models. The engine ignores it. Leave blank to auto-infer by series.",
     "modelGroupPlaceholder": "e.g. GPT-5",
+    "intro": {
+      "heading": "Hi, I'm Emma, your personal secretary. I can help you",
+      "categories": {
+        "0": "Daily Office",
+        "1": "Coding",
+        "2": "Planning",
+        "3": "Document Management",
+        "4": "Computer Control"
+      },
+      "cards": [
+        { "title": "Turn this week's meeting notes into a to-do list", "description": "Done — I split the notes into 6 tasks ordered by due date. Want me to sync them to your calendar?" },
+        { "title": "Hey, what do these feature menus do?", "description": "I'm great with collaborative development and workflows. Tell me a goal and I'll break it into steps, call the right tools, and report progress as I go." }
+      ]
+    },
     "prompts": {
       "categories": {
         "dev": "Engineering",

@@ -34,7 +34,8 @@ import { SessionStatsButton } from '../common/SessionStatsButton'
 import { AvatarLightbox } from '../common/AvatarLightbox'
 import { ConfirmDeleteSessionDialog } from '../common/ConfirmDeleteSessionDialog'
 import { SystemNoticeModal, type SystemNotice } from '../common/SystemNoticeModal'
-import emmaAvatar from '../../assets/sidebar-logo.png'
+import emmaAvatar from '../../assets/emma-avatar.svg'
+import emmaText from '../../assets/emma-text.svg'
 import analystAvatar from '../../assets/team/analyst.png'
 import developerAvatar from '../../assets/team/developer.png'
 import lifestyleAvatar from '../../assets/team/lifestyle.png'
@@ -7433,16 +7434,24 @@ export function ChatPage() {
 
 /** Extensible avatar: pass agentId to resolve a per-agent icon in the future. */
 function AgentAvatar({ agentId, agentName, size = 'md' }: { agentId?: string; agentName?: string; size?: 'md' | 'sm' }) {
-  const dim = size === 'sm' ? 'h-6 w-6' : 'h-8 w-8'
+  const dim = size === 'sm' ? 'h-7 w-7' : 'h-9 w-9'
+  const textHeight = size === 'sm' ? 'h-2.5' : 'h-3'
   // Main agent (emma) — or fallback when no agentId is given
   if (!agentId) {
     return (
-      <AvatarLightbox
-        src={emmaAvatar}
-        alt="Emma"
-        triggerClassName="flex-shrink-0 rounded-full"
-        imgClassName={cn(dim, 'rounded-full object-cover')}
-      />
+      <div className="flex shrink-0 flex-col items-center gap-1">
+        <AvatarLightbox
+          src={emmaAvatar}
+          alt="Emma"
+          triggerClassName="rounded-full"
+          imgClassName={cn(dim, 'rounded-full object-cover')}
+        />
+        <img
+          src={emmaText}
+          alt="EMMA"
+          className={cn(textHeight, 'object-contain')}
+        />
+      </div>
     )
   }
   // Sub-agent — resolve to one of the 5 team member avatars
@@ -8169,14 +8178,6 @@ function MessageBubble({
           isUser ? 'max-w-[88%] sm:max-w-[80%] items-end' : 'w-full sm:w-[min(88%,52rem)] xl:w-[min(80%,52rem)] items-start'
         )}
       >
-        {!isUser && (
-          // Emma 名字仅作 header 标识 — 鎏光 intent 已迁出，
-          // 在 ChatPage 列表底部（与 Thinking… 同位）渲染，避免长消息滚动时
-          // intent 被滚出视口看不到。
-          <div className="mb-1 flex items-center gap-2">
-            <span className="text-xs font-medium text-muted-foreground">Emma</span>
-          </div>
-        )}
         <div className={cn(
           'mb-1 flex justify-end gap-1 opacity-100 transition-opacity md:absolute md:top-1 md:z-10 md:mb-0 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100',
           isUser ? 'md:-left-14 md:right-auto' : 'md:-right-14'

@@ -38,3 +38,51 @@ export function getOrCreateDeviceId(harnessclawDir: string): string {
 export function generateClientSessionId(): string {
   return `session-${randomUUID()}`
 }
+
+/**
+ * 获取 API Key (从持久化文件读取)
+ */
+export function getApiKey(harnessclawDir: string): string | null {
+  const apiKeyPath = path.join(harnessclawDir, 'telemetry_api_key')
+
+  if (fs.existsSync(apiKeyPath)) {
+    try {
+      const key = fs.readFileSync(apiKeyPath, 'utf-8').trim()
+      if (key && key.startsWith('hc_')) {
+        return key
+      }
+    } catch (err) {
+      console.warn('[Telemetry] Failed to read API key:', err)
+    }
+  }
+
+  return null
+}
+
+/**
+ * 保存 API Key 到持久化文件
+ */
+export function setApiKey(harnessclawDir: string, key: string): void {
+  const apiKeyPath = path.join(harnessclawDir, 'telemetry_api_key')
+
+  try {
+    fs.writeFileSync(apiKeyPath, key, 'utf-8')
+  } catch (err) {
+    console.error('[Telemetry] Failed to persist API key:', err)
+  }
+}
+
+/**
+ * 清除 API Key (Key 失效时调用)
+ */
+export function clearApiKey(harnessclawDir: string): void {
+  const apiKeyPath = path.join(harnessclawDir, 'telemetry_api_key')
+
+  try {
+    if (fs.existsSync(apiKeyPath)) {
+      fs.unlinkSync(apiKeyPath)
+    }
+  } catch (err) {
+    console.error('[Telemetry] Failed to clear API key:', err)
+  }
+}
