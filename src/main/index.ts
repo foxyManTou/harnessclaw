@@ -1541,8 +1541,7 @@ app.whenReady().then(() => {
 
   // First-launch detection
   ipcMain.handle('app:isFirstLaunch', () => {
-    return true // 临时：调试引导页，每次都显示
-    // return !existsSync(HARNESSCLAW_LAUNCHED_FLAG)
+    return !existsSync(HARNESSCLAW_LAUNCHED_FLAG)
   })
 
   ipcMain.handle('app:markLaunched', () => {
