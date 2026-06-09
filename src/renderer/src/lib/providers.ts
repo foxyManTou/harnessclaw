@@ -47,10 +47,11 @@ export type ManagedProviderKey =
   | 'anthropic'
   | 'openai'
   | 'google'
-  | 'deepseek'
+  | 'qwen'
+  | 'minimax'
   | 'zhipu'
   | 'moonshot'
-  | 'minimax'
+  | 'deepseek'
   | 'custom'
 
 export type ProtocolProviderKey = 'anthropic' | 'openai'
@@ -62,10 +63,11 @@ export const MANAGED_PROVIDER_KEYS: ManagedProviderKey[] = [
   'anthropic',
   'openai',
   'google',
-  'deepseek',
+  'qwen',
+  'minimax',
   'zhipu',
   'moonshot',
-  'minimax',
+  'deepseek',
   'custom',
 ]
 
@@ -73,11 +75,12 @@ export const PROVIDER_DISPLAY_NAMES: Record<ManagedProviderKey, string> = {
   xunfei: '科大讯飞 Spark',
   anthropic: 'Anthropic',
   openai: 'OpenAI',
-  google: 'Google',
-  deepseek: 'DeepSeek',
+  google: 'Gemini',
+  qwen: '通义千问',
+  minimax: 'MiniMax',
   zhipu: '智谱 GLM',
   moonshot: 'Kimi',
-  minimax: 'MiniMax',
+  deepseek: 'DeepSeek',
   custom: 'Custom',
 }
 
@@ -86,10 +89,11 @@ export const PROVIDER_DEFAULT_BASES: Record<ManagedProviderKey, string> = {
   anthropic: 'https://api.anthropic.com',
   openai: 'https://api.openai.com',
   google: 'https://generativelanguage.googleapis.com',
-  deepseek: 'https://api.deepseek.com',
+  qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  minimax: 'https://api.minimax.chat',
   zhipu: 'https://open.bigmodel.cn/api/paas/v4',
   moonshot: 'https://api.moonshot.cn',
-  minimax: 'https://api.minimax.chat',
+  deepseek: 'https://api.deepseek.com',
   custom: '',
 }
 
@@ -97,10 +101,10 @@ export const PROVIDER_DEFAULT_BASES: Record<ManagedProviderKey, string> = {
 // harnessclaw-engine/docs/api/providers-management-api.md (`type` enum:
 // openai / anthropic / gemini).
 //
-// OpenAI-compatible vendors (DeepSeek, Kimi=moonshot, GLM=zhipu, MiniMax,
-// 讯飞=xunfei) all use `openai` and only differ by `base_url`. Google goes
-// to `gemini` — NOT `google`. `custom` is resolved at call time from the
-// user-selected protocol (openai | anthropic).
+// OpenAI-compatible vendors (通义千问=qwen, MiniMax=minimax, GLM=zhipu,
+// Kimi=moonshot, 讯飞=xunfei) all use `openai` and only differ by `base_url`.
+// Google goes to `gemini` — NOT `google`. `custom` is resolved at call time
+// from the user-selected protocol (openai | anthropic).
 export const PROVIDER_ENGINE_TYPES: Record<
   Exclude<ManagedProviderKey, 'custom'>,
   'openai' | 'anthropic' | 'gemini'
@@ -109,10 +113,11 @@ export const PROVIDER_ENGINE_TYPES: Record<
   anthropic: 'anthropic',
   openai: 'openai',
   google: 'gemini',
-  deepseek: 'openai',
+  qwen: 'openai',
+  minimax: 'openai',
   zhipu: 'openai',
   moonshot: 'openai',
-  minimax: 'openai',
+  deepseek: 'openai',
 }
 
 export const ENGINE_TYPE_OPTIONS: ReadonlyArray<'openai' | 'anthropic' | 'gemini'> = [
@@ -180,7 +185,7 @@ export function buildAppProviderRaw(next: ProviderConfig): Record<string, unknow
 // Determine the engine-level protocol slot a managed provider maps onto.
 // - `anthropic` uses the Anthropic Messages protocol.
 // - `custom` uses whatever protocol the user toggled.
-// - Everyone else (openai, deepseek, zhipu, moonshot, minimax, google) is
+// - Everyone else (openai, qwen, minimax, zhipu, moonshot, google) is
 //   OpenAI-compatible from the engine's perspective.
 export function resolveProviderProtocol(
   key: ManagedProviderKey,

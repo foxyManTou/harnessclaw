@@ -1,12 +1,9 @@
-import { randomUUID, createHmac } from 'crypto'
+import { randomUUID } from 'crypto'
 import { app } from 'electron'
+import { getApiKey, clearApiKey } from './device'
+import { ensureApiKey } from './register'
 import type { TelemetryConfigManager } from './config'
 import type { TelemetryEvent, TelemetryEventBatch, TelemetryEventInput } from './events'
-
-// HMAC 签名密钥 — 与服务端 TELEMETRY_HMAC_SECRET 保持一致
-// 注意:客户端代码会随 clone/打包一起交付,secret 会被看到,
-// 这里的签名本质是"挡随手乱发的脏数据 + 基本身份校验",不是强加密
-const HMAC_SECRET = 'harnessclaw-telemetry-2026-v1-shared-secret'
 
 /**
  * Telemetry 上报器
@@ -15,20 +12,55 @@ const HMAC_SECRET = 'harnessclaw-telemetry-2026-v1-shared-secret'
  * 1. 检查隐私开关
  * 2. 补全事件字段 (event_id / device_id / timestamp / app_version 等)
  * 3. 异步发送到服务端 (fire-and-forget,失败静默,不重试)
+ * 4. 管理 API Key (首次启动注册,失效后重新注册)
  */
 export class TelemetryReporter {
   private appVersion: string
   private platform: string
   private environment: string
+  private apiKey: string | null = null
+  private apiKeyPromise: Promise<string | null> | null = null
 
   constructor(
     private deviceId: string,
     private clientSessionId: string,
-    private configManager: TelemetryConfigManager
+    private configManager: TelemetryConfigManager,
+    private harnessclawDir: string
   ) {
     this.appVersion = app.getVersion()
     this.platform = process.platform
     this.environment = process.env.NODE_ENV === 'development' ? 'development' : 'production'
+    this.apiKey = getApiKey(this.harnessclawDir)
+  }
+
+  /**
+   * 从 endpoint 中提取 baseUrl (去掉 /api/v1/telemetry/events 路径)
+   */
+  private getBaseUrl(): string {
+    const endpoint = this.configManager.getConfig().endpoint
+    return endpoint.replace(/\/api\/v1\/telemetry\/events\/?$/, '')
+  }
+
+  /**
+   * 确保 API Key 可用 (首次启动或被吊销后重新注册)
+   * 并发请求复用同一个 Promise，避免重复注册
+   */
+  private async ensureKey(): Promise<string | null> {
+    if (this.apiKey) return this.apiKey
+    if (this.apiKeyPromise) return this.apiKeyPromise
+
+    this.apiKeyPromise = ensureApiKey(this.getBaseUrl(), this.deviceId, this.harnessclawDir)
+      .then((key) => {
+        this.apiKey = key
+        this.apiKeyPromise = null
+        return key
+      })
+      .catch(() => {
+        this.apiKeyPromise = null
+        return null
+      })
+
+    return this.apiKeyPromise
   }
 
   /**
@@ -38,18 +70,7 @@ export class TelemetryReporter {
     if (!this.configManager.shouldReport(input.category, input.action)) {
       return
     }
-    const event: TelemetryEvent = {
-      event_id: randomUUID(),
-      device_id: this.deviceId,
-      client_session_id: this.clientSessionId,
-      timestamp: Date.now(),
-      category: input.category,
-      action: input.action,
-      app_version: this.appVersion,
-      platform: this.platform,
-      environment: this.environment,
-      properties: input.properties || {}
-    }
+    const event = this.buildEvent(input)
     void this.send([event])
   }
 
@@ -60,7 +81,15 @@ export class TelemetryReporter {
     if (!this.configManager.shouldReport(input.category, input.action)) {
       return
     }
-    const event: TelemetryEvent = {
+    const event = this.buildEvent(input)
+    await this.send([event], timeoutMs)
+  }
+
+  /**
+   * 构建事件对象
+   */
+  private buildEvent(input: TelemetryEventInput): TelemetryEvent {
+    return {
       event_id: randomUUID(),
       device_id: this.deviceId,
       client_session_id: this.clientSessionId,
@@ -72,34 +101,42 @@ export class TelemetryReporter {
       environment: this.environment,
       properties: input.properties || {}
     }
-    await this.send([event], timeoutMs)
   }
 
   private async send(events: TelemetryEvent[], timeoutMs = 5000): Promise<void> {
+    // 确保 API Key 可用
+    const apiKey = await this.ensureKey()
+    if (!apiKey) {
+      console.debug('[Telemetry] No API Key available, skipping send')
+      return
+    }
+
     const config = this.configManager.getConfig()
     const batch: TelemetryEventBatch = { schema_version: '1.0', events }
     const body = JSON.stringify(batch)
-
-    // HMAC-SHA256 签名:对 "{timestamp}.{body}" 算签名,服务端用同样规则验签。
-    // timestamp 防重放(服务端可校验时间窗口),body 防篡改。
-    const timestamp = Date.now().toString()
-    const signature = createHmac('sha256', HMAC_SECRET)
-      .update(`${timestamp}.${body}`)
-      .digest('hex')
 
     try {
       const res = await fetch(config.endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Telemetry-Timestamp': timestamp,
-          'X-Telemetry-Signature': signature,
+          'X-API-Key': apiKey
         },
         body,
         signal: AbortSignal.timeout(timeoutMs)
       })
+
+      // API Key 失效或被吊销：清除本地缓存 (下次自动重新注册)
+      if (res.status === 401 || res.status === 403) {
+        console.warn('[Telemetry] API Key invalid, clearing cache')
+        clearApiKey(this.harnessclawDir)
+        this.apiKey = null
+      }
+
       if (!res.ok) {
-        console.debug(`[Telemetry] Server returned ${res.status} for ${events[0]?.category}.${events[0]?.action}`)
+        console.debug(
+          `[Telemetry] Server returned ${res.status} for ${events[0]?.category}.${events[0]?.action}`
+        )
       }
     } catch (err) {
       // 静默失败 — 埋点不能影响主流程

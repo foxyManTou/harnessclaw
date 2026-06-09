@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import * as Tooltip from '@radix-ui/react-tooltip'
 import { Command, Sparkles, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import placeholderSvg from '../../assets/placeholder-input-text.svg'
 
 export interface SelectedSkillChip {
   id: string
@@ -481,6 +482,13 @@ export function SkillComposerInput({
           </div>
         )}
 
+        {/* SVG placeholder - 只在没有内容时显示 */}
+        {value.trim() === '' && (
+          <div className="pointer-events-none absolute left-0 top-0 flex h-full items-start">
+            <img src={placeholderSvg} alt="" className="h-[22px] w-auto" />
+          </div>
+        )}
+
         <textarea
           ref={textareaRef}
           value={value}
@@ -611,9 +619,9 @@ export function SkillComposerInput({
             onKeyDown?.(event)
           }}
           disabled={disabled}
-          placeholder={placeholder}
+          placeholder=""
           className={cn(
-            'w-full resize-none bg-transparent text-[15px] text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-50',
+            'w-full resize-none bg-transparent text-base text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-50',
             className,
           )}
           rows={rows}
