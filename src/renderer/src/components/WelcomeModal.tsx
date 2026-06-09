@@ -7,7 +7,6 @@ import emmaAvatar from '@/assets/emma-avatar.svg'
 import emmaText from '@/assets/emma-text.svg'
 import welcomeHeading from '@/assets/welcome-heading.svg'
 import {
-  AGENT_PROVIDER_KEYS,
   MANAGED_PROVIDER_KEYS,
   PROVIDER_DEFAULT_BASES,
   PROVIDER_DISPLAY_NAMES,
@@ -851,4 +850,5 @@ function FormField({
     </label>
   )
 }
+
 
