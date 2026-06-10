@@ -18,11 +18,13 @@ const PROVIDER_TO_BRAND: Record<ManagedProviderKey, string> = {
   xunfei: 'spark',
   anthropic: 'anthropic',
   openai: 'openai',
+  'gpt-image': 'openai',
   google: 'gemini',
   qwen: 'qwen',
   minimax: 'minimax',
   zhipu: 'glm',
   moonshot: 'kimi',
+  doubao: 'custom',
   deepseek: 'deepseek',
   custom: 'custom',
 }
