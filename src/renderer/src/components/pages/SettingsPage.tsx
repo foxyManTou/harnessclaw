@@ -1902,23 +1902,7 @@ function AgentSection({
 // same shape under `appConfig.modelProviders.<key>` without
 // duplicating definitions here.
 
-const PROVIDER_LOGO_BG: Record<ManagedProviderKey, string> = {
-  xunfei: '#1A6BFF',
-  anthropic: '#F4F1EE',
-  openai: '#000000',
-  'gpt-image': '#000000',
-  google: '#FFFFFF',
-  deepseek: '#4D6BFE',
-  zhipu: '#3859FF',
-  moonshot: '#6D28D9',
-  minimax: '#00B97F',
-  doubao: '#111827',
-  custom: '#F1F5F9',
-}
-
-// Brand mark identifiers. These are shared by `ProviderLogo` (sidebar) and
-// `ModelIcon` (per-row), so the user sees the same SVG whether they're
-// scanning vendors or scrolling models within a vendor.
+// Brand mark identifiers used by `ModelIcon` for per-row model badges.
 type BrandKey =
   | 'spark'
   | 'anthropic'
@@ -1935,8 +1919,7 @@ type BrandKey =
   | 'generic'
 
 // Foreground color used to fill the brand SVG paths in BrandMark.
-// Chosen for contrast against PROVIDER_LOGO_BG[provider] (sidebar) or
-// MODEL_BADGE_BG[brand] (per-row).
+// Chosen for contrast against MODEL_BADGE_BG[brand] in per-row model badges.
 const BRAND_FG: Record<BrandKey, string> = {
   spark: '#FFFFFF',
   anthropic: '#CC785C',
@@ -1989,35 +1972,6 @@ function BrandMark({ brand, size, color }: { brand: BrandKey; size: number; colo
     <svg width={size} height={size} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill={color}>
       <path d="M12 2 L14 10 L22 12 L14 14 L12 22 L10 14 L2 12 L10 10 Z" />
     </svg>
-  )
-}
-
-const PROVIDER_TO_BRAND: Record<ManagedProviderKey, BrandKey> = {
-  xunfei: 'spark',
-  anthropic: 'anthropic',
-  openai: 'openai',
-  'gpt-image': 'openai',
-  google: 'gemini',
-  qwen: 'qwen',
-  deepseek: 'deepseek',
-  zhipu: 'glm',
-  moonshot: 'kimi',
-  minimax: 'minimax',
-  doubao: 'generic',
-  custom: 'custom',
-}
-
-function ProviderLogo({ provider, size = 28 }: { provider: ManagedProviderKey; size?: number }) {
-  const innerSize = Math.round(size * 0.62)
-  const bg = PROVIDER_LOGO_BG[provider]
-  const brand = PROVIDER_TO_BRAND[provider]
-  return (
-    <div
-      className="rounded-full flex items-center justify-center flex-shrink-0"
-      style={{ width: size, height: size, backgroundColor: bg }}
-    >
-      <BrandMark brand={brand} size={innerSize} color={BRAND_FG[brand]} />
-    </div>
   )
 }
 
