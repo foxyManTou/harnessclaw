@@ -1901,5 +1901,16 @@
     "subtitle": "Manage automatic updates and check for new releases.",
     "title": "Updates",
     "version": "Version {{version}}"
+  },
+  "updateModal": {
+    "title": "New Version Available V{{version}}",
+    "downloadCompleted": "Update Downloaded",
+    "updateNow": "Update Now",
+    "backgroundUpdate": "Background Update",
+    "restartNow": "Restart Now",
+    "downloadProgress": "Download Progress",
+    "updateFailed": "Update Failed",
+    "retry": "Retry",
+    "errorMessage": "An error occurred while downloading the update. Please try again later."
   }
 }

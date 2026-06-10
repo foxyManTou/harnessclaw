@@ -11,7 +11,7 @@ import {
   DEFAULT_BROWSER_AGENT_CDP_PORT,
   createRemoteDebuggingTargetResolver,
 } from './browser-agent-session'
-import { manuallyCheckForUpdates, setupAutoUpdater } from './updater'
+import { manuallyCheckForUpdates, setupAutoUpdater, downloadUpdate, quitAndInstall } from './updater'
 import {
   HARNESSCLAW_DIR,
   ENGINE_CONFIG_PATH,
@@ -3400,6 +3400,14 @@ app.whenReady().then(() => {
       return { ok: false, error: 'No active window' }
     }
     return manuallyCheckForUpdates(win)
+  })
+
+  ipcMain.handle('app:update:download', async () => {
+    return downloadUpdate()
+  })
+
+  ipcMain.handle('app:update:install', () => {
+    quitAndInstall()
   })
 
   // Quick-launcher IPC: renderer (LauncherPage) → main.

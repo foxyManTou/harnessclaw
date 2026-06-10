@@ -7,6 +7,8 @@ interface AppBridgeAPI {
   getUsername: () => string
   checkForUpdates: () => Promise<{ ok: boolean; version?: string; error?: string }>
   onUpdateEvent: (callback: (event: AppUpdateEvent) => void) => () => void
+  downloadUpdate: () => Promise<{ ok: boolean }>
+  quitAndInstall: () => Promise<void>
 }
 
 interface AppUpdateEvent {
