@@ -174,10 +174,12 @@
     },
     "capabilities": {
       "vision": "Vision",
+      "image_generation": "Image Gen",
       "search": "Web",
       "reasoning": "Reasoning",
       "tools": "Tools",
       "visionHint": "Model accepts image inputs (screenshots, photos, PDFs).",
+      "image_generationHint": "Model can generate or edit images through image APIs.",
       "searchHint": "Model can search the web for external information.",
       "reasoningHint": "Model supports extended chain-of-thought / thinking mode.",
       "toolsHint": "Model supports tool use / function calling."
@@ -560,7 +562,8 @@
       "TaskList": "Task List",
       "SendMessage": "Send Message",
       "TeamCreate": "Create Team",
-      "TeamDelete": "Delete Team"
+      "TeamDelete": "Delete Team",
+      "ImageGenerate": "Generate Image"
     },
     "status": {
       "executingSubAgent": "Executing Sub-agent task",
@@ -770,6 +773,7 @@
       "markdownSummary": "Fetched and organized as Markdown.",
       "terminalSummary": "Command execution completed.",
       "agentSummary": "Sub Agent summary returned.",
+      "imageGenerated": "Generated {{n}} image(s).",
       "writeSummary": "File write completed.",
       "editSummary": "File changes generated.",
       "stepCompleted": "This step has completed."
@@ -1011,6 +1015,8 @@
       "title": "Models",
       "subtitle": "Manage your providers, API keys, and endpoints",
       "primaryProvider": "Primary Provider",
+      "imageGenerationProvider": "Image Generation Model",
+      "imageGenerationProviderDesc": "Used by image_generate; separate from the primary answer model and fallback chain",
       "jumpToSettings": "Jump to Settings",
       "fallbackEnabled": "Provider Fallback",
       "fallbackEnabledDesc": "Automatic fallback chain when primary model is unavailable",
@@ -1091,6 +1097,7 @@
       },
       "capabilities": {
         "vision": "Vision",
+        "image_generation": "Image Gen",
         "web": "Web",
         "reasoning": "Reasoning",
         "tools": "Tools"
@@ -1482,8 +1489,39 @@
   "welcome": {
     "greeting": "Nice to meet you",
     "stages": {
-      "connection": "Configure Connection"
+      "emma": "Meet Emma",
+      "emmaSubtitle": "Start with an Agent console that can both chat and work.",
+      "engine": "Select Inference Engine",
+      "engineSubtitle": "Determine the model API protocol for the first connection.",
+      "connection": "Configure Connection",
+      "profile": "Select Task Profile"
     },
+    "engineOptions": {
+      "openaiDetail": "Connect to OpenAI official API or accounts compatible with its model naming and gateway configuration.",
+      "anthropicDetail": "Connect to Anthropic official API as the default entry point for Claude series models.",
+      "xunfeiDetail": "Connect to iFlytek Spark, suited for Chinese-language scenarios and the domestic developer ecosystem.",
+      "gptImageDetail": "OpenAI image generation models. Configure them in Settings > Models.",
+      "googleDetail": "Connect to Google Generative Language for Gemini-series models via the gemini protocol.",
+      "deepseekDetail": "Connect to DeepSeek's OpenAI-compatible API — great for code and reasoning at low cost.",
+      "zhipuDetail": "Connect to Zhipu GLM via the OpenAI-compatible gateway; supports GLM-4 series models.",
+      "moonshotDetail": "Connect to Moonshot Kimi via the OpenAI-compatible API for long-context conversations.",
+      "minimaxDetail": "Connect to MiniMax via the OpenAI-compatible API; supports the abab series.",
+      "doubaoDetail": "Doubao Seedream image generation models. Configure them in Settings > Models.",
+      "customDetail": "Bring your own gateway — set base URL, key and a protocol (OpenAI or Anthropic) yourself."
+    },
+    "protocolLabel": "Protocol",
+    "profileOptions": {
+      "devTitle": "R&D and Automated Ops",
+      "devDetail": "Focused on long-chain execution, with higher tool iteration limits by default.",
+      "researchTitle": "Data Collection and Research Analysis",
+      "researchDetail": "Focused on multi-round retrieval and organization, maintaining medium reasoning intensity.",
+      "opsTitle": "Complex Daily Workflow",
+      "opsDetail": "Focused on stable collaboration and batch processing, maintaining concise default values."
+    },
+    "modelIdHint": "Use a model ID supported by your provider, e.g. gpt-4o-mini or claude-sonnet-4.",
+    "modelGroupLabel": "Group name (optional)",
+    "modelGroupHint": "Optional display group; only affects how the client lists models. The engine ignores it. Leave blank to auto-infer by series.",
+    "modelGroupPlaceholder": "e.g. GPT-5",
     "intro": {
       "heading": "Hi, I'm Emma, your personal secretary. I can help you",
       "categories": {
@@ -1501,10 +1539,45 @@
     "providerLabel": "Model",
     "providerPlaceholder": "Please select",
     "skip": "Skip",
-    "modelIdHint": "Use a model ID supported by your provider, e.g. gpt-4o-mini or claude-sonnet-4.",
+    "prompts": {
+      "categories": {
+        "dev": "Engineering",
+        "research": "Research",
+        "writing": "Writing",
+        "data": "Data",
+        "life": "Life",
+        "daily": "Daily"
+      },
+      "items": {
+        "dev1": "Review this code for performance bottlenecks",
+        "dev2": "Port this Python script to TypeScript",
+        "dev3": "Write unit tests for this API",
+        "dev4": "Deploy a minimal containerized service",
+        "res1": "Summarize recent LLM benchmark papers from the past 30 days",
+        "res2": "Compare three popular vector databases",
+        "res3": "List key feature differences across competitors",
+        "res4": "Extract the key points from this meeting transcript",
+        "wri1": "Rewrite this technical post for a broader audience",
+        "wri2": "Draft a product launch announcement email",
+        "wri3": "Suggest three catchy titles for this blog post",
+        "wri4": "Turn these notes into a 200-word talk",
+        "dat1": "Find the outliers in this CSV",
+        "dat2": "Write a SQL query for last month's active users",
+        "dat3": "Aggregate these logs into a visualization",
+        "dat4": "Clean this dataset and fill missing values",
+        "lif1": "Plan a 3-day getaway near my city",
+        "lif2": "Suggest healthy breakfast ideas for the week",
+        "lif3": "Build a 30-minute home workout routine",
+        "lif4": "Recommend a few highly rated non-fiction books",
+        "dai1": "Organize today's tasks into time blocks",
+        "dai2": "Draft a time-off request email",
+        "dai3": "Remind me to archive project progress every Friday",
+        "dai4": "Transcribe this voice note into a meeting summary"
+      }
+    },
     "back": "Back",
     "next": "Next",
-    "finish": "Confirm",
+    "finish": "Meet Emma",
     "submitting": "Emma is lighting the lamp for you...",
     "saveError": "Failed to save configuration"
   },

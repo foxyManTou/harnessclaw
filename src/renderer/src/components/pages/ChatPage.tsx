@@ -7,7 +7,7 @@ import {
   Loader2, Wrench, Brain, AlertCircle, RefreshCw, ChevronDown, ChevronUp,
   FileText, File, Folder, X, ArrowDown, AtSign, GitBranch, ListTodo, Users, MessagesSquare, ChevronLeft, ChevronRight, Search, HelpCircle, FolderOpen, Download,
   Globe, ExternalLink, Pencil, FolderPlus, FolderMinus,
-  PenLine, Clock, ShieldQuestion, ThumbsUp, ThumbsDown
+  PenLine, Clock, ShieldQuestion, ThumbsUp, ThumbsDown, Image as ImageIcon
 } from 'lucide-react'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -370,6 +370,16 @@ interface WebPreviewData {
   url: string
   title?: string
   query?: string
+}
+
+interface GeneratedImagePreview {
+  path: string
+  fileName: string
+  mime?: string
+  bytes?: number
+  model?: string
+  prompt?: string
+  size?: string
 }
 
 /**
@@ -1640,6 +1650,27 @@ function extractSearchResultCount(metadata?: Record<string, unknown>): number | 
     : undefined
 }
 
+function extractGeneratedImagesFromMetadata(metadata?: Record<string, unknown>): GeneratedImagePreview[] {
+  const raw = metadata?.images
+  if (!Array.isArray(raw)) return []
+  const images: GeneratedImagePreview[] = []
+  for (const item of raw) {
+    if (!isRecord(item)) continue
+    const path = typeof item.path === 'string' ? item.path.trim() : ''
+    if (!path || !path.startsWith('/')) continue
+    images.push({
+      path,
+      fileName: getFileName(path),
+      mime: typeof item.mime === 'string' ? item.mime : undefined,
+      bytes: typeof item.bytes === 'number' && Number.isFinite(item.bytes) ? item.bytes : undefined,
+      model: typeof item.model === 'string' ? item.model : undefined,
+      prompt: typeof item.prompt === 'string' ? item.prompt : undefined,
+      size: typeof item.size === 'string' ? item.size : undefined,
+    })
+  }
+  return images
+}
+
 function safeUrlHostname(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, '')
@@ -2489,6 +2520,7 @@ function getToolDisplayName(t: (key: string) => string, name?: string): string {
     SendMessage: t('chat.tools.SendMessage'),
     TeamCreate: t('chat.tools.TeamCreate'),
     TeamDelete: t('chat.tools.TeamDelete'),
+    image_generate: t('chat.tools.ImageGenerate'),
     read_file: t('chat.tools.Read'),
     write_file: t('chat.tools.Write'),
     search_query: t('chat.tools.WebSearch'),
@@ -8947,6 +8979,7 @@ function ToolCallCard({
   const [expanded, setExpanded] = useState(false)
   const contentId = useId()
   const filePreview = extractFilePreviewData(call, result)
+  const generatedImages = extractGeneratedImagesFromMetadata(result?.metadata)
   // Tool name always comes from card.add (i.e. `call.name`) — never from
   // close.inner.name which is empty by v2 protocol.
   const toolName = getToolDisplayName(t, call.name)
@@ -9003,7 +9036,7 @@ function ToolCallCard({
   const metadataForDisplay = (() => {
     if (!result?.metadata) return undefined
     if (isSearchResult) return undefined
-    const { errorInfo: _drop, ...rest } = result.metadata as Record<string, unknown>
+    const { errorInfo: _drop, images: _dropImages, ...rest } = result.metadata as Record<string, unknown>
     return Object.keys(rest).length > 0 ? rest : undefined
   })()
   const metadataText = metadataForDisplay ? JSON.stringify(metadataForDisplay, null, 2) : ''
@@ -9112,7 +9145,9 @@ function ToolCallCard({
             )}>
               {isRunning
                   ? (call.phaseHint || t('chat.toolResult.executing'))
-                  : getToolResultSummary(t, call, result, filePreview)}
+                  : generatedImages.length > 0
+                    ? t('chat.toolResult.imageGenerated', { n: generatedImages.length })
+                    : getToolResultSummary(t, call, result, filePreview)}
             </p>
 
             {/* v2 §12 — retry / recovery hints. Display-only; no control
@@ -9147,6 +9182,45 @@ function ToolCallCard({
                   {filePreview.operation === 'read_file' ? t('chat.toolResult.fileAssociated', { name: '' }).replace('Associated file', '').trim() : t('chat.toolResult.fileInvolved', { name: '' }).replace('Involves file', '').trim()}
                 </span>
               </button>
+            )}
+
+            {generatedImages.length > 0 && (
+              <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {generatedImages.map((image, idx) => {
+                  const subtitle = [image.model, image.size].filter(Boolean).join(' · ')
+                  return (
+                    <button
+                      key={`${image.path}-${idx}`}
+                      type="button"
+                      onClick={() => onOpenFilePreview({
+                        path: image.path,
+                        fileName: image.fileName,
+                        operation: 'read_file',
+                        content: '',
+                        isBinary: true,
+                      })}
+                      className="group overflow-hidden rounded-xl border border-border bg-accent/45 text-left transition-colors hover:border-primary/60 hover:bg-accent"
+                      title={image.prompt || image.fileName}
+                    >
+                      <div className="aspect-square w-full overflow-hidden bg-muted">
+                        <img
+                          src={localFileUrl(image.path)}
+                          alt={image.prompt || image.fileName}
+                          className="h-full w-full object-cover transition-transform group-hover:scale-[1.02]"
+                          loading="lazy"
+                        />
+                      </div>
+                      <div className="flex items-center gap-2 px-2 py-1.5">
+                        <ImageIcon size={12} className="flex-shrink-0 text-primary" />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-[11px] font-medium text-foreground">{image.fileName}</div>
+                          {subtitle && <div className="truncate text-[10px] text-muted-foreground">{subtitle}</div>}
+                        </div>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
             )}
 
           </div>

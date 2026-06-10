@@ -109,10 +109,12 @@
     },
     "capabilities": {
       "vision": "视觉",
+      "image_generation": "生图",
       "search": "联网",
       "reasoning": "推理",
       "tools": "工具",
       "visionHint": "模型可处理图片输入（截图、照片、PDF 等）",
+      "image_generationHint": "模型可通过图片接口生成或编辑图片",
       "searchHint": "模型可联网检索外部信息",
       "reasoningHint": "模型支持长链路推理（thinking / 深度思考）",
       "toolsHint": "模型支持工具调用（function calling / tool use）"
@@ -570,7 +572,8 @@
       "TaskList": "任务列表",
       "SendMessage": "发送消息",
       "TeamCreate": "创建团队",
-      "TeamDelete": "删除团队"
+      "TeamDelete": "删除团队",
+      "ImageGenerate": "生成图片"
     },
     "status": {
       "executingSubAgent": "正在执行子 Agent 任务",
@@ -780,6 +783,7 @@
       "markdownSummary": "已抓取并整理为 Markdown 内容。",
       "terminalSummary": "命令执行已完成。",
       "agentSummary": "子 Agent 已返回摘要。",
+      "imageGenerated": "已生成 {{n}} 张图片。",
       "writeSummary": "文件写入已完成。",
       "editSummary": "文件变更已生成。",
       "stepCompleted": "这个步骤已执行完成。"
@@ -1021,6 +1025,8 @@
       "title": "模型配置",
       "subtitle": "管理您的模型供应商、API 密钥与连接端点",
       "primaryProvider": "主 Provider",
+      "imageGenerationProvider": "图片生成模型",
+      "imageGenerationProviderDesc": "供 image_generate 工具使用，不参与主回答模型和 fallback_chain",
       "jumpToSettings": "跳转设置",
       "fallbackEnabled": "Provider 负载兜底",
       "fallbackEnabledDesc": "当主模型不可用时按 fallback_chain 顺序降级",
@@ -1101,6 +1107,7 @@
       },
       "capabilities": {
         "vision": "视觉",
+        "image_generation": "生图",
         "web": "联网",
         "reasoning": "推理",
         "tools": "工具"
@@ -1492,8 +1499,39 @@
   "welcome": {
     "greeting": "很高兴认识你",
     "stages": {
-      "connection": "配置连接信息"
+      "emma": "认识 Emma",
+      "emmaSubtitle": "从一个能聊也能干活的 Agent 控制台开始。",
+      "engine": "选择推理引擎",
+      "engineSubtitle": "确定首次接入的模型 API 协议。",
+      "connection": "配置连接信息",
+      "profile": "选择任务画像"
     },
+    "engineOptions": {
+      "openaiDetail": "接入 OpenAI 官方 API 或兼容其模型命名与网关配置的账户。",
+      "anthropicDetail": "接入 Anthropic 官方 API，作为 Claude 系列模型的默认入口。",
+      "xunfeiDetail": "接入科大讯飞 Spark，适合中文场景与国内开发者生态。",
+      "gptImageDetail": "OpenAI 图片生成模型。请在设置 > 模型配置中维护。",
+      "googleDetail": "通过 gemini 协议接入 Google Generative Language，使用 Gemini 系列模型。",
+      "deepseekDetail": "接入 DeepSeek 的 OpenAI 兼容 API，代码与推理性价比高。",
+      "zhipuDetail": "通过 OpenAI 兼容网关接入智谱 GLM，支持 GLM-4 等系列。",
+      "moonshotDetail": "通过 OpenAI 兼容 API 接入 Moonshot Kimi，适合长上下文对话。",
+      "minimaxDetail": "通过 OpenAI 兼容 API 接入 MiniMax，支持 abab 系列模型。",
+      "doubaoDetail": "豆包 Seedream 图片生成模型。请在设置 > 模型配置中维护。",
+      "customDetail": "自定义网关：自行设置 Base URL、Key 以及协议（OpenAI 或 Anthropic）。"
+    },
+    "protocolLabel": "协议",
+    "profileOptions": {
+      "devTitle": "研发与自动化运维",
+      "devDetail": "偏长链路执行，默认开启更高工具迭代上限。",
+      "researchTitle": "数据采集与研究分析",
+      "researchDetail": "偏多轮检索和整理，保持中等推理强度。",
+      "opsTitle": "复杂日常工作流",
+      "opsDetail": "偏稳定协作和批量处理，保持简洁默认值。"
+    },
+    "modelIdHint": "请填写所选服务商支持的模型 ID，例如 gpt-4o-mini 或 claude-sonnet-4。",
+    "modelGroupLabel": "分组名（可选）",
+    "modelGroupHint": "可选展示分组，仅影响客户端模型列表上的分组渲染；引擎不感知。留空则按系列自动推断。",
+    "modelGroupPlaceholder": "例如 GPT-5",
     "intro": {
       "heading": "你好，我是 Emma，你的私人秘书，我可以帮你",
       "categories": {
@@ -1550,10 +1588,45 @@
     "providerLabel": "模型选择",
     "providerPlaceholder": "请选择",
     "skip": "跳过",
-    "modelIdHint": "请填写所选服务商支持的模型 ID，例如 gpt-4o-mini 或 claude-sonnet-4。",
+    "prompts": {
+      "categories": {
+        "dev": "研发",
+        "research": "研究",
+        "writing": "写作",
+        "data": "数据",
+        "life": "生活",
+        "daily": "日常"
+      },
+      "items": {
+        "dev1": "帮我审查这段代码的性能瓶颈",
+        "dev2": "把这个 Python 脚本改写成 TypeScript",
+        "dev3": "为这个 API 写一组单元测试",
+        "dev4": "部署一个最小可用的容器化服务",
+        "res1": "汇总最近 30 天关于 LLM 评测的新论文",
+        "res2": "对比三款主流向量数据库的优劣",
+        "res3": "列出竞品的核心功能差异",
+        "res4": "把这段会议记录整理成要点",
+        "wri1": "把这段技术稿改写得更通俗易懂",
+        "wri2": "帮我写一封产品上线公告邮件",
+        "wri3": "给这篇博客拟三个吸引人的标题",
+        "wri4": "把这些要点整理成 200 字的演讲稿",
+        "dat1": "帮我找出这份 CSV 中的异常值",
+        "dat2": "写一段 SQL 统计上个月的活跃用户",
+        "dat3": "把这些日志聚合成可视化图表",
+        "dat4": "清洗这份数据并补全缺失字段",
+        "lif1": "帮我规划一次三天的城市周边游",
+        "lif2": "列一份本周的健康早餐方案",
+        "lif3": "给我一份 30 分钟的居家锻炼计划",
+        "lif4": "推荐几本最近高分的非虚构图书",
+        "dai1": "把今天的待办整理成时间块",
+        "dai2": "帮我起草一封请假邮件",
+        "dai3": "提醒我每周五归档项目进度",
+        "dai4": "把这段语音笔记转写成会议摘要"
+      }
+    },
     "back": "上一步",
     "next": "下一步",
-    "finish": "确认",
+    "finish": "去见 Emma",
     "submitting": "Emma 正在为你点灯…",
     "saveError": "保存配置失败"
   },
@@ -1567,7 +1640,7 @@
       "disconnectedDesc": "先写下想法也没关系，连接完成后就能继续处理。"
     },
     "dropToFiles": "松开即可添加文件",
-    "inputPlaceholder": "请输入任务，我来帮你完成~",
+    "inputPlaceholder": "输入问题、目标或下一步，我来接手。",
     "addFiles": "添加文件",
     "planMode": "Plan 模式",
     "planModeEnabled": "已开启 Plan 模式：本次提问将显式拆步执行",
