@@ -12,7 +12,7 @@ import {
   Pause, Play, RotateCcw, AlertTriangle,
   ChevronDown, ChevronRight, ExternalLink,
   SlidersHorizontal, RefreshCw, Settings2,
-  Globe, Sun, GripVertical, Plus,
+  Globe, Image, Sun, GripVertical, Plus,
   // Keyboard = typing hint icon shown inside the hotkey-capture input
   // while we're waiting for the user to press a combination.
   Keyboard,
@@ -34,12 +34,16 @@ import {
   buildAppProviderRaw,
   createEmptyProviderConfig,
   getEffectiveEngineType,
+  getProviderDefaultModels,
+  isAgentProviderKey,
+  isImageGenerationProviderKey,
   isManagedProviderKey,
   resolveProviderProtocol,
   type ManagedProviderKey,
   type ProtocolProviderKey,
   type ProviderConfig,
   type ProviderModelEntry,
+  type ProviderType,
 } from '@/lib/providers'
 
 // ─── Primitives ────────────────────────────────────────────────────────────
@@ -512,12 +516,33 @@ interface ProviderEndpointRef {
   endpoint: string
   model?: string
   type: ProviderType
+  modelType?: string[]
+  providerEnabled?: boolean
   // Engine 2026-05-14+ provider.disabled. Endpoints under a disabled
   // provider are completely skipped by the dispatcher (effective
   // disabled = provider.disabled || endpoint.disabled), so the
   // fallback-chain "add node" menu hides them — picking one would
   // produce a chain entry that can never route.
   providerDisabled?: boolean
+  endpointDisabled?: boolean
+  engineProviderDisabled?: boolean
+  engineEndpointDisabled?: boolean
+  providerMissing?: boolean
+  endpointMissing?: boolean
+  providerEngineType?: ProviderType
+  providerApiBase?: string | null
+  providerApiKey?: string
+  endpointGroup?: string
+}
+
+function isImageGenerationEndpointRef(endpoint: ProviderEndpointRef): boolean {
+  return endpoint.modelType?.includes('image_generation') === true
+}
+
+function toStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+    : []
 }
 
 const PROTOCOL_GROUPS = (t: any): { type: ProviderType; label: string }[] => [
@@ -586,14 +611,77 @@ function ProviderStrategyRow({
     const out = new Set<string>()
     const modelProviders = asRecord((appConfigData ?? {}).modelProviders)
     for (const [name, raw] of Object.entries(modelProviders)) {
+      if (!isManagedProviderKey(name)) continue
       const rec = asRecord(raw)
       if (rec.enabled === false) out.add(name)
+    }
+    return out
+  }, [appConfigData])
+  const rendererEnabledNames = useMemo(() => {
+    const out = new Set<string>()
+    const modelProviders = asRecord((appConfigData ?? {}).modelProviders)
+    for (const [name, raw] of Object.entries(modelProviders)) {
+      if (!isManagedProviderKey(name)) continue
+      const rec = asRecord(raw)
+      if (rec.enabled === true) out.add(name)
+    }
+    return out
+  }, [appConfigData])
+  const rendererImageModelsByRef = useMemo(() => {
+    const out = new Map<
+      string,
+      {
+        provider: ManagedProviderKey
+        modelId: string
+        tags: string[]
+        engineType: ProviderType
+        apiBase: string | null
+        apiKey: string
+        group?: string
+      }
+    >()
+    const modelProviders = asRecord((appConfigData ?? {}).modelProviders)
+    for (const [providerName, rawProvider] of Object.entries(modelProviders)) {
+      if (!isManagedProviderKey(providerName)) continue
+      const provider = asRecord(rawProvider)
+      if (provider.enabled !== true) continue
+      const normalized = normalizeProviderConfig(provider)
+      const providerConfig: ProviderConfig = {
+        ...createEmptyProviderConfig(providerName),
+        ...normalized,
+        apiBase: normalized.apiBase ?? PROVIDER_DEFAULT_BASES[providerName] ?? null,
+        raw: provider,
+      }
+      const engineType = getEffectiveEngineType(providerName, providerConfig)
+      const models = Array.isArray(provider.models) ? provider.models : []
+      for (const rawModel of models) {
+        const model = asRecord(rawModel)
+        if (model.enabled !== true || typeof model.id !== 'string' || model.id.length === 0) {
+          continue
+        }
+        const tags = toStringList(model.tags).filter(
+          (tag) => VISIBLE_MODEL_TYPE_TOKENS.has(tag) || HIDDEN_MODEL_TYPE_TOKENS.has(tag),
+        )
+        if (!tags.includes('image_generation')) continue
+        out.set(`${providerName}:${model.id}`, {
+          provider: providerName,
+          modelId: model.id,
+          tags,
+          engineType,
+          apiBase: providerConfig.apiBase,
+          apiKey: providerConfig.apiKey,
+          ...(typeof model.group === 'string' && model.group.trim()
+            ? { group: model.group.trim() }
+            : {}),
+        })
+      }
     }
     return out
   }, [appConfigData])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [chain, setChain] = useState<string[]>([])
   const [chainEntries, setChainEntries] = useState<ProviderChainEntry[]>([])
+  const [imageGeneration, setImageGeneration] = useState('')
   const [loading, setLoading] = useState(true)
   const [unavailable, setUnavailable] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -602,18 +690,20 @@ function ProviderStrategyRow({
   const [draggedIdx, setDraggedIdx] = useState<number | null>(null)
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
   const addMenuRef = useRef<HTMLDivElement | null>(null)
+  const repairingImageEndpointRef = useRef<string | null>(null)
 
   const loadAll = useCallback(async () => {
     setLoading(true)
     setUnavailable(null)
-    const [pRes, cRes] = await Promise.all([
+    const [pRes, aRes] = await Promise.all([
       window.agentApi.listProviders(),
-      window.agentApi.getFallbackChain(),
+      window.agentApi.getAgentConfig(),
     ])
     if (!pRes.ok) {
       setProviders([])
       setChain([])
       setChainEntries([])
+      setImageGeneration('')
       // Engine 2026-05-14+: providers + /agent are always mounted, even
       // in degraded mode (empty chain). A 404 here means the engine is
       // older than the rewrite or the path is genuinely wrong.
@@ -626,15 +716,20 @@ function ProviderStrategyRow({
       return
     }
     setProviders(Array.isArray(pRes.data.providers) ? pRes.data.providers : [])
-    if (cRes.ok) {
-      setChain(Array.isArray(cRes.data?.chain) ? cRes.data.chain : [])
-      setChainEntries(Array.isArray(cRes.data?.entries) ? cRes.data.entries : [])
+    if (aRes.ok) {
+      const fallback = Array.isArray(aRes.data?.fallback_chain) ? aRes.data.fallback_chain : []
+      setChain(aRes.data?.primary ? [aRes.data.primary, ...fallback] : fallback.slice())
+      setChainEntries(Array.isArray(aRes.data?.entries) ? aRes.data.entries : [])
+      setImageGeneration(
+        typeof aRes.data?.image_generation === 'string' ? aRes.data.image_generation : '',
+      )
     } else {
       setChain([])
       setChainEntries([])
+      setImageGeneration('')
     }
     setLoading(false)
-  }, [])
+  }, [t])
 
   useEffect(() => {
     void loadAll()
@@ -660,27 +755,73 @@ function ProviderStrategyRow({
 
   const allEndpoints = useMemo<ProviderEndpointRef[]>(() => {
     const out: ProviderEndpointRef[] = []
+    const seenRefs = new Set<string>()
+    const providersByName = new Map(providers.map((provider) => [provider.name, provider]))
     for (const p of providers) {
-      // Effective disabled = engine flag OR renderer-side enabled=false.
-      // The latter catches the gap where the user turned OFF the
-      // provider in the Models tab but the engine response either
-      // hasn't refreshed yet or didn't include the `disabled` field at
-      // all (older engines / 404 on PATCH because the provider was
-      // never created server-side).
-      const effectiveDisabled = p.disabled === true || rendererDisabledNames.has(p.name)
       for (const e of p.endpoints) {
+        const ref = `${p.name}:${e.name}`
+        const rendererImageModel = rendererImageModelsByRef.get(ref)
+        const engineModelType = toStringList(e.model_type)
+        const modelType = Array.from(
+          new Set([...engineModelType, ...(rendererImageModel?.tags ?? [])]),
+        )
+        // Effective disabled = renderer-side enabled=false OR engine flag.
+        // For image-generation models that are already enabled in
+        // appConfig, an engine-side disabled=true is treated as stale
+        // sync state so the selector can still show the row and repair it
+        // on selection. Chat/fallback routing still hides disabled
+        // endpoints, and image-generation rows are excluded from those
+        // selectors separately by modelType.
+        const enabledImageModel = Boolean(rendererImageModel)
+        const providerDisabled = rendererDisabledNames.has(p.name)
+          || (p.disabled === true && !enabledImageModel)
+        const endpointDisabled = e.disabled === true && !enabledImageModel
+        seenRefs.add(ref)
         out.push({
-          ref: `${p.name}:${e.name}`,
+          ref,
           provider: p.name,
           endpoint: e.name,
           model: e.model,
           type: p.type,
-          providerDisabled: effectiveDisabled,
+          modelType,
+          providerEnabled: rendererEnabledNames.has(p.name),
+          providerDisabled,
+          endpointDisabled,
+          engineProviderDisabled: p.disabled === true,
+          engineEndpointDisabled: e.disabled === true,
+          providerEngineType: rendererImageModel?.engineType ?? p.type,
+          providerApiBase: rendererImageModel?.apiBase ?? p.base_url,
+          providerApiKey: rendererImageModel?.apiKey ?? p.api_key,
+          endpointGroup: rendererImageModel?.group ?? e.group,
         })
       }
     }
+    for (const [ref, imageModel] of rendererImageModelsByRef.entries()) {
+      if (seenRefs.has(ref)) continue
+      const provider = providersByName.get(imageModel.provider)
+      const providerDisabled = rendererDisabledNames.has(imageModel.provider)
+      out.push({
+        ref,
+        provider: imageModel.provider,
+        endpoint: imageModel.modelId,
+        model: imageModel.modelId,
+        type: provider?.type ?? imageModel.engineType,
+        modelType: imageModel.tags,
+        providerEnabled: true,
+        providerDisabled,
+        endpointDisabled: false,
+        engineProviderDisabled: provider?.disabled === true,
+        engineEndpointDisabled: false,
+        providerMissing: !provider,
+        endpointMissing: true,
+        providerEngineType: imageModel.engineType,
+        providerApiBase: imageModel.apiBase,
+        providerApiKey: imageModel.apiKey,
+        endpointGroup: imageModel.group,
+      })
+    }
     return out
-  }, [providers, rendererDisabledNames])
+  }, [providers, rendererDisabledNames, rendererEnabledNames, rendererImageModelsByRef])
 
   // Split the flat chain into primary (head) + fallback (tail). The
   // engine enforces `fallback_chain` entries must be distinct from
@@ -701,7 +842,13 @@ function ProviderStrategyRow({
       // Skip primary (engine rejects fallback == primary), endpoints
       // already in fallback, and endpoints whose owning provider is
       // disabled (they can't route, so listing them would be a trap).
-      if (e.ref === primary || fallback.includes(e.ref) || e.providerDisabled) continue
+      if (
+        e.ref === primary
+        || fallback.includes(e.ref)
+        || e.providerDisabled
+        || e.endpointDisabled
+        || isImageGenerationEndpointRef(e)
+      ) continue
       const arr = groups.get(e.type) ?? []
       arr.push(e)
       groups.set(e.type, arr)
@@ -712,7 +859,12 @@ function ProviderStrategyRow({
   const addable = useMemo(
     () =>
       allEndpoints.filter(
-        (e) => e.ref !== primary && !fallback.includes(e.ref) && !e.providerDisabled,
+        (e) =>
+          e.ref !== primary
+          && !fallback.includes(e.ref)
+          && !e.providerDisabled
+          && !e.endpointDisabled
+          && !isImageGenerationEndpointRef(e),
       ),
     [allEndpoints, primary, fallback],
   )
@@ -729,6 +881,8 @@ function ProviderStrategyRow({
     if (!primary) opts.push({ label: t('models.select'), value: '' })
     for (const e of allEndpoints) {
       if (e.providerDisabled && e.ref !== primary) continue
+      if (e.endpointDisabled && e.ref !== primary) continue
+      if (isImageGenerationEndpointRef(e) && e.ref !== primary) continue
       opts.push({ label: e.ref, value: e.ref })
     }
     if (primary && !allEndpoints.some((e) => e.ref === primary)) {
@@ -736,6 +890,21 @@ function ProviderStrategyRow({
     }
     return opts
   }, [allEndpoints, primary, t])
+
+  const imageGenerationOptions = useMemo<{ label: string; value: string }[]>(() => {
+    const opts: { label: string; value: string }[] = [{ label: t('models.select'), value: '' }]
+    for (const e of allEndpoints) {
+      if (!e.providerEnabled) continue
+      if (e.providerDisabled) continue
+      if (e.endpointDisabled) continue
+      if (!isImageGenerationEndpointRef(e)) continue
+      opts.push({ label: e.ref, value: e.ref })
+    }
+    if (imageGeneration && !allEndpoints.some((e) => e.ref === imageGeneration)) {
+      opts.push({ label: t('models.unrecognized', { name: imageGeneration }), value: imageGeneration })
+    }
+    return opts
+  }, [allEndpoints, imageGeneration, t])
 
   // persistChain takes the full flat chain; the main-process adapter
   // splits it back into `{primary, fallback_chain}` for PATCH /agent.
@@ -755,6 +924,179 @@ function ProviderStrategyRow({
     setChainEntries(Array.isArray(res.data?.entries) ? res.data.entries : [])
     setBusy(false)
   }
+
+  const ensureImageGenerationEndpointReady = useCallback(async (endpoint: ProviderEndpointRef) => {
+    if (!isImageGenerationEndpointRef(endpoint)) return false
+
+    if (endpoint.providerMissing) {
+      const createProviderPayload: {
+        name: string
+        type: ProviderType
+        base_url?: string
+        api_key?: string
+        disabled?: boolean
+      } = {
+        name: endpoint.provider,
+        type: endpoint.providerEngineType ?? endpoint.type,
+        disabled: false,
+      }
+      const baseUrl = endpoint.providerApiBase?.trim() || ''
+      const apiKey = endpoint.providerApiKey?.trim() || ''
+      if (baseUrl) createProviderPayload.base_url = baseUrl
+      if (apiKey) createProviderPayload.api_key = apiKey
+      const providerRes = await window.agentApi.createProvider(createProviderPayload)
+      if (!providerRes.ok && !(providerRes.status === 400 && /exist/i.test(providerRes.message || ''))) {
+        return false
+      }
+    } else if (endpoint.engineProviderDisabled) {
+      const providerRes = await window.agentApi.patchProvider(endpoint.provider, { disabled: false })
+      if (!providerRes.ok) return false
+    }
+
+    if (endpoint.endpointMissing) {
+      const createEndpointPayload: {
+        name: string
+        model: string
+        disabled?: boolean
+        group?: string
+      } = {
+        name: endpoint.endpoint,
+        model: endpoint.model || endpoint.endpoint,
+        disabled: false,
+      }
+      if (endpoint.endpointGroup) createEndpointPayload.group = endpoint.endpointGroup
+      const createRes = await window.agentApi.createEndpoint(endpoint.provider, createEndpointPayload)
+      if (!createRes.ok && !(createRes.status === 400 && /exist/i.test(createRes.message || ''))) {
+        return false
+      }
+    }
+
+    const endpointPatch: { disabled?: boolean; model_type?: string[] } = {}
+    if (endpoint.engineEndpointDisabled) endpointPatch.disabled = false
+    if (endpoint.modelType && endpoint.modelType.length > 0) endpointPatch.model_type = endpoint.modelType
+
+    if (Object.keys(endpointPatch).length > 0) {
+      const endpointRes = await window.agentApi.patchEndpoint(
+        endpoint.provider,
+        endpoint.endpoint,
+        endpointPatch,
+      )
+      if (!endpointRes.ok) return false
+    }
+
+    setProviders((prev) => {
+      let providerFound = false
+      const next = prev.map((provider) => {
+        if (provider.name !== endpoint.provider) return provider
+        providerFound = true
+        let endpointFound = false
+        const endpoints = provider.endpoints.map((item) => {
+          if (item.name !== endpoint.endpoint) return item
+          endpointFound = true
+          return {
+            ...item,
+            disabled: false,
+            model_type: endpoint.modelType,
+          }
+        })
+        if (!endpointFound) {
+          endpoints.push({
+            name: endpoint.endpoint,
+            model: endpoint.model || endpoint.endpoint,
+            disabled: false,
+            in_chain: false,
+            model_type: endpoint.modelType,
+            ...(endpoint.endpointGroup ? { group: endpoint.endpointGroup } : {}),
+          })
+        }
+        return {
+          ...provider,
+          disabled: false,
+          endpoints,
+        }
+      })
+      if (!providerFound) {
+        next.push({
+          name: endpoint.provider,
+          type: endpoint.providerEngineType ?? endpoint.type,
+          base_url: endpoint.providerApiBase ?? '',
+          api_key: endpoint.providerApiKey ?? '',
+          disabled: false,
+          endpoints: [
+            {
+              name: endpoint.endpoint,
+              model: endpoint.model || endpoint.endpoint,
+              disabled: false,
+              in_chain: false,
+              model_type: endpoint.modelType,
+              ...(endpoint.endpointGroup ? { group: endpoint.endpointGroup } : {}),
+            },
+          ],
+        })
+      }
+      return next
+    })
+    return true
+  }, [])
+
+  const handleImageGenerationChange = async (newRef: string) => {
+    if (newRef === imageGeneration) return
+    setBusy(true)
+    const prev = imageGeneration
+    setImageGeneration(newRef)
+    if (newRef) {
+      const selected = allEndpoints.find((endpoint) => endpoint.ref === newRef)
+      if (!selected || !isImageGenerationEndpointRef(selected)) {
+        setImageGeneration(prev)
+        setBusy(false)
+        return
+      }
+      const ready = await ensureImageGenerationEndpointReady(selected)
+      if (!ready) {
+        setImageGeneration(prev)
+        setBusy(false)
+        return
+      }
+    }
+    const res = await window.agentApi.patchAgentConfig({ image_generation: newRef })
+    if (!res.ok) {
+      setImageGeneration(prev)
+      setBusy(false)
+      return
+    }
+    setImageGeneration(
+      typeof res.data?.image_generation === 'string' ? res.data.image_generation : '',
+    )
+    setBusy(false)
+  }
+
+  useEffect(() => {
+    if (loading || !imageGeneration) return
+    const selected = allEndpoints.find((endpoint) => endpoint.ref === imageGeneration)
+    const selectable = Boolean(
+      selected
+      && selected.providerEnabled
+      && !selected.providerDisabled
+      && !selected.endpointDisabled
+      && isImageGenerationEndpointRef(selected),
+    )
+    if (selectable) {
+      if (
+        selected
+        && (selected.engineProviderDisabled || selected.engineEndpointDisabled)
+        && repairingImageEndpointRef.current !== selected.ref
+      ) {
+        repairingImageEndpointRef.current = selected.ref
+        void ensureImageGenerationEndpointReady(selected).finally(() => {
+          repairingImageEndpointRef.current = null
+        })
+      }
+      return
+    }
+
+    setImageGeneration('')
+    void window.agentApi.patchAgentConfig({ image_generation: '' })
+  }, [allEndpoints, ensureImageGenerationEndpointReady, imageGeneration, loading])
 
   // Picking a new primary: if it currently lives in fallback we strip
   // it (engine constraint: fallback_chain items must differ from
@@ -875,6 +1217,20 @@ function ProviderStrategyRow({
               className={blinkingPrimary ? 'agent-primary-blink' : undefined}
             />
           </span>
+        </div>
+      </SettingRow>
+
+      <SettingRow
+        label={t('settings.models.imageGenerationProvider')}
+        description={t('settings.models.imageGenerationProviderDesc')}
+      >
+        <div className="flex items-center gap-2">
+          <SelectInput
+            value={imageGeneration}
+            onChange={handleImageGenerationChange}
+            options={imageGenerationOptions}
+          />
+          {busy && <Loader2 size={12} className="animate-spin text-muted-foreground" />}
         </div>
       </SettingRow>
 
@@ -1546,7 +1902,23 @@ function AgentSection({
 // same shape under `appConfig.modelProviders.<key>` without
 // duplicating definitions here.
 
-// Brand mark identifiers. These are shared by `ModelIcon` (per-row icon inference).
+const PROVIDER_LOGO_BG: Record<ManagedProviderKey, string> = {
+  xunfei: '#1A6BFF',
+  anthropic: '#F4F1EE',
+  openai: '#000000',
+  'gpt-image': '#000000',
+  google: '#FFFFFF',
+  deepseek: '#4D6BFE',
+  zhipu: '#3859FF',
+  moonshot: '#6D28D9',
+  minimax: '#00B97F',
+  doubao: '#111827',
+  custom: '#F1F5F9',
+}
+
+// Brand mark identifiers. These are shared by `ProviderLogo` (sidebar) and
+// `ModelIcon` (per-row), so the user sees the same SVG whether they're
+// scanning vendors or scrolling models within a vendor.
 type BrandKey =
   | 'spark'
   | 'anthropic'
@@ -1620,6 +1992,35 @@ function BrandMark({ brand, size, color }: { brand: BrandKey; size: number; colo
   )
 }
 
+const PROVIDER_TO_BRAND: Record<ManagedProviderKey, BrandKey> = {
+  xunfei: 'spark',
+  anthropic: 'anthropic',
+  openai: 'openai',
+  'gpt-image': 'openai',
+  google: 'gemini',
+  qwen: 'qwen',
+  deepseek: 'deepseek',
+  zhipu: 'glm',
+  moonshot: 'kimi',
+  minimax: 'minimax',
+  doubao: 'generic',
+  custom: 'custom',
+}
+
+function ProviderLogo({ provider, size = 28 }: { provider: ManagedProviderKey; size?: number }) {
+  const innerSize = Math.round(size * 0.62)
+  const bg = PROVIDER_LOGO_BG[provider]
+  const brand = PROVIDER_TO_BRAND[provider]
+  return (
+    <div
+      className="rounded-full flex items-center justify-center flex-shrink-0"
+      style={{ width: size, height: size, backgroundColor: bg }}
+    >
+      <BrandMark brand={brand} size={innerSize} color={BRAND_FG[brand]} />
+    </div>
+  )
+}
+
 function getDisplayName(key: ManagedProviderKey): string {
   return PROVIDER_DISPLAY_NAMES[key]
 }
@@ -1628,11 +2029,14 @@ const PROVIDER_APIKEY_PAGES: Record<ManagedProviderKey, string> = {
   xunfei: 'https://console.xfyun.cn/services/bm4',
   anthropic: 'https://console.anthropic.com/settings/keys',
   openai: 'https://platform.openai.com/api-keys',
+  'gpt-image': 'https://platform.openai.com/api-keys',
   google: 'https://aistudio.google.com/app/apikey',
   qwen: 'https://bailian.console.aliyun.com/?apiKey=1#/api-key',
   minimax: 'https://platform.minimaxi.com/user-center/basic-information/interface-key',
   zhipu: 'https://open.bigmodel.cn/usercenter/apikeys',
   moonshot: 'https://platform.moonshot.cn/console/api-keys',
+  deepseek: 'https://platform.deepseek.com/api_keys',
+  doubao: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apikey',
   custom: '',
 }
 
@@ -1640,11 +2044,14 @@ const PROVIDER_DOCS_PAGES: Record<ManagedProviderKey, string> = {
   xunfei: 'https://www.xfyun.cn/doc/spark/X2-Flash.html',
   anthropic: 'https://docs.anthropic.com/',
   openai: 'https://platform.openai.com/docs',
+  'gpt-image': 'https://developers.openai.com/api/docs/models/gpt-image-2',
   google: 'https://ai.google.dev/gemini-api/docs',
   qwen: 'https://help.aliyun.com/zh/model-studio/developer-reference/',
   minimax: 'https://platform.minimaxi.com/document/',
   zhipu: 'https://open.bigmodel.cn/dev/api',
   moonshot: 'https://platform.moonshot.cn/docs',
+  deepseek: 'https://api-docs.deepseek.com/',
+  doubao: 'https://www.volcengine.com/docs/82379/1824692',
   custom: '',
 }
 
@@ -1652,11 +2059,14 @@ const PROVIDER_MODELS_PAGES: Record<ManagedProviderKey, string> = {
   xunfei: 'https://www.xfyun.cn/doc/spark/X2-Flash.html',
   anthropic: 'https://docs.anthropic.com/en/docs/about-claude/models',
   openai: 'https://platform.openai.com/docs/models',
+  'gpt-image': 'https://developers.openai.com/api/docs/models/gpt-image-2',
   google: 'https://ai.google.dev/gemini-api/docs/models/gemini',
   qwen: 'https://help.aliyun.com/zh/model-studio/getting-started/models',
   minimax: 'https://platform.minimaxi.com/document/Models',
   zhipu: 'https://open.bigmodel.cn/dev/howuse/model',
   moonshot: 'https://platform.moonshot.cn/docs/pricing/chat',
+  deepseek: 'https://api-docs.deepseek.com/quick_start/pricing',
+  doubao: 'https://www.volcengine.com/docs/82379/1824692',
   custom: '',
 }
 
@@ -1664,6 +2074,10 @@ function getApiPathSuffix(protocol: 'openai' | 'anthropic' | 'gemini'): string {
   if (protocol === 'anthropic') return '/v1/messages'
   if (protocol === 'gemini') return '/v1beta/models'
   return '/v1/chat/completions'
+}
+
+function buildApiTargetUrl(baseUrl: string, suffix: string): string {
+  return `${baseUrl.replace(/\/+$/, '')}${suffix}`
 }
 
 // Validate an API base URL. Empty is allowed (renderer falls back to
@@ -1936,6 +2350,7 @@ interface ModelTagDef {
 const MODEL_TAGS: ModelTagDef[] = [
   { key: 'vision',    label: 'models.capabilities.vision',    icon: Eye,    fg: '#16A34A', bg: '#DCFCE7', border: '#BBF7D0' },
   { key: 'search',    label: 'models.capabilities.search',    icon: Globe,  fg: '#2563EB', bg: '#DBEAFE', border: '#BFDBFE' },
+  { key: 'image_generation', label: 'models.capabilities.image_generation', icon: Image, fg: '#BE123C', bg: '#FFE4E6', border: '#FDA4AF' },
   { key: 'reasoning', label: 'models.capabilities.reasoning', icon: Sun,    fg: '#7C3AED', bg: '#EDE9FE', border: '#DDD6FE' },
   { key: 'tools',     label: 'models.capabilities.tools',     icon: Wrench, fg: '#EA580C', bg: '#FFEDD5', border: '#FED7AA' },
 ]
@@ -1954,7 +2369,23 @@ const VISIBLE_MODEL_TYPE_TOKENS: ReadonlySet<string> = new Set(MODEL_TAGS.map((t
 const MODEL_TAG_MAP: Record<string, ModelTagDef> =
   Object.fromEntries(MODEL_TAGS.map((t) => [t.key, t]))
 
-function ModelTagBadge({ tagKey, t }: { tagKey: string; t: (key: string) => string }) {
+function isImageGenerationModel(entry?: ProviderModelEntry | null): boolean {
+  return Boolean(entry?.tags?.includes('image_generation'))
+}
+
+function isAgentRoutableModel(provider: ManagedProviderKey, entry?: ProviderModelEntry | null): boolean {
+  return !isImageGenerationProviderKey(provider) && !isImageGenerationModel(entry)
+}
+
+function ModelTagBadge({
+  tagKey,
+  t,
+  detail,
+}: {
+  tagKey: string
+  t: (key: string) => string
+  detail?: string
+}) {
   const [tooltipPos, setTooltipPos] = useState<{ left: number; top: number } | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const badgeRef = useRef<HTMLSpanElement | null>(null)
@@ -1963,6 +2394,7 @@ function ModelTagBadge({ tagKey, t }: { tagKey: string; t: (key: string) => stri
   if (!tag) return null
 
   const Icon = tag.icon
+  const label = t(tag.label)
 
   // Tooltip is rendered via a portal with `position: fixed`, so it escapes
   // the model list's overflow-y-auto container and isn't clipped at the
@@ -2006,7 +2438,7 @@ function ModelTagBadge({ tagKey, t }: { tagKey: string; t: (key: string) => stri
     >
       <Icon size={11} />
       {tooltipPos && createPortal(
-        <span
+        <div
           role="tooltip"
           style={{
             position: 'fixed',
@@ -2015,10 +2447,20 @@ function ModelTagBadge({ tagKey, t }: { tagKey: string; t: (key: string) => stri
             transform: 'translateX(-50%)',
             zIndex: 1000,
           }}
-          className="pointer-events-none whitespace-nowrap rounded-md bg-foreground px-1.5 py-0.5 text-[10px] font-medium text-card shadow-md"
+          className={cn(
+            'pointer-events-none rounded-md bg-foreground text-card shadow-md',
+            detail
+              ? 'max-w-[28rem] px-2 py-1.5 text-[10px] leading-relaxed'
+              : 'whitespace-nowrap px-1.5 py-0.5 text-[10px] font-medium',
+          )}
         >
-          {t(tag.label)}
-        </span>,
+          {detail ? (
+            <>
+              <div className="font-medium">{label}</div>
+              <div className="mt-0.5 break-all font-mono text-card/90">{detail}</div>
+            </>
+          ) : label}
+        </div>,
         document.body,
       )}
     </span>
@@ -2033,10 +2475,12 @@ function HoverHint({
   label,
   children,
   className,
+  wide = false,
 }: {
   label: string
   children: React.ReactNode
   className?: string
+  wide?: boolean
 }) {
   const [tooltipPos, setTooltipPos] = useState<{ left: number; top: number } | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -2083,7 +2527,12 @@ function HoverHint({
             transform: 'translateX(-50%)',
             zIndex: 1000,
           }}
-          className="pointer-events-none whitespace-nowrap rounded-md bg-foreground px-1.5 py-0.5 text-[10px] font-medium text-card shadow-md"
+          className={cn(
+            'pointer-events-none rounded-md bg-foreground text-[10px] font-medium text-card shadow-md',
+            wide
+              ? 'max-w-[28rem] whitespace-normal break-all px-2 py-1 text-left font-mono leading-relaxed'
+              : 'whitespace-nowrap px-1.5 py-0.5',
+          )}
         >
           {label}
         </span>,
@@ -2319,6 +2768,40 @@ function normalizeProviderConfig(rawValue: unknown): ProviderConfig {
   }
 }
 
+function mergeProviderModelPresets(
+  models: ProviderModelEntry[],
+  presets: ProviderModelEntry[],
+): ProviderModelEntry[] {
+  if (presets.length === 0) return models
+  const merged = models.map((entry) => ({
+    ...entry,
+    ...(entry.tags ? { tags: [...entry.tags] } : {}),
+  }))
+  const byId = new Map(merged.map((entry, index) => [entry.id, index]))
+
+  for (const preset of presets) {
+    const index = byId.get(preset.id)
+    if (index === undefined) {
+      merged.push({
+        ...preset,
+        ...(preset.tags ? { tags: [...preset.tags] } : {}),
+      })
+      byId.set(preset.id, merged.length - 1)
+      continue
+    }
+
+    const existing = merged[index]
+    const tags = new Set([...(existing.tags ?? []), ...(preset.tags ?? [])])
+    merged[index] = {
+      ...existing,
+      name: existing.name ?? preset.name,
+      group: existing.group ?? preset.group,
+      ...(tags.size > 0 ? { tags: Array.from(tags) } : {}),
+    }
+  }
+  return merged
+}
+
 function mergeProviderSource(
   rootValue: unknown,
   llmValue: unknown,
@@ -2349,10 +2832,13 @@ function getManagedProviders(
       const fallback = mergeProviderSource(rootProviders.custom, llmProviders.custom)
       const source = Object.keys(raw).length > 0 ? raw : fallback
       const normalized = normalizeProviderConfig(source)
+      const defaultModels = getProviderDefaultModels('custom')
+      const models = mergeProviderModelPresets(normalized.models, defaultModels)
       result.custom = {
         ...createEmptyProviderConfig('custom'),
         ...normalized,
         apiBase: normalized.apiBase ?? null,
+        models,
         raw: source,
       }
       continue
@@ -2367,10 +2853,13 @@ function getManagedProviders(
       : {}
     const source = Object.keys(appProvider).length > 0 ? appProvider : engineMerged
     const normalized = normalizeProviderConfig(source)
+    const defaultModels = getProviderDefaultModels(key)
+    const models = mergeProviderModelPresets(normalized.models, defaultModels)
     result[key] = {
       ...createEmptyProviderConfig(key),
       ...normalized,
       apiBase: normalized.apiBase ?? (PROVIDER_DEFAULT_BASES[key] || null),
+      models,
       raw: appProvider,
     }
   }
@@ -2384,7 +2873,9 @@ function getManagedDefaultProvider(
 ): ManagedProviderKey {
   const modelProviders = getAppModelProvidersConfig(appConfig)
   const defaultSelection = modelProviders.defaultSelection
-  if (typeof defaultSelection === 'string' && isManagedProviderKey(defaultSelection)) {
+  if (typeof defaultSelection === 'string'
+      && isManagedProviderKey(defaultSelection)
+      && isAgentProviderKey(defaultSelection)) {
     return defaultSelection
   }
 
@@ -2397,7 +2888,7 @@ function getManagedDefaultProvider(
   }
 
   const appDefault = asRecord(asRecord(appConfig.agents).defaults).provider
-  if (typeof appDefault === 'string' && isManagedProviderKey(appDefault)) {
+  if (typeof appDefault === 'string' && isManagedProviderKey(appDefault) && isAgentProviderKey(appDefault)) {
     return appDefault
   }
 
@@ -2437,6 +2928,7 @@ function ModelSection({
   const [testState, setTestState] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle')
   const [toastNotice, setToastNotice] = useState<{ tone: 'error' | 'success'; message: string } | null>(null)
   const [modelFetchState, setModelFetchState] = useState<'idle' | 'loading'>('idle')
+  const [engineImageGenerationUrls, setEngineImageGenerationUrls] = useState<Record<string, string>>({})
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
   const [modelSearchVisible, setModelSearchVisible] = useState(false)
   const [modelSearchQuery, setModelSearchQuery] = useState('')
@@ -2528,6 +3020,25 @@ function ModelSection({
     }
   }, [engineTypePopupOpen])
 
+  const collectImageGenerationUrls = useCallback((enginePayload: ProviderInfo[]): Record<string, string> => {
+    const next: Record<string, string> = {}
+    for (const provider of enginePayload) {
+      for (const endpoint of provider.endpoints ?? []) {
+        if (endpoint.image_generation_url) {
+          next[`${provider.name}:${endpoint.name}`] = endpoint.image_generation_url
+        }
+      }
+    }
+    return next
+  }, [])
+
+  const refreshEngineImageGenerationUrls = useCallback(async () => {
+    const res = await window.agentApi.listProviders()
+    if (!res.ok) return
+    const enginePayload = Array.isArray(res.data?.providers) ? res.data.providers : []
+    setEngineImageGenerationUrls(collectImageGenerationUrls(enginePayload))
+  }, [collectImageGenerationUrls])
+
   useEffect(() => {
     ;(async () => {
       try {
@@ -2601,6 +3112,7 @@ function ModelSection({
       const res = await window.agentApi.listProviders()
       if (!res.ok) return // engine unreachable — silent skip
       const enginePayload = Array.isArray(res.data?.providers) ? res.data.providers : []
+      setEngineImageGenerationUrls(collectImageGenerationUrls(enginePayload))
 
       // Compute reconciled state + backfill plan purely against the
       // current `providers` closure value. Doing this OUTSIDE the
@@ -2651,7 +3163,7 @@ function ModelSection({
         void window.agentApi.patchEndpoint(item.provider, item.endpoint, { group: item.group })
       }
     })()
-  }, [loading, providers])
+  }, [collectImageGenerationUrls, loading, providers])
 
   // Auto-populate model registry for providers configured in onboarding.
   // After initial load, check each enabled provider: if it has API credentials
@@ -2896,14 +3408,18 @@ function ModelSection({
     [providers, reportHotReloadError, t],
   )
 
-  // POST /api/v1/providers/{p}/endpoints + append to fallback-chain.
+  // POST /api/v1/providers/{p}/endpoints + append Agent-routable models
+  // to fallback-chain. Image-generation-only models are still persisted as
+  // disabled endpoints so credentials/model metadata remain editable here,
+  // but they are not eligible for Agent LLM routing.
   // When POST returns 400 update_failed (most often because the
   // endpoint already exists on the engine side), we transparently fall
   // back to "just add to chain" instead of surfacing an error.
   //
   // Idempotent: when the endpoint already exists we still PATCH
-  // `disabled=false` so re-enabling a previously-paused model
-  // (the new canonical flow) routes again.
+  // `disabled` to match the model category, so re-enabling a previously
+  // paused Agent model routes again while image-generation models stay
+  // out of the dispatcher.
   const hotCreateEndpoint = useCallback(
     async (
       key: ManagedProviderKey,
@@ -2911,6 +3427,7 @@ function ModelSection({
       maxTokens?: number,
       tags?: string[],
       group?: string,
+      routeToAgent = true,
     ): Promise<void> => {
       // Guard: the engine rejects POST endpoint when the provider entry
       // doesn't exist. Create it first if needed.
@@ -2926,8 +3443,10 @@ function ModelSection({
       } = {
         name: modelId,
         model: modelId,
-        // Explicitly mark active so the dispatcher routes immediately
-        // (engine default is also false; we send it for clarity).
+        // Enabled in the model list means the endpoint is available.
+        // routeToAgent below only controls whether it enters the chat
+        // fallback chain; image-generation endpoints stay available for
+        // image_generate without becoming answer-model fallbacks.
         disabled: false,
       }
       if (typeof maxTokens === 'number' && maxTokens > 0) payload.max_tokens = maxTokens
@@ -2946,10 +3465,9 @@ function ModelSection({
         const list = await window.agentApi.listEndpoints(key)
         if (list.ok && list.data.endpoints.some((e) => e.name === modelId)) {
           endpointReady = true
-          // Endpoint already on engine — make sure it's not paused.
-          // The user clicked enable, so reset `disabled=false`. Forward
-          // group too — this is still an enable path, so empty means
-          // "no group requested" (not a 3-state clear).
+          // Endpoint already on engine — make sure the enabled model is
+          // available. Forward group too; empty still means "no group
+          // requested" here, not a 3-state clear.
           const patchRes = await window.agentApi.patchEndpoint(key, modelId, {
             disabled: false,
             ...(group !== undefined && group !== '' ? { group } : {}),
@@ -2994,6 +3512,9 @@ function ModelSection({
         }
       }
 
+      void refreshEngineImageGenerationUrls()
+      if (!routeToAgent) return
+
       // After create (or detected-exists), append to chain so the
       // endpoint actually routes. Canonical chain ref separator is `:`
       // (engine 2026-05-14+); this lets endpoint names contain `.`
@@ -3014,7 +3535,7 @@ function ModelSection({
         )
       }
     },
-    [ensureProviderExists, reportHotReloadError],
+    [ensureProviderExists, refreshEngineImageGenerationUrls, reportHotReloadError],
   )
 
   // PATCH /api/v1/providers/{p}/endpoints/{e} { disabled }. The
@@ -3052,8 +3573,9 @@ function ModelSection({
       if (!res.ok && res.status !== 404 && res.status !== 0 && res.error !== 'update_failed') {
         reportHotReloadError(t('models.hotReloadLabels.delete'), res.error || `http_${res.status}`, res.message)
       }
+      void refreshEngineImageGenerationUrls()
     },
-    [reportHotReloadError, t],
+    [refreshEngineImageGenerationUrls, reportHotReloadError, t],
   )
 
   // PATCH /api/v1/providers/{p}/endpoints/{e}. Renames are not
@@ -3077,8 +3599,9 @@ function ModelSection({
       if (!res.ok && res.status !== 404 && res.status !== 0 && res.error !== 'update_failed') {
         reportHotReloadError(t('models.hotReloadLabels.modelUpdate'), res.error || `http_${res.status}`, res.message)
       }
+      void refreshEngineImageGenerationUrls()
     },
-    [reportHotReloadError, t],
+    [refreshEngineImageGenerationUrls, reportHotReloadError, t],
   )
 
   useEffect(() => {
@@ -3218,11 +3741,11 @@ function ModelSection({
       // Promote / demote `defaultProvider` to stay aligned with the
       // enabled set.
       let nextDefault = defaultProvider
-      if (nextEnabled && !Object.values(prev).some((p) => p.enabled)) {
+      if (nextEnabled && isAgentProviderKey(key) && !Object.values(prev).some((p) => p.enabled)) {
         nextDefault = key
       } else if (!nextEnabled && defaultProvider === key) {
         const nextActive = (Object.entries(updated) as Array<[ManagedProviderKey, ProviderConfig]>)
-          .find(([, p]) => p.enabled)
+          .find(([providerKey, p]) => p.enabled && isAgentProviderKey(providerKey))
         if (nextActive) nextDefault = nextActive[0]
       }
       if (nextDefault !== defaultProvider) setDefaultProvider(nextDefault)
@@ -3299,7 +3822,9 @@ function ModelSection({
         }
 
         // 2) Per-model: POST when missing, PATCH disabled=false when
-        //    present-and-paused, skip when already routing.
+        //    present-and-paused. routeToAgent only controls chat fallback
+        //    chain membership; image-generation endpoints must remain
+        //    available for the image_generate tool.
         const endpointMap = new Map<
           string,
           { name: string; disabled?: boolean; in_chain: boolean }
@@ -3308,6 +3833,8 @@ function ModelSection({
         const chainNeedsRefs: string[] = []
         for (const model of previous.models) {
           if (!model.enabled) continue
+          const routeToAgent = isAgentRoutableModel(key, model)
+          const modelType = model.tags?.filter((tag) => VISIBLE_MODEL_TYPE_TOKENS.has(tag)) ?? []
           const ep = endpointMap.get(model.id)
           if (!ep) {
             const postRes = await window.agentApi.createEndpoint(key, {
@@ -3318,8 +3845,11 @@ function ModelSection({
             if (!postRes.ok && postRes.status !== 404 && postRes.status !== 0) {
               if (postRes.status === 400 && /exist/i.test(postRes.message || '')) {
                 // race: another caller created it — make sure it's
-                // not paused.
-                await window.agentApi.patchEndpoint(key, model.id, { disabled: false })
+                // in the route state this model type expects.
+                await window.agentApi.patchEndpoint(key, model.id, {
+                  disabled: false,
+                  ...(modelType.length > 0 ? { model_type: modelType } : {}),
+                })
               } else {
                 reportHotReloadError(
                   t('models.hotReloadLabels.modelCreate'),
@@ -3329,26 +3859,32 @@ function ModelSection({
                 continue
               }
             }
+            if (postRes.ok && modelType.length > 0) {
+              await window.agentApi.patchEndpoint(key, model.id, { model_type: modelType })
+            }
             // Engine doesn't auto-chain newly created endpoints —
             // collect refs and PUT them in one chain update at the end.
-            chainNeedsRefs.push(`${key}:${model.id}`)
-          } else if (ep.disabled === true) {
-            const patchRes = await window.agentApi.patchEndpoint(key, model.id, {
-              disabled: false,
-            })
-            if (!patchRes.ok && patchRes.status !== 404 && patchRes.status !== 0
-                && patchRes.error !== 'update_failed') {
-              reportHotReloadError(
-                t('models.hotReloadLabels.enable'),
-                patchRes.error || `http_${patchRes.status}`,
-                patchRes.message,
-              )
+            if (routeToAgent) chainNeedsRefs.push(`${key}:${model.id}`)
+          } else {
+            const patchBody: { disabled?: boolean; model_type?: string[] } = {}
+            if (ep.disabled === true) patchBody.disabled = false
+            if (modelType.length > 0) patchBody.model_type = modelType
+            if (Object.keys(patchBody).length > 0) {
+              const patchRes = await window.agentApi.patchEndpoint(key, model.id, patchBody)
+              if (
+                !patchRes.ok
+                && patchRes.status !== 404
+                && patchRes.status !== 0
+                && patchRes.error !== 'update_failed'
+              ) {
+                reportHotReloadError(
+                  t('models.hotReloadLabels.enable'),
+                  patchRes.error || `http_${patchRes.status}`,
+                  patchRes.message,
+                )
+              }
             }
-            if (!ep.in_chain) chainNeedsRefs.push(`${key}:${model.id}`)
-          } else if (!ep.in_chain) {
-            // Already enabled engine-side but somehow not in chain
-            // (e.g. yaml-edited). Just queue the chain append.
-            chainNeedsRefs.push(`${key}:${model.id}`)
+            if (routeToAgent && !ep.in_chain) chainNeedsRefs.push(`${key}:${model.id}`)
           }
         }
 
@@ -3386,6 +3922,22 @@ function ModelSection({
             res.error || `http_${res.status}`,
             res.message,
           )
+          return
+        }
+        const agent = await window.agentApi.getAgentConfig()
+        if (
+          agent.ok
+          && typeof agent.data?.image_generation === 'string'
+          && agent.data.image_generation.startsWith(`${key}:`)
+        ) {
+          const patch = await window.agentApi.patchAgentConfig({ image_generation: '' })
+          if (!patch.ok && patch.status !== 404 && patch.status !== 0) {
+            reportHotReloadError(
+              t('models.hotReloadLabels.update'),
+              patch.error || `http_${patch.status}`,
+              patch.message,
+            )
+          }
         }
       })()
     }
@@ -3491,11 +4043,14 @@ function ModelSection({
         apiKey: currentProvider.apiKey.trim(),
       })
       if (!result.ok) {
-        const friendly = result.error === 'network_error'
-          ? t('models.engineError')
-          : result.error === 'timeout'
-            ? t('models.timeout')
-            : t('models.requestFailed', { error: `${result.error}${result.message ? ` (${result.message})` : ''}` })
+        let friendly = t('models.requestFailed', {
+          error: `${result.error}${result.message ? ` (${result.message})` : ''}`,
+        })
+        if (result.error === 'network_error') {
+          friendly = t('models.engineError')
+        } else if (result.error === 'timeout') {
+          friendly = t('models.timeout')
+        }
         setToastNotice({ tone: 'error', message: friendly })
         return
       }
@@ -3521,6 +4076,7 @@ function ModelSection({
         const tags: string[] = []
         if (s.vision === true) tags.push('vision')
         if (s.web_search === true) tags.push('search')
+        if (s.image_generation === true) tags.push('image_generation')
         if (s.reasoning === true) tags.push('reasoning')
         if (s.function_calling === true) tags.push('tools')
         return tags
@@ -3812,6 +4368,7 @@ function ModelSection({
         tags,
         // omit empty — POST has no clear semantics.
         previousEntry?.group?.trim() || undefined,
+        isAgentRoutableModel(selectedProvider, previousEntry),
       )
     } else {
       void hotSetEndpointDisabled(selectedProvider, id, true)
@@ -3834,6 +4391,9 @@ function ModelSection({
   }
 
   const selected = providers[selectedProvider]
+  const selectedApiPathSuffix = getApiPathSuffix(getEffectiveEngineType(selectedProvider, selected))
+  const selectedBaseUrl = selected.apiBase?.trim() || PROVIDER_DEFAULT_BASES[selectedProvider] || ''
+  const selectedApiTargetUrl = buildApiTargetUrl(selectedBaseUrl, selectedApiPathSuffix)
   const showCustomProvider = selectedProvider === 'custom'
     || defaultProvider === 'custom'
     || Boolean(
@@ -3853,7 +4413,9 @@ function ModelSection({
   // Show the "去配置 Agent LLM 节点" affordance only when the
   // currently-viewed provider is enabled — the prompt is contextual
   // to the row the user is editing, not the global enabled set.
-  const selectedProviderEnabled = Boolean(providers[selectedProvider]?.enabled)
+  const selectedProviderEnabled = Boolean(
+    providers[selectedProvider]?.enabled && isAgentProviderKey(selectedProvider)
+  )
 
   if (loading) {
     return <div className="flex items-center justify-center py-20"><Loader2 size={20} className="animate-spin text-muted-foreground" /></div>
@@ -4126,8 +4688,7 @@ function ModelSection({
                       {apiBaseValid ? (
                         <p className="mt-2 text-xs text-muted-foreground">
                           {t('models.previewLabel')}
-                          {(selected.apiBase?.trim() || PROVIDER_DEFAULT_BASES[selectedProvider] || '').replace(/\/+$/, '')}
-                          {getApiPathSuffix(getEffectiveEngineType(selectedProvider, selected))}
+                          {selectedApiTargetUrl}
                         </p>
                       ) : (
                         <p className="mt-2 text-xs text-red-500">
@@ -4237,6 +4798,7 @@ function ModelSection({
                               {group.items.map((entry) => {
                                 const isEnabled = Boolean(entry.enabled)
                                 const label = entry.name?.trim() || entry.id
+                                const imageGenerationUrl = engineImageGenerationUrls[`${selectedProvider}:${entry.id}`] || ''
                                 return (
                                   <div
                                     key={entry.id}
@@ -4254,7 +4816,12 @@ function ModelSection({
                                         <div className="ml-2 flex items-center gap-1">
                                           {entry.tags
                                             .map((tagKey) => (
-                                              <ModelTagBadge key={tagKey} tagKey={tagKey} t={t} />
+                                              <ModelTagBadge
+                                                key={tagKey}
+                                                tagKey={tagKey}
+                                                t={t}
+                                                detail={tagKey === 'image_generation' ? imageGenerationUrl : undefined}
+                                              />
                                             ))}
                                         </div>
                                       )}
