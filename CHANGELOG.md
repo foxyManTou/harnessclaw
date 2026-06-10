@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, with versions tracked in the repository and published to GitHub Releases.
 
+## [0.0.21-beta.3] - 2026-06-10
+
+### Added
+
+- Packaged beta builds now bundle the matching `v0.0.21-beta.3` engine runtime with true image-to-image support for attached chat images and explicit source image paths.
+
+### Fixed
+
+- Image generation retries no longer surface empty mask/source-image parameters or PNG compression settings that are not sent to the provider.
+
 ## [0.0.21-beta.2] - 2026-06-10
 
 ### Fixed
