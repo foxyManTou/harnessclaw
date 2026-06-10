@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, with versions tracked in the repository and published to GitHub Releases.
 
+## [0.0.21-beta.1] - 2026-06-09
+
+### Fixed
+
+- Packaged beta builds now bundle the matching `v0.0.21-beta.1` engine runtime so image generation can wait for slower upstream providers instead of failing on the generic tool timeout.
+
 ## [0.0.21-beta.0] - 2026-06-09
 
 ### Added
