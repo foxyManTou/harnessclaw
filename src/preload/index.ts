@@ -22,6 +22,8 @@ const appAPI = {
     ipcRenderer.on('app:update-event', handler)
     return () => ipcRenderer.removeListener('app:update-event', handler)
   },
+  downloadUpdate: () => ipcRenderer.invoke('app:update:download'),
+  quitAndInstall: () => ipcRenderer.invoke('app:update:install'),
 }
 
 const configAPI = {
