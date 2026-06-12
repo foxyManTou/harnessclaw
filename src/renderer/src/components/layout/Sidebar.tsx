@@ -12,11 +12,7 @@ import {
   FolderMinus,
   FolderPlus,
   Users,
-  Settings,
-  PanelLeft,
   MessageSquareText,
-  ChevronDown,
-  MoreHorizontal,
   Pencil,
   Trash2,
   Plus,
@@ -34,6 +30,11 @@ import iconSkills from '../../assets/icon-skills.svg'
 import iconProjects from '../../assets/icon-projects.svg'
 import iconXlab from '../../assets/icon-xlab.svg'
 import iconChat from '../../assets/icon-chat.svg'
+import iconSettings from '../../assets/icon-settings.svg'
+import iconMore from '../../assets/icon-more.svg'
+import iconRecentArrow from '../../assets/icon-recent-arrow.svg'
+import iconSidebarOpen from '../../assets/icon-sidebar-open.svg'
+import iconSidebarCollapse from '../../assets/icon-sidebar-collapse.svg'
 import { ConfirmDeleteSessionDialog } from '../common/ConfirmDeleteSessionDialog'
 import { SearchChatPlaceholder } from '../common/SearchChatPlaceholder'
 import { NewChatItem } from '../common/NewChatItem'
@@ -679,9 +680,11 @@ export function Sidebar() {
               >
                 <MessageSquareText size={13} />
                 <span className="flex-1 text-left">{t('sidebar.recent')}</span>
-                <ChevronDown
-                  size={13}
-                  className={cn('transition-transform duration-200', recentExpanded && 'rotate-180')}
+                <img
+                  src={iconRecentArrow}
+                  alt=""
+                  aria-hidden="true"
+                  className={cn('transition-transform duration-200', !recentExpanded && 'rotate-180')}
                 />
               </button>
               {recentExpanded && (
@@ -758,14 +761,12 @@ export function Sidebar() {
                                   })
                             }}
                             className={cn(
-                              'inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-all hover:bg-background/80 hover:text-foreground',
-                              menuState?.sessionId === item.id
-                                ? 'opacity-100'
-                                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+                              'inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-background/80 hover:text-foreground',
+                              menuState?.sessionId === item.id && 'bg-background/80 text-foreground'
                             )}
                             aria-label={t('sidebar.more')}
                           >
-                            <MoreHorizontal size={15} />
+                            <img src={iconMore} alt="" className="h-[18px] w-[18px]" aria-hidden="true" />
                           </button>
                         </div>
                       </div>
@@ -790,7 +791,7 @@ export function Sidebar() {
                   : 'text-foreground/78 hover:text-foreground hover:bg-accent'
               )}
             >
-              <Settings size={18} className="flex-shrink-0" aria-hidden="true" />
+              <img src={iconSettings} alt="" className="h-[18px] w-[18px] flex-shrink-0" aria-hidden="true" />
               <span className="text-sm font-medium">{t('sidebar.settings')}</span>
             </button>
 
@@ -798,9 +799,9 @@ export function Sidebar() {
               onClick={toggleExpanded}
               title={t('sidebar.collapseAria')}
               aria-label={t('sidebar.collapseAria')}
-              className="-mr-1 inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-foreground/78 transition-colors hover:bg-accent hover:text-foreground"
+              className="-mr-1 inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-accent"
             >
-              <PanelLeft size={18} className="rotate-180" aria-hidden="true" />
+              <img src={iconSidebarCollapse} alt="" className="h-[18px] w-[18px]" aria-hidden="true" />
             </button>
           </div>
         ) : (
@@ -811,7 +812,7 @@ export function Sidebar() {
             aria-current={isActive('/settings') ? 'page' : undefined}
             className={itemCls(isActive('/settings'))}
           >
-            <Settings size={18} className="flex-shrink-0" aria-hidden="true" />
+            <img src={iconSettings} alt="" className="h-[18px] w-[18px] flex-shrink-0" aria-hidden="true" />
           </button>
         )}
 
@@ -840,9 +841,9 @@ export function Sidebar() {
           onClick={toggleExpanded}
           title={t('sidebar.expandAria')}
           aria-label={t('sidebar.expandAria')}
-          className="fixed bottom-3 left-[78px] z-50 flex h-11 w-11 items-center justify-center rounded-xl bg-card text-foreground/78 transition-colors hover:bg-accent hover:text-foreground border border-border shadow-sm"
+          className="fixed bottom-3 left-[78px] z-50 flex h-11 w-11 items-center justify-center rounded-xl transition-colors hover:bg-accent"
         >
-          <PanelLeft size={18} aria-hidden="true" />
+          <img src={iconSidebarOpen} alt="" className="h-[18px] w-[18px]" aria-hidden="true" />
         </button>
       )}
 

@@ -33,6 +33,7 @@ import { PlanStatusButton } from '../common/PlanStatusButton'
 import { SessionStatsButton } from '../common/SessionStatsButton'
 import { AvatarLightbox } from '../common/AvatarLightbox'
 import { ConfirmDeleteSessionDialog } from '../common/ConfirmDeleteSessionDialog'
+import { ConversationSidePanel } from '../common/ConversationSidePanel'
 import { SystemNoticeModal, type SystemNotice } from '../common/SystemNoticeModal'
 import emmaAvatar from '../../assets/emma-avatar.svg'
 import emmaText from '../../assets/emma-text.svg'
@@ -157,7 +158,7 @@ interface ContentSegment {
  * Stored inside `ToolActivity.metadata.artifacts` so it round-trips through the
  * existing metadata_json DB column without a schema change.
  */
-interface ArtifactRef {
+export interface ArtifactRef {
   artifact_id: string
   name?: string
   type?: string
@@ -7300,7 +7301,7 @@ export function ChatPage() {
                           : t('chat.composer.placeholderDisconnected')
                       }
                       maxLength={maxLength}
-                      className="min-h-[26px] max-h-[120px] leading-6"
+                      className=""
                       rows={1}
                     />
                     <AttachmentPreviewPanel
@@ -7387,6 +7388,15 @@ export function ChatPage() {
           </>
         )}
       </div>
+
+      {/* Right-side panel: logs (plan steps) + artifacts. Default collapsed. */}
+      <ConversationSidePanel
+        steps={activeSession.planDraft?.steps || []}
+        artifacts={sessionArtifacts}
+        onSelectArtifact={(artifact) => {
+          void openArtifactPreview(artifact, activeSessionId)
+        }}
+      />
 
       <FilePreviewDrawer
         preview={filePreview}
