@@ -95,12 +95,13 @@ export function Sidebar() {
     {
       items: [
         { icon: Plus, path: '/', label: t('sidebar.newTask') },
-        { icon: Clock, path: '/scheduler', label: t('sidebar.scheduler') },
+        // 暂隐藏(功能未完成,保留代码勿删):定时任务 / 项目 / 团队 / x-lab
+        // { icon: Clock, path: '/scheduler', label: t('sidebar.scheduler') },
         { icon: MessageSquareText, path: '/sessions', label: t('sidebar.chat') },
         { icon: Puzzle, path: '/skills', label: t('sidebar.skills') },
-        { icon: FolderKanban, path: '/projects', label: t('sidebar.projects') },
-        { icon: Users, path: '/team', label: t('sidebar.team') },
-        { icon: FlaskConical, path: '/x-lab', label: t('sidebar.xLab') },
+        // { icon: FolderKanban, path: '/projects', label: t('sidebar.projects') },
+        // { icon: Users, path: '/team', label: t('sidebar.team') },
+        // { icon: FlaskConical, path: '/x-lab', label: t('sidebar.xLab') },
       ],
     },
   ], [t])
@@ -761,8 +762,9 @@ export function Sidebar() {
                                   })
                             }}
                             className={cn(
-                              'inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-background/80 hover:text-foreground',
-                              menuState?.sessionId === item.id && 'bg-background/80 text-foreground'
+                              // Hidden by default; revealed on row hover / keyboard focus, or while its menu is open.
+                              'inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-muted-foreground opacity-0 transition-all hover:bg-background/80 hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100',
+                              menuState?.sessionId === item.id && 'bg-background/80 text-foreground opacity-100'
                             )}
                             aria-label={t('sidebar.more')}
                           >
@@ -805,15 +807,26 @@ export function Sidebar() {
             </button>
           </div>
         ) : (
-          <button
-            onClick={() => navigate('/settings')}
-            title={t('sidebar.settings')}
-            aria-label={t('sidebar.settings')}
-            aria-current={isActive('/settings') ? 'page' : undefined}
-            className={itemCls(isActive('/settings'))}
-          >
-            <img src={iconSettings} alt="" className="h-[18px] w-[18px] flex-shrink-0" aria-hidden="true" />
-          </button>
+          <div className="flex w-full flex-col items-center gap-1.5">
+            {/* Collapse/expand toggle sits directly above 设置, 6px gap. */}
+            <button
+              onClick={toggleExpanded}
+              title={t('sidebar.expandAria')}
+              aria-label={t('sidebar.expandAria')}
+              className={itemCls(false)}
+            >
+              <img src={iconSidebarOpen} alt="" className="h-[18px] w-[18px]" aria-hidden="true" />
+            </button>
+            <button
+              onClick={() => navigate('/settings')}
+              title={t('sidebar.settings')}
+              aria-label={t('sidebar.settings')}
+              aria-current={isActive('/settings') ? 'page' : undefined}
+              className={itemCls(isActive('/settings'))}
+            >
+              <img src={iconSettings} alt="" className="h-[18px] w-[18px] flex-shrink-0" aria-hidden="true" />
+            </button>
+          </div>
         )}
 
         {expanded && (
@@ -834,18 +847,6 @@ export function Sidebar() {
           />
         )}
       </nav>
-
-      {/* 收起状态下的展开按钮 - 固定在侧边栏外面，设置按钮右边 */}
-      {!expanded && (
-        <button
-          onClick={toggleExpanded}
-          title={t('sidebar.expandAria')}
-          aria-label={t('sidebar.expandAria')}
-          className="fixed bottom-3 left-[78px] z-50 flex h-11 w-11 items-center justify-center rounded-xl transition-colors hover:bg-accent"
-        >
-          <img src={iconSidebarOpen} alt="" className="h-[18px] w-[18px]" aria-hidden="true" />
-        </button>
-      )}
 
       {menuState && activeMenuItem && createPortal(
         <div
