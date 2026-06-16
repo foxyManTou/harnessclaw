@@ -4,10 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, with versions tracked in the repository and published to GitHub Releases.
 
-## [0.0.23] - 2026-06-16
+## [0.0.23-beta.0] - 2026-06-16
 
 ### Fixed
 
+- Telemetry reporting now signs event uploads with the server-compatible HMAC headers, restoring delivery to the production telemetry endpoint.
+- Generated image links in assistant replies now render local `file://` and absolute-path outputs through HarnessClaw's safe local file protocol instead of showing broken previews.
 - Browser Agent sessions now run in a dedicated helper process with isolated CDP targets, preventing commands from taking over the main HarnessClaw window or another browser session.
 
 ## [0.0.22] - 2026-06-12
