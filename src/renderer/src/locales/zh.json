@@ -1543,7 +1543,10 @@
       "researchTitle": "数据采集与研究分析",
       "researchDetail": "偏多轮检索和整理，保持中等推理强度。",
       "opsTitle": "复杂日常工作流",
-      "opsDetail": "偏稳定协作和批量处理，保持简洁默认值。"
+      "opsDetail": "偏稳定协作和批量处理，保持简洁默认值。",
+      "optional": "选填 — 选一个预设套用合适默认值，或跳过自己之后再调。",
+      "skip": "跳过 — 保持当前默认值",
+      "editLater": "对应 Settings → Agents 里的 workspace / Max Tool Iterations / Reasoning Effort，随时可改。"
     },
     "modelIdHint": "请填写所选服务商支持的模型 ID，例如 gpt-4o-mini 或 claude-sonnet-4。",
     "modelGroupLabel": "分组名（可选）",

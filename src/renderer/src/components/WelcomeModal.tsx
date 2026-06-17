@@ -20,19 +20,15 @@ import {
   type ProviderConfig,
 } from '@/lib/providers'
 
-type ProfileKey = 'A' | 'B' | 'C'
 type StartupOverlayState = 'checking' | 'setup' | 'hidden'
 type StageKey = 'intro' | 'connection'
-
-// New onboarding flow only configures connection; the task profile
-// step was removed, so every fresh setup uses this default profile.
-const DEFAULT_PROFILE: ProfileKey = 'C'
 
 interface SetupDraft {
   engineMode: ManagedProviderKey | null
   apiBase: string
   apiKey: string
   modelId: string
+  modelGroup: string
   // Only meaningful when engineMode === 'custom' (mirrors Settings'
   // protocol toggle inside the custom-provider editor).
   protocol: ProtocolProviderKey
@@ -66,20 +62,6 @@ function getDefaultApiBase(key: ManagedProviderKey | null): string {
   return PROVIDER_DEFAULT_BASES[key] || ''
 }
 
-function getProfilePreset(profile: ProfileKey): {
-  workspace: string
-  maxToolIterations: number
-  reasoningEffort: 'medium' | 'high'
-} {
-  if (profile === 'A') {
-    return { workspace: `${WORKSPACE_ROOT}/engineering`, maxToolIterations: 60, reasoningEffort: 'high' }
-  }
-  if (profile === 'B') {
-    return { workspace: `${WORKSPACE_ROOT}/research`, maxToolIterations: 36, reasoningEffort: 'medium' }
-  }
-  return { workspace: `${WORKSPACE_ROOT}/operations`, maxToolIterations: 24, reasoningEffort: 'medium' }
-}
-
 // Build a complete providers map seeded with empty configs, then
 // stamp the user's chosen provider with the welcome-flow inputs. The
 // shape matches what `Settings > Models` persists, so the entry
@@ -98,6 +80,7 @@ function buildWelcomeProviders(
   const apiBase = draft.apiBase.trim() || getDefaultApiBase(key)
   const apiKey = draft.apiKey.trim()
   const modelId = draft.modelId.trim()
+  const modelGroup = draft.modelGroup.trim()
 
   // Save only the user-configured model. Settings page will:
   // 1. Show this model at the top of the list (as a custom/user-added model)
@@ -108,7 +91,7 @@ function buildWelcomeProviders(
   // - User entered a standard model (e.g. "deepseek-v4-pro") → shows in list, can fetch more
   // - User entered a custom model ID → preserved as user's choice, can fetch more later
   const models = modelId
-    ? [{ id: modelId, enabled: true }]
+    ? [{ id: modelId, enabled: true, ...(modelGroup ? { group: modelGroup } : {}) }]
     : []
 
   providers[key] = {
@@ -277,12 +260,13 @@ function buildAppConfig(previous: ConfigRecord, draft: SetupDraft): ConfigRecord
   const base = buildAppModelConfig(previous, providers, draft.engineMode)
 
   // buildAppModelConfig already filled modelProviders + agents.defaults
-  // (provider + model). Layer onboarding metadata + profile preset on
-  // top so the wizard's choices stick.
+  // (provider + model). Do not silently overwrite workspace /
+  // maxToolIterations / reasoningEffort: the profile step is gone,
+  // so preserving existing Agent defaults keeps onboarding from
+  // clobbering Settings -> Agents choices.
   const baseAgents = asRecord(base.agents)
   const baseDefaults = asRecord(baseAgents.defaults)
   const onboarding = asRecord(previous.onboarding)
-  const profilePreset = getProfilePreset(DEFAULT_PROFILE)
 
   return {
     ...base,
@@ -290,9 +274,6 @@ function buildAppConfig(previous: ConfigRecord, draft: SetupDraft): ConfigRecord
       ...baseAgents,
       defaults: {
         ...baseDefaults,
-        workspace: profilePreset.workspace,
-        maxToolIterations: profilePreset.maxToolIterations,
-        reasoningEffort: profilePreset.reasoningEffort,
       },
     },
     onboarding: {
@@ -300,7 +281,7 @@ function buildAppConfig(previous: ConfigRecord, draft: SetupDraft): ConfigRecord
       version: 1,
       completedAt: new Date().toISOString(),
       engineMode: draft.engineMode,
-      profile: DEFAULT_PROFILE,
+      profile: null,
     },
   }
 }
@@ -376,6 +357,7 @@ export function WelcomeModal() {
     apiBase: '',
     apiKey: '',
     modelId: '',
+    modelGroup: '',
     protocol: 'openai',
   })
   const [submitting, setSubmitting] = useState(false)
@@ -442,6 +424,7 @@ export function WelcomeModal() {
         apiBase: draft.apiBase.trim() || getDefaultApiBase(engineMode),
         apiKey: draft.apiKey.trim(),
         modelId: draft.modelId.trim(),
+        modelGroup: draft.modelGroup.trim(),
       }
       const currentAppConfig = asRecord(await window.appConfig.read())
       // Persist the welcome-flow inputs into appConfig using the same
@@ -610,6 +593,13 @@ export function WelcomeModal() {
                 placeholder="model-id，例：gpt-4o-mini 或 claude-sonnet-4"
                 required
                 onChange={(v) => setDraft((d) => ({ ...d, modelId: v }))}
+              />
+              <FormField
+                label={t('welcome.modelGroupLabel')}
+                hint={t('welcome.modelGroupHint')}
+                value={draft.modelGroup}
+                placeholder={t('welcome.modelGroupPlaceholder')}
+                onChange={(v) => setDraft((d) => ({ ...d, modelGroup: v }))}
               />
             </div>
           )}
