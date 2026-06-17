@@ -3201,8 +3201,15 @@ interface WorkspaceFileNode {
  */
 function SessionWorkspaceFilesButton({
   sessionId,
+  isProcessing,
 }: {
   sessionId: string
+  /** True while the agent's turn is running. When true we poll the
+   * workspace every 3s so the badge count and (if open) the file tree
+   * track newly written files without requiring a manual refresh.
+   * Defaults to false so any future caller without per-session state
+   * gets the prior click-to-refresh behavior. */
+  isProcessing?: boolean
 }) {
   const { t } = useTranslation()
   // Closed by default — the user opens the workspace via the header
@@ -3265,6 +3272,27 @@ function SessionWorkspaceFilesButton({
   useEffect(() => {
     void reload()
   }, [reload])
+
+  // Auto-refresh while the agent is actively running its turn. Polls
+  // every 3s so the badge tracks newly written workspace files without
+  // requiring the user to open the drawer / click the refresh button.
+  // When isProcessing flips false, we fire one trailing refresh to
+  // pick up the final write(s) that landed between the last poll tick
+  // and the turn ending.
+  useEffect(() => {
+    if (!isProcessing) {
+      // Trailing refresh on turn end. Cheap (single readdir) and
+      // covers the gap between the last tick and the engine stopping.
+      void reload()
+      return
+    }
+    const interval = window.setInterval(() => {
+      void reload()
+    }, 3000)
+    return () => {
+      window.clearInterval(interval)
+    }
+  }, [isProcessing, reload])
 
   // Close drawer on Escape; click-outside is handled by the backdrop.
   useEffect(() => {
@@ -6935,7 +6963,10 @@ export function ChatPage() {
                     tree, with an inline preview pane next to it. Both
                     panes are visible by default so users land directly
                     on the workspace view without an extra click. */}
-                <SessionWorkspaceFilesButton sessionId={activeSessionId} />
+                <SessionWorkspaceFilesButton
+                  sessionId={activeSessionId}
+                  isProcessing={activeSession.isProcessing}
+                />
                 {/* Session-level stats popover (context window utilization,
                     cost, tokens, latency, per sub-agent breakdown).
                     Polls `/api/v1/sessions/{id}/metrics` on the Console
