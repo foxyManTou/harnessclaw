@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowRight, Check, ChevronLeft, ChevronRight, Loader2, Sparkles } from 'lucide-react'
-import { ArrowRight, Check, ChevronDown, ChevronLeft, Loader2 } from 'lucide-react'
+import { ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, Loader2, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ProviderLogo } from '@/components/common/ProviderLogo'
 import emmaAvatar from '@/assets/emma-avatar.svg'
