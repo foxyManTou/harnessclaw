@@ -3595,6 +3595,9 @@ function WorkspaceInlinePreview({ file }: { file: { path: string; name: string }
   const isImage = /^(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/.test(ext)
   const isAudio = /^(mp3|wav|m4a|aac|flac|ogg)$/.test(ext)
   const isVideo = /^(mp4|mov|avi|mkv|webm)$/.test(ext)
+  // HTML 文件改走 <iframe>，让 Chromium 像浏览器一样解析整份文档（含 <head>、
+  // 内联 CSS、<script>、同目录下的相对资源），而不是落到下面的纯文本兜底。
+  const isHtml = ext === 'html' || ext === 'htm'
   const mediaUrl = isImage || isAudio || isVideo ? localFileUrl(file.path) : null
 
   return (
@@ -3627,6 +3630,18 @@ function WorkspaceInlinePreview({ file }: { file: { path: string; name: string }
           <div className="flex h-full items-center justify-center p-4">
             <video src={mediaUrl} controls className="max-h-full max-w-full rounded-md border border-border" />
           </div>
+        ) : isHtml ? (
+          // .html / .htm：用 <iframe> 直接渲染 file:// URL，相对路径下的 CSS /
+          // JS / 图片都能像在普通浏览器里一样解析。sandbox 限制顶层导航与第
+          // 三方表单提交，allow-scripts + allow-same-origin 让本地脚本与同
+          // 目录资源照常工作。
+          <iframe
+            src={localFileUrl(file.path)}
+            title={file.name}
+            sandbox="allow-scripts allow-same-origin"
+            referrerPolicy="no-referrer"
+            className="h-full w-full border-0 bg-background"
+          />
         ) : previewKind === 'html' ? (
           <div
             className="prose prose-sm max-w-none px-4 py-3 text-foreground dark:prose-invert"
@@ -10096,6 +10111,10 @@ export function FilePreviewDrawer({
   const isImage = /^(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/.test(ext)
   const isAudio = /^(mp3|wav|m4a|aac|flac|ogg)$/.test(ext)
   const isVideo = /^(mp4|mov|avi|mkv|webm)$/.test(ext)
+  // HTML 走 <iframe>：以 file:// 加载整份文档，相对路径下的 CSS/JS/图片
+  // 能自动解析。注意与下面 `previewKind === 'html'` 分支区分——后者是
+  // mammoth/SheetJS 抽出的 docx/xlsx/pptx 片段，不是完整 HTML 文档。
+  const isHtml = ext === 'html' || ext === 'htm'
   const isMarkdown = ext === 'md' || ext === 'mdx'
 
   return createPortal(
@@ -10372,6 +10391,17 @@ export function FilePreviewDrawer({
                 className="max-h-full max-w-full rounded-lg"
               />
             </div>
+          ) : isHtml ? (
+            // .html / .htm：用 <iframe> 渲染整份页面，而不是把源码塞到代码
+            // 视图。sandbox 限制顶层导航 + 第三方表单提交；allow-scripts +
+            // allow-same-origin 让本地脚本与同目录资源照常工作。
+            <iframe
+              src={localFileUrl(preview.path)}
+              title={preview.fileName}
+              sandbox="allow-scripts allow-same-origin"
+              referrerPolicy="no-referrer"
+              className="h-full min-h-[60vh] w-full rounded-2xl border border-border bg-background shadow-sm"
+            />
           ) : !preview.content ? (
             <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-border bg-card/50 p-8 text-center">
               <div>

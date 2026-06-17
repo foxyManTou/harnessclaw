@@ -43,6 +43,9 @@ export function FilePreviewModal({
   const isImage = /^(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/.test(ext)
   const isAudio = /^(mp3|wav|m4a|aac|flac|ogg)$/.test(ext)
   const isVideo = /^(mp4|mov|avi|mkv|webm)$/.test(ext)
+  // .html / .htm：用 <iframe> 像浏览器那样渲染整份文档；不要走下面的纯文本
+  // 兜底（否则展示的是源码）。
+  const isHtml = ext === 'html' || ext === 'htm'
   const isMarkdown = ext === 'md' || ext === 'mdx'
 
   return createPortal(
@@ -83,6 +86,17 @@ export function FilePreviewModal({
             <div className="flex h-full items-center justify-center">
               <video src={localFileUrl(preview.path)} controls className="max-h-[70vh] max-w-full rounded-lg" />
             </div>
+          ) : isHtml ? (
+            // <iframe> 加载 file:// URL，让 Chromium 像浏览器那样渲染整份页面。
+            // sandbox 限制顶层导航与跨源表单提交；allow-scripts + allow-
+            // same-origin 让脚本与同目录下的相对资源照常工作。
+            <iframe
+              src={localFileUrl(preview.path)}
+              title={preview.fileName}
+              sandbox="allow-scripts allow-same-origin"
+              referrerPolicy="no-referrer"
+              className="h-[70vh] w-full rounded-xl border border-border bg-background"
+            />
           ) : !preview.content ? (
             <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-border bg-card/50 p-8 text-center">
               <div>
