@@ -12,23 +12,34 @@ import {
   FolderMinus,
   FolderPlus,
   Users,
-  Settings,
-  Moon,
-  Sun,
-  PanelLeft,
   MessageSquareText,
-  ChevronDown,
-  MoreHorizontal,
   Pencil,
   Trash2,
+  Plus,
+  Clock,
 } from 'lucide-react'
 import { cn } from '../../lib/utils'
 import { getProjectDisplayDescription, getProjectDisplayName } from '../../lib/projectDisplay'
 import { useHarnessclawStatus } from '../../hooks/useHarnessclawStatus'
 import { trackSearchUsed } from '../../lib/telemetry'
-import sidebarLogo from '../../assets/sidebar-logo.png'
-import { AvatarLightbox } from '../common/AvatarLightbox'
+import emmaLogo from '../../assets/emma-logo.png'
+import betaBadge from '../../assets/beta-badge.svg'
+import iconNewTask from '../../assets/icon-new-task.svg'
+import iconScheduler from '../../assets/icon-scheduler.svg'
+import iconSkills from '../../assets/icon-skills.svg'
+import iconProjects from '../../assets/icon-projects.svg'
+import iconXlab from '../../assets/icon-xlab.svg'
+import iconChat from '../../assets/icon-chat.svg'
+import iconSettings from '../../assets/icon-settings.svg'
+import iconMore from '../../assets/icon-more.svg'
+import iconRecentArrow from '../../assets/icon-recent-arrow.svg'
+import iconSidebarOpen from '../../assets/icon-sidebar-open.svg'
+import iconSidebarCollapse from '../../assets/icon-sidebar-collapse.svg'
 import { ConfirmDeleteSessionDialog } from '../common/ConfirmDeleteSessionDialog'
+import { SearchChatPlaceholder } from '../common/SearchChatPlaceholder'
+import { NewChatItem } from '../common/NewChatItem'
+import { NewTaskIcon } from '../common/NewTaskIcon'
+import { RecentChatLabel } from '../common/RecentChatLabel'
 
 interface NavItem {
   icon: React.ElementType
@@ -83,16 +94,14 @@ export function Sidebar() {
   const navGroups: NavGroup[] = useMemo(() => [
     {
       items: [
-        { icon: House, path: '/', label: t('sidebar.home') },
-        { icon: FlaskConical, path: '/x-lab', label: t('sidebar.xLab') },
+        { icon: Plus, path: '/', label: t('sidebar.newTask') },
+        // 暂隐藏(功能未完成,保留代码勿删):定时任务 / 项目 / 团队 / x-lab
+        // { icon: Clock, path: '/scheduler', label: t('sidebar.scheduler') },
+        { icon: MessageSquareText, path: '/sessions', label: t('sidebar.chat') },
         { icon: Puzzle, path: '/skills', label: t('sidebar.skills') },
-      ],
-    },
-    {
-      items: [
-        { icon: Zap, path: '/sessions', label: t('sidebar.chat') },
-        { icon: FolderKanban, path: '/projects', label: t('sidebar.projects') },
-        { icon: Users, path: '/team', label: t('sidebar.team') },
+        // { icon: FolderKanban, path: '/projects', label: t('sidebar.projects') },
+        // { icon: Users, path: '/team', label: t('sidebar.team') },
+        // { icon: FlaskConical, path: '/x-lab', label: t('sidebar.xLab') },
       ],
     },
   ], [t])
@@ -452,7 +461,7 @@ export function Sidebar() {
 
   const itemCls = (active: boolean) => cn(
     'flex items-center rounded-lg transition-colors flex-shrink-0',
-    expanded ? 'w-full gap-1.5 px-3 py-2' : 'w-11 h-11 justify-center',
+    expanded ? 'w-full gap-2.5 px-3 py-2.5' : 'w-11 h-11 justify-center',
     active
       ? 'bg-accent text-foreground'
       : 'text-foreground/78 hover:text-foreground hover:bg-accent'
@@ -567,12 +576,7 @@ export function Sidebar() {
     >
       <Search size={18} className="flex-shrink-0" aria-hidden="true" />
       {expanded && (
-        <>
-          <span className="flex-1 text-left text-sm font-medium">{t('sidebar.search')}</span>
-          <span className="rounded-md border border-border bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
-            {isMac ? '⌘K' : 'Win+K'}
-          </span>
-        </>
+        <span className="text-sm font-medium">{t('sidebar.search')}</span>
       )}
     </button>
   )
@@ -591,83 +595,32 @@ export function Sidebar() {
         aria-label={t('sidebar.mainNavigationAria')}
         style={expanded ? { width: `${sidebarWidth}px` } : undefined}
         className={cn(
-          'relative flex-shrink-0 bg-card border-r border-border flex flex-col pt-[44px] pb-3 select-none overflow-hidden',
+          'relative flex-shrink-0 bg-card border-r border-border flex flex-col pt-8 pb-3 select-none overflow-hidden',
           !isResizing && 'transition-[width] duration-200',
           expanded ? 'items-start px-2' : 'w-[78px] items-center'
         )}
       >
         <div className={cn('flex min-h-0 w-full flex-1 flex-col', !expanded && 'items-center')}>
           <div className={cn('flex w-full flex-col flex-shrink-0', expanded ? 'gap-4' : 'items-center gap-4')}>
-            <div className={cn('flex w-full flex-shrink-0', expanded ? 'pl-1' : 'justify-center')}>
+            <div className={cn('mt-2 flex w-full flex-shrink-0', expanded ? 'pl-1' : 'justify-center')}>
               {expanded ? (
-                <div className="flex w-full items-center gap-2 pl-2 py-1">
-                  <div className="min-w-0 flex flex-1 items-center gap-2">
-                    <AvatarLightbox
-                      src={sidebarLogo}
-                      alt="HarnessClaw"
-                      triggerClassName="flex-shrink-0"
-                      imgClassName="h-9 w-9 object-contain"
-                    />
-                  </div>
-
-                  <div
-                      className="group relative flex h-8 w-5 flex-shrink-0 items-center justify-center"
-                      aria-label={
-                        harnessclawStatus === 'connected'
-                          ? t('sidebar.status.connectedAria')
-                          : harnessclawStatus === 'connecting'
-                            ? t('sidebar.status.connectingAria')
-                            : t('sidebar.status.disconnectedAria')
-                      }
-                    >
-                      <span
-                        className={cn(
-                          'h-2 w-2 rounded-full',
-                          harnessclawStatus === 'connected'
-                            ? 'bg-emerald-500'
-                            : harnessclawStatus === 'connecting'
-                              ? 'bg-amber-500 animate-pulse'
-                              : 'bg-rose-500'
-                        )}
-                        aria-hidden="true"
-                      />
-                      <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-1 hidden -translate-x-1/2 whitespace-nowrap rounded-md border border-border bg-popover px-2 py-1 text-[11px] text-popover-foreground shadow-md group-hover:block">
-                        {harnessclawStatus === 'connected'
-                          ? t('sidebar.status.connected')
-                          : harnessclawStatus === 'connecting'
-                            ? t('sidebar.status.connecting')
-                            : t('sidebar.status.disconnected')}
-                      </span>
-                    </div>
-
-                    <button
-                      onClick={toggleExpanded}
-                      title={t('sidebar.collapseAria')}
-                      aria-label={t('sidebar.collapseAria')}
-                      className="-mr-1 inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-foreground/78 transition-colors hover:bg-accent hover:text-foreground"
-                    >
-                      <PanelLeft size={18} className="rotate-180" aria-hidden="true" />
-                    </button>
-                  </div>
+                <div className="flex w-full items-center justify-center py-1">
+                  <img src={emmaLogo} alt="Emma" className="h-6 object-contain" />
+                </div>
                 ) : (
-                  <button
-                    onClick={toggleExpanded}
-                    title={t('sidebar.expandAria')}
-                    aria-label={t('sidebar.expandAria')}
-                    className="flex h-11 w-11 items-center justify-center rounded-xl text-foreground/78 transition-colors hover:bg-accent hover:text-foreground"
-                  >
-                    <PanelLeft size={18} aria-hidden="true" />
-                  </button>
+                  <div className="flex h-11 w-11 items-center justify-center py-1">
+                    <img src={emmaLogo} alt="Emma" className="h-5 object-contain" />
+                  </div>
                 )}
             </div>
 
             {navGroups.map((group, index) => (
               <div
                 key={index}
-                className={cn('flex w-full flex-col gap-1', !expanded && 'items-center')}
+                className={cn('mt-4 flex w-full flex-col gap-2', !expanded && 'items-center')}
               >
-                {group.items.map((item) => (
-                  <div key={item.path} className={cn('flex w-full flex-col gap-1', !expanded && 'items-center')}>
+                {group.items.map((item, itemIndex) => (
+                  <div key={item.path} className={cn('flex w-full flex-col gap-2', !expanded && 'items-center')}>
                     <button
                       onClick={() => navigate(item.path)}
                       title={expanded ? undefined : item.label}
@@ -675,10 +628,43 @@ export function Sidebar() {
                       aria-current={isActive(item.path) ? 'page' : undefined}
                       className={itemCls(isActive(item.path))}
                     >
-                      <item.icon size={18} className="flex-shrink-0" aria-hidden="true" />
-                      {expanded && <span className="text-sm font-medium">{item.label}</span>}
+                      {(() => {
+                        const customIcons: Record<string, string> = {
+                          '/': iconNewTask,
+                          '/scheduler': iconScheduler,
+                          '/sessions': iconChat,
+                          '/skills': iconSkills,
+                          '/projects': iconProjects,
+                          '/x-lab': iconXlab,
+                        }
+                        const src = customIcons[item.path]
+                        if (!src) {
+                          return <item.icon size={18} className="flex-shrink-0" aria-hidden="true" />
+                        }
+                        // 新任务 SVG 自带阴影滤镜,viewBox 37x37 比内容大,所以用更大渲染尺寸 + 负 margin 居中,
+                        // 视觉上和其他 18x18 图标对齐
+                        if (item.path === '/') {
+                          return (
+                            <span className="relative flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center" aria-hidden="true">
+                              <img src={src} alt="" className="h-[42px] w-[42px] max-w-none" />
+                            </span>
+                          )
+                        }
+                        return (
+                          <img src={src} alt="" className="h-[18px] w-[18px] flex-shrink-0" aria-hidden="true" />
+                        )
+                      })()}
+                      {expanded && (
+                        <span className="flex flex-1 items-center text-sm font-medium">
+                          {item.label}
+                          {item.path === '/x-lab' && (
+                            <img src={betaBadge} alt="BETA" className="ml-auto h-4 object-contain" />
+                          )}
+                        </span>
+                      )}
                     </button>
-                    {item.path === '/' && renderSearchButton()}
+                    {/* 搜索按钮放在新任务（第一项）后面 */}
+                    {index === 0 && itemIndex === 0 && renderSearchButton()}
                   </div>
                 ))}
               </div>
@@ -695,9 +681,11 @@ export function Sidebar() {
               >
                 <MessageSquareText size={13} />
                 <span className="flex-1 text-left">{t('sidebar.recent')}</span>
-                <ChevronDown
-                  size={13}
-                  className={cn('transition-transform duration-200', recentExpanded && 'rotate-180')}
+                <img
+                  src={iconRecentArrow}
+                  alt=""
+                  aria-hidden="true"
+                  className={cn('transition-transform duration-200', !recentExpanded && 'rotate-180')}
                 />
               </button>
               {recentExpanded && (
@@ -774,14 +762,13 @@ export function Sidebar() {
                                   })
                             }}
                             className={cn(
-                              'inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-all hover:bg-background/80 hover:text-foreground',
-                              menuState?.sessionId === item.id
-                                ? 'opacity-100'
-                                : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+                              // Hidden by default; revealed on row hover / keyboard focus, or while its menu is open.
+                              'inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-muted-foreground opacity-0 transition-all hover:bg-background/80 hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100',
+                              menuState?.sessionId === item.id && 'bg-background/80 text-foreground opacity-100'
                             )}
                             aria-label={t('sidebar.more')}
                           >
-                            <MoreHorizontal size={15} />
+                            <img src={iconMore} alt="" className="h-[18px] w-[18px]" aria-hidden="true" />
                           </button>
                         </div>
                       </div>
@@ -793,7 +780,7 @@ export function Sidebar() {
           )}
         </div>
 
-        {/* Settings + Theme toggle */}
+        {/* Settings + Collapse/Expand toggle */}
         {expanded ? (
           <div className="flex w-full items-center gap-1">
             <button
@@ -806,23 +793,30 @@ export function Sidebar() {
                   : 'text-foreground/78 hover:text-foreground hover:bg-accent'
               )}
             >
-              <Settings size={18} className="flex-shrink-0" aria-hidden="true" />
+              <img src={iconSettings} alt="" className="h-[18px] w-[18px] flex-shrink-0" aria-hidden="true" />
               <span className="text-sm font-medium">{t('sidebar.settings')}</span>
             </button>
 
             <button
-              onClick={toggleTheme}
-              title={isDark ? t('sidebar.switchLight') : t('sidebar.switchDark')}
-              aria-label={isDark ? t('sidebar.switchLightAria') : t('sidebar.switchDarkAria')}
-              className="-mr-1 inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-foreground/78 transition-colors hover:bg-accent hover:text-foreground"
+              onClick={toggleExpanded}
+              title={t('sidebar.collapseAria')}
+              aria-label={t('sidebar.collapseAria')}
+              className="-mr-1 inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-accent"
             >
-              {isDark
-                ? <Sun size={18} aria-hidden="true" />
-                : <Moon size={18} aria-hidden="true" />}
+              <img src={iconSidebarCollapse} alt="" className="h-[18px] w-[18px]" aria-hidden="true" />
             </button>
           </div>
         ) : (
-          <>
+          <div className="flex w-full flex-col items-center gap-1.5">
+            {/* Collapse/expand toggle sits directly above 设置, 6px gap. */}
+            <button
+              onClick={toggleExpanded}
+              title={t('sidebar.expandAria')}
+              aria-label={t('sidebar.expandAria')}
+              className={itemCls(false)}
+            >
+              <img src={iconSidebarOpen} alt="" className="h-[18px] w-[18px]" aria-hidden="true" />
+            </button>
             <button
               onClick={() => navigate('/settings')}
               title={t('sidebar.settings')}
@@ -830,20 +824,9 @@ export function Sidebar() {
               aria-current={isActive('/settings') ? 'page' : undefined}
               className={itemCls(isActive('/settings'))}
             >
-              <Settings size={18} className="flex-shrink-0" aria-hidden="true" />
+              <img src={iconSettings} alt="" className="h-[18px] w-[18px] flex-shrink-0" aria-hidden="true" />
             </button>
-
-            <button
-              onClick={toggleTheme}
-              title={isDark ? t('sidebar.switchLight') : t('sidebar.switchDark')}
-              aria-label={isDark ? t('sidebar.switchLightAria') : t('sidebar.switchDarkAria')}
-              className={bottomItemCls}
-            >
-              {isDark
-                ? <Sun size={18} className="flex-shrink-0" aria-hidden="true" />
-                : <Moon size={18} className="flex-shrink-0" aria-hidden="true" />}
-            </button>
-          </>
+          </div>
         )}
 
         {expanded && (
@@ -932,11 +915,14 @@ export function Sidebar() {
           />
 
           <div className="pointer-events-none absolute inset-0 flex items-start justify-center px-5 pt-20">
-            <div className="pointer-events-auto w-full max-w-[720px] overflow-hidden rounded-[30px] border border-slate-200 bg-white shadow-[0_30px_90px_rgba(15,23,42,0.16)] dark:border-slate-800 dark:bg-slate-950">
+            <div className="pointer-events-auto w-full max-w-[640px] overflow-hidden rounded-[30px] border border-slate-200 bg-white shadow-[0_30px_90px_rgba(15,23,42,0.16)] dark:border-slate-800 dark:bg-slate-950">
               <div className="border-b border-slate-200/80 px-5 py-4 dark:border-slate-800">
                 <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white/82 px-4 py-3 dark:border-slate-800 dark:bg-slate-900/80">
-                  <Search size={16} className="text-slate-400" />
-                  <input
+                  <div className="relative min-w-0 flex-1">
+                    {searchQuery.length === 0 && (
+                      <SearchChatPlaceholder className="pointer-events-none absolute left-0 top-1/2 h-[26px] w-auto -translate-y-1/2" />
+                    )}
+                    <input
                     ref={searchInputRef}
                     value={searchQuery}
                     onChange={(event) => setSearchQuery(event.target.value)}
@@ -1002,10 +988,11 @@ export function Sidebar() {
                         searchResults[searchActiveIndex]?.onSelect()
                       }
                     }}
-                    placeholder={t('search.placeholder')}
-                    className="min-w-0 flex-1 bg-transparent text-[15px] text-foreground outline-none placeholder:text-muted-foreground"
+                    placeholder=""
+                    className="w-full bg-transparent text-[15px] text-foreground outline-none"
                   />
-                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] text-slate-500 dark:bg-slate-800 dark:text-slate-300">
+                  </div>
+                  <span className="rounded-[9px] px-2.5 py-1 text-[11px] text-white" style={{ backgroundColor: '#9CA3AF' }}>
                     {isMac ? '⌘K' : 'Win+K'}
                   </span>
                 </div>
@@ -1013,11 +1000,6 @@ export function Sidebar() {
 
               <div className="max-h-[520px] overflow-y-auto px-4 py-4">
                 <section>
-                  <div className="mb-2 px-2">
-                    <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                      {t('search.quickActions')}
-                    </span>
-                  </div>
                   <div className="space-y-1">
                     {quickActions.length > 0 ? quickActions.map((item) => {
                       const activeIndex = searchResults.findIndex((result) => result.id === item.id)
@@ -1029,11 +1011,17 @@ export function Sidebar() {
                           onClick={item.onSelect}
                           className={searchItemCls(active)}
                         >
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-medium text-foreground">{item.label}</p>
-                            <p className="mt-1 text-xs text-muted-foreground">{item.description}</p>
+                          <div className="flex min-w-0 items-center">
+                            {item.id === 'new-session' ? (
+                              <span className="flex items-center gap-2">
+                                <NewTaskIcon className="h-[18px] w-[18px] flex-shrink-0" />
+                                <NewChatItem className="block h-[24px] w-auto flex-shrink-0" />
+                              </span>
+                            ) : (
+                              <p className="truncate text-sm font-medium" style={{ color: 'rgba(0, 0, 0, 0.8)' }}>{item.label}</p>
+                            )}
                           </div>
-                          <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                          <span className="rounded-[9px] px-2 py-0.5 text-[11px] text-white" style={{ backgroundColor: '#9CA3AF' }}>
                             {item.id === 'new-session' ? `${isMac ? '⌘' : 'Win'} + N` : 'Enter'}
                           </span>
                         </button>
@@ -1046,9 +1034,7 @@ export function Sidebar() {
 
                 <section className="mt-2.5">
                   <div className="mb-1 px-2">
-                    <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                      {t('search.recent')}
-                    </span>
+                    <RecentChatLabel className="h-[30px] w-auto text-[#9CA3AF]" />
                   </div>
                   <div className="space-y-1">
                     {recentSearchItems.length > 0 ? (
@@ -1076,9 +1062,9 @@ export function Sidebar() {
                           className={searchItemCls(active, true)}
                         >
                           <div className="min-w-0">
-                            <p className="truncate text-sm font-medium text-foreground">{item.label}</p>
+                            <p className="truncate text-sm font-medium" style={{ color: 'rgba(0, 0, 0, 0.8)' }}>{item.label}</p>
                           </div>
-                          <span className="ml-4 flex-shrink-0 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                          <span className="ml-4 flex-shrink-0 rounded-[9px] px-2 py-0.5 text-[11px] text-white" style={{ backgroundColor: '#9CA3AF' }}>
                             {shortcut}
                           </span>
                         </button>

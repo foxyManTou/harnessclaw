@@ -12,6 +12,7 @@ import {
   Cog,
   FileText,
   ImagePlus,
+  Info,
   Layers3,
   Play,
   Plus,
@@ -513,8 +514,40 @@ export function TeamPage() {
         </header>
 
         <section className="space-y-4 pt-5">
+          {activeView === 'teams' ? (
+            <div
+              role="status"
+              className="flex items-start gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-foreground"
+            >
+              <Info size={16} className="mt-0.5 flex-shrink-0 text-amber-600 dark:text-amber-400" />
+              <div className="min-w-0">
+                <p className="font-medium">{t('team.previewBanner.title')}</p>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                  {t('team.previewBanner.description')}
+                </p>
+              </div>
+            </div>
+          ) : null}
           {activeView === 'agents' ? (
-            agents.length > 0 ? (
+            <>
+              {/* Clarify scope (#75): users expected agents created
+                  here to surface automatically in chat (Emma), but
+                  Emma dispatches the engine's built-in roles. Custom
+                  agents live in the Agent Team registry and are
+                  invoked by composing them into a Team. */}
+              <div
+                role="note"
+                className="flex items-start gap-3 rounded-2xl border border-sky-500/30 bg-sky-500/10 px-4 py-3 text-sm text-foreground"
+              >
+                <Info size={16} className="mt-0.5 flex-shrink-0 text-sky-600 dark:text-sky-400" />
+                <div className="min-w-0">
+                  <p className="font-medium">{t('team.agentsScopeBanner.title')}</p>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    {t('team.agentsScopeBanner.description')}
+                  </p>
+                </div>
+              </div>
+              {agents.length > 0 ? (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {agents.map((agent) => (
                   <article
@@ -572,14 +605,15 @@ export function TeamPage() {
                   </article>
                 ))}
               </div>
-            ) : (
-              <EmptyStateCard
-                title={currentMeta.emptyTitle}
-                description={currentMeta.emptyDescription}
-                buttonLabel={currentMeta.buttonLabel}
-                onCreate={openCreateDialog}
-              />
-            )
+              ) : (
+                <EmptyStateCard
+                  title={currentMeta.emptyTitle}
+                  description={currentMeta.emptyDescription}
+                  buttonLabel={currentMeta.buttonLabel}
+                  onCreate={openCreateDialog}
+                />
+              )}
+            </>
           ) : (
             <SopWizardView
               active={sopActive}

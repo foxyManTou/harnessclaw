@@ -946,9 +946,16 @@ function syncInstalledSkillsToDb(): void {
   ensureDir(SKILLS_DIR)
   migrateInstalledSkillsIntoRepositoryFolders()
   const db = getDb()
-  const directories = existsSync(SKILLS_DIR)
+  // Keep the matched SKILL.md path verbatim — case is preserved by
+  // findSkillMarkdownFiles (which compares lower-cased). Recreating
+  // the path with a hard-coded uppercase `SKILL.md` would break on
+  // case-sensitive filesystems (Linux, case-sensitive APFS volumes,
+  // tarballed repos extracted with their original casing) the moment
+  // a cloned skill stores its manifest as `skill.md` or `Skill.md`
+  // — see #76 where a manually-cloned repo silently disappeared from
+  // the Skills page.
+  const skillFiles = existsSync(SKILLS_DIR)
     ? findSkillMarkdownFiles(SKILLS_DIR)
-        .map((filePath) => dirname(filePath))
         .sort((left, right) => left.localeCompare(right, 'zh-CN'))
     : []
 
@@ -992,9 +999,19 @@ function syncInstalledSkillsToDb(): void {
 
   const tx = db.transaction(() => {
     const now = Date.now()
-    directories.forEach((skillDir) => {
+    skillFiles.forEach((skillMdPath) => {
+      const skillDir = dirname(skillMdPath)
       const id = relative(SKILLS_DIR, skillDir).replace(/\\/g, '/')
-      const content = readFileSync(join(skillDir, 'SKILL.md'), 'utf-8')
+      // Isolate per-skill failures so a single unreadable / malformed
+      // SKILL.md doesn't roll back the whole transaction and leave the
+      // user with an empty Skills page (#76).
+      let content: string
+      try {
+        content = readFileSync(skillMdPath, 'utf-8')
+      } catch (error) {
+        console.error(`[Skills] Failed to read ${skillMdPath}:`, error)
+        return
+      }
       const meta = readSkillMarkdownMeta(content, id)
       const source = readInstallSource(skillDir)
       const existingBySource = source?.key ? existingBySourceKey.get(source.key) : undefined
@@ -1005,22 +1022,27 @@ function syncInstalledSkillsToDb(): void {
       }
 
       seen.add(id)
-      upsert.run({
-        id,
-        name: meta.name || id,
-        description: meta.description,
-        allowed_tools: meta.allowedTools,
-        has_references: existsSync(join(skillDir, 'references')) ? 1 : 0,
-        has_templates: existsSync(join(skillDir, 'templates')) ? 1 : 0,
-        source_key: source?.key ?? null,
-        source_repo_id: source?.repoId ?? null,
-        source_repo_name: source?.repoName ?? null,
-        source_repo_url: source?.repoUrl ?? null,
-        source_branch: source?.branch ?? null,
-        source_path: source?.path ?? null,
-        created_at: existingCreatedAt.get(id) ?? existingBySource?.created_at ?? now,
-        updated_at: now,
-      })
+      try {
+        upsert.run({
+          id,
+          name: meta.name || id,
+          description: meta.description,
+          allowed_tools: meta.allowedTools,
+          has_references: existsSync(join(skillDir, 'references')) ? 1 : 0,
+          has_templates: existsSync(join(skillDir, 'templates')) ? 1 : 0,
+          source_key: source?.key ?? null,
+          source_repo_id: source?.repoId ?? null,
+          source_repo_name: source?.repoName ?? null,
+          source_repo_url: source?.repoUrl ?? null,
+          source_branch: source?.branch ?? null,
+          source_path: source?.path ?? null,
+          created_at: existingCreatedAt.get(id) ?? existingBySource?.created_at ?? now,
+          updated_at: now,
+        })
+      } catch (error) {
+        console.error(`[Skills] Failed to upsert ${id}:`, error)
+        seen.delete(id)
+      }
     })
 
     {
@@ -1033,6 +1055,25 @@ function syncInstalledSkillsToDb(): void {
   tx()
 }
 
+// Locate a SKILL.md inside a single directory, case-insensitively.
+// Matches the case policy of findSkillMarkdownFiles so a manually-
+// cloned repo whose manifest is `skill.md` / `Skill.md` is still
+// recognised on case-sensitive filesystems (#76).
+function findSkillMarkdownInDir(skillDir: string): string | null {
+  if (!existsSync(skillDir)) return null
+  try {
+    const entries = readdirSync(skillDir, { withFileTypes: true })
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name.toLowerCase() === 'skill.md') {
+        return join(skillDir, entry.name)
+      }
+    }
+  } catch {
+    // ignore — caller treats null as "no manifest here".
+  }
+  return null
+}
+
 function migrateInstalledSkillsIntoRepositoryFolders(): void {
   if (!existsSync(SKILLS_DIR)) return
 
@@ -1040,7 +1081,7 @@ function migrateInstalledSkillsIntoRepositoryFolders(): void {
   directChildren.forEach((name) => {
     const skillDir = join(SKILLS_DIR, name)
     if (!statSync(skillDir).isDirectory()) return
-    if (!existsSync(join(skillDir, 'SKILL.md'))) return
+    if (!findSkillMarkdownInDir(skillDir)) return
 
     const source = readInstallSource(skillDir)
     if (!source?.repoName) return
@@ -1502,8 +1543,8 @@ export function listInstalledSkills(): SkillInfo[] {
 export function readInstalledSkill(id: string): string {
   try {
     const normalizedId = normalizeInstalledSkillId(id.trim())
-    const filePath = join(SKILLS_DIR, normalizedId, 'SKILL.md')
-    if (!existsSync(filePath)) return ''
+    const filePath = findSkillMarkdownInDir(join(SKILLS_DIR, normalizedId))
+    if (!filePath) return ''
     return readFileSync(filePath, 'utf-8')
   } catch (error) {
     console.error('[Skills] Failed to read skill:', error)

@@ -172,6 +172,8 @@ jobs:
           echo "Using macOS notarization mode: ${MACOS_NOTARIZE_MODE:-disabled}"
 
       - name: Prepare bundled engine runtime
+        env:
+          HARNESSCLAW_ENGINE_RUNTIME_VERSION: ${{ contains(github.ref_name, '-beta') && github.ref_name || '' }}
         run: node scripts/prepare-bundled-binaries.cjs --engine-source release --platform "${{ matrix.platform }}" --arch "${{ matrix.arch }}" --output-dir resources/bin
 
       - name: Prepare GitHub release notes
@@ -180,11 +182,17 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           node scripts/extract-changelog.cjs --version "$VERSION" --locale bilingual > release-notes.md
+          create_args=()
+          edit_args=()
+          if [[ "$GITHUB_REF_NAME" == *-beta* ]]; then
+            create_args+=(--prerelease --latest=false)
+            edit_args+=(--prerelease)
+          fi
 
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release edit "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md
+            gh release edit "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md "${edit_args[@]}"
           else
-            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md "${create_args[@]}"
           fi
 
       - name: Build and Publish
@@ -299,7 +307,7 @@ jobs:
     needs:
       - release
       - publish-mac-update-metadata
-    if: github.ref_type == 'tag'
+    if: github.ref_type == 'tag' && !contains(github.ref_name, '-beta')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source repository

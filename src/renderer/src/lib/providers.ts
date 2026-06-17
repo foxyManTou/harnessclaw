@@ -33,7 +33,7 @@ export interface ProviderConfig {
   // `custom`). Defaults to PROVIDER_ENGINE_TYPES[key]; the user can
   // override per-provider via the API-地址 row dropdown. See engine
   // docs (`type` enum: openai | anthropic | gemini).
-  engineType?: 'openai' | 'anthropic' | 'gemini'
+  engineType?: ProviderType
   extraHeaders: Record<string, string> | null
   raw: Record<string, unknown>
   enabled?: boolean
@@ -46,14 +46,19 @@ export type ManagedProviderKey =
   | 'xunfei'
   | 'anthropic'
   | 'openai'
+  | 'gpt-image'
   | 'google'
-  | 'deepseek'
+  | 'qwen'
+  | 'minimax'
   | 'zhipu'
   | 'moonshot'
-  | 'minimax'
+  | 'doubao'
+  | 'deepseek'
   | 'custom'
 
 export type ProtocolProviderKey = 'anthropic' | 'openai'
+export type AgentProviderKey = Exclude<ManagedProviderKey, 'gpt-image' | 'doubao'>
+export type ProviderType = 'openai' | 'anthropic' | 'gemini'
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -62,22 +67,36 @@ export const MANAGED_PROVIDER_KEYS: ManagedProviderKey[] = [
   'anthropic',
   'openai',
   'google',
-  'deepseek',
+  'qwen',
+  'minimax',
   'zhipu',
   'moonshot',
-  'minimax',
+  'doubao',
+  'deepseek',
   'custom',
 ]
+
+export const IMAGE_GENERATION_PROVIDER_KEYS: ReadonlyArray<Extract<ManagedProviderKey, 'gpt-image' | 'doubao'>> = [
+  'gpt-image',
+  'doubao',
+]
+
+export const AGENT_PROVIDER_KEYS: AgentProviderKey[] = MANAGED_PROVIDER_KEYS.filter(
+  (key): key is AgentProviderKey => !IMAGE_GENERATION_PROVIDER_KEYS.includes(key as 'gpt-image' | 'doubao')
+)
 
 export const PROVIDER_DISPLAY_NAMES: Record<ManagedProviderKey, string> = {
   xunfei: '科大讯飞 Spark',
   anthropic: 'Anthropic',
   openai: 'OpenAI',
+  'gpt-image': 'GPT Image',
   google: 'Google',
-  deepseek: 'DeepSeek',
+  qwen: '通义千问',
+  minimax: 'MiniMax',
   zhipu: '智谱 GLM',
   moonshot: 'Kimi',
-  minimax: 'MiniMax',
+  deepseek: 'DeepSeek',
+  doubao: 'Doubao Seedream',
   custom: 'Custom',
 }
 
@@ -85,12 +104,62 @@ export const PROVIDER_DEFAULT_BASES: Record<ManagedProviderKey, string> = {
   xunfei: 'https://spark-api-open.xf-yun.com/agent',
   anthropic: 'https://api.anthropic.com',
   openai: 'https://api.openai.com',
+  'gpt-image': 'https://api.openai.com',
   google: 'https://generativelanguage.googleapis.com',
-  deepseek: 'https://api.deepseek.com',
+  qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  minimax: 'https://api.minimax.chat',
   zhipu: 'https://open.bigmodel.cn/api/paas/v4',
   moonshot: 'https://api.moonshot.cn',
-  minimax: 'https://api.minimax.chat',
+  doubao: 'https://ark.cn-beijing.volces.com/api/v3',
+  deepseek: 'https://api.deepseek.com',
   custom: '',
+}
+
+const PROVIDER_MODEL_PRESETS: Partial<Record<ManagedProviderKey, ProviderModelEntry[]>> = {
+  openai: [
+    {
+      id: 'gpt-image-2',
+      name: 'GPT Image 2',
+      group: 'GPT Image',
+      tags: ['vision', 'image_generation'],
+    },
+  ],
+  // Legacy hidden bucket for previously persisted appConfig/provider rows.
+  // New GPT Image configuration is presented under the OpenAI provider.
+  'gpt-image': [
+    {
+      id: 'gpt-image-2',
+      name: 'GPT Image 2',
+      group: 'gpt-image',
+      tags: ['vision', 'image_generation'],
+    },
+  ],
+  doubao: [
+    {
+      id: 'doubao-seedream-5-0-260128',
+      name: 'Doubao Seedream 5.0',
+      group: 'seedream-5',
+      tags: ['vision', 'image_generation'],
+    },
+    {
+      id: 'doubao-seedream-5-0-lite-260128',
+      name: 'Doubao Seedream 5.0 Lite',
+      group: 'seedream-5',
+      tags: ['vision', 'image_generation'],
+    },
+    {
+      id: 'doubao-seedream-4-5-251128',
+      name: 'Doubao Seedream 4.5',
+      group: 'seedream-4',
+      tags: ['vision', 'image_generation'],
+    },
+    {
+      id: 'doubao-seedream-4-0-250828',
+      name: 'Doubao Seedream 4.0',
+      group: 'seedream-4',
+      tags: ['vision', 'image_generation'],
+    },
+  ],
 }
 
 // Engine `type` to send to `POST/PATCH /providers`. See
@@ -98,9 +167,12 @@ export const PROVIDER_DEFAULT_BASES: Record<ManagedProviderKey, string> = {
 // openai / anthropic / gemini).
 //
 // OpenAI-compatible vendors (DeepSeek, Kimi=moonshot, GLM=zhipu, MiniMax,
-// 讯飞=xunfei) all use `openai` and only differ by `base_url`. Google goes
-// to `gemini` — NOT `google`. `custom` is resolved at call time from the
-// user-selected protocol (openai | anthropic).
+// 讯飞=xunfei, Doubao image generation) all use `openai` and only differ by
+// `base_url`. Google goes to `gemini` — NOT `google`. `gpt-image` remains a
+// legacy hidden bucket; new GPT Image models are listed under OpenAI and are
+// kept out of Agent chat routing by their `image_generation` capability.
+// `custom` is resolved at call time from the user-selected protocol
+// (openai | anthropic).
 export const PROVIDER_ENGINE_TYPES: Record<
   Exclude<ManagedProviderKey, 'custom'>,
   'openai' | 'anthropic' | 'gemini'
@@ -108,11 +180,14 @@ export const PROVIDER_ENGINE_TYPES: Record<
   xunfei: 'openai',
   anthropic: 'anthropic',
   openai: 'openai',
+  'gpt-image': 'openai',
   google: 'gemini',
-  deepseek: 'openai',
+  qwen: 'openai',
+  minimax: 'openai',
   zhipu: 'openai',
   moonshot: 'openai',
-  minimax: 'openai',
+  doubao: 'openai',
+  deepseek: 'openai',
 }
 
 export const ENGINE_TYPE_OPTIONS: ReadonlyArray<'openai' | 'anthropic' | 'gemini'> = [
@@ -131,6 +206,21 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 export function isManagedProviderKey(value: string): value is ManagedProviderKey {
   return MANAGED_PROVIDER_KEYS.includes(value as ManagedProviderKey)
+}
+
+export function isAgentProviderKey(value: ManagedProviderKey): value is AgentProviderKey {
+  return AGENT_PROVIDER_KEYS.includes(value as AgentProviderKey)
+}
+
+export function isImageGenerationProviderKey(value: ManagedProviderKey): boolean {
+  return IMAGE_GENERATION_PROVIDER_KEYS.includes(value as 'gpt-image' | 'doubao')
+}
+
+export function getProviderDefaultModels(key: ManagedProviderKey): ProviderModelEntry[] {
+  return (PROVIDER_MODEL_PRESETS[key] ?? []).map((entry) => ({
+    ...entry,
+    ...(entry.tags ? { tags: [...entry.tags] } : {}),
+  }))
 }
 
 // Resolve the effective engine type for a provider:
@@ -153,7 +243,7 @@ export function createEmptyProviderConfig(key: ManagedProviderKey): ProviderConf
     apiKey: '',
     apiBase: PROVIDER_DEFAULT_BASES[key] || null,
     model: null,
-    models: [],
+    models: getProviderDefaultModels(key),
     protocol: key === 'anthropic' ? 'anthropic' : 'openai',
     extraHeaders: null,
     raw: {},
@@ -180,7 +270,7 @@ export function buildAppProviderRaw(next: ProviderConfig): Record<string, unknow
 // Determine the engine-level protocol slot a managed provider maps onto.
 // - `anthropic` uses the Anthropic Messages protocol.
 // - `custom` uses whatever protocol the user toggled.
-// - Everyone else (openai, deepseek, zhipu, moonshot, minimax, google) is
+// - Everyone else (openai, qwen, minimax, zhipu, moonshot, google) is
 //   OpenAI-compatible from the engine's perspective.
 export function resolveProviderProtocol(
   key: ManagedProviderKey,

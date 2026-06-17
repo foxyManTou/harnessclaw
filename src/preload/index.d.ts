@@ -7,6 +7,8 @@ interface AppBridgeAPI {
   getUsername: () => string
   checkForUpdates: () => Promise<{ ok: boolean; version?: string; error?: string }>
   onUpdateEvent: (callback: (event: AppUpdateEvent) => void) => () => void
+  downloadUpdate: () => Promise<{ ok: boolean }>
+  quitAndInstall: () => Promise<void>
 }
 
 interface AppUpdateEvent {
@@ -147,15 +149,12 @@ interface BrowserAgentTabInfo {
   tab_id: string
   title: string
   url: string
-  cdp_endpoint: string
   active: boolean
 }
 
 interface BrowserAgentSessionInfo {
   session_id: string
   window_id: string
-  cdp_endpoint: string
-  partition: string
   visible: boolean
   last_used_turn_id?: string
   active_tab?: BrowserAgentTabInfo
@@ -460,6 +459,7 @@ interface RegistryModelSupports {
   audio_input?: boolean
   audio_output?: boolean
   video_input?: boolean
+  image_generation?: boolean
   streaming?: boolean
   function_calling?: boolean
   parallel_function_calling?: boolean
@@ -542,6 +542,8 @@ interface ProviderEndpointInfo {
   // endpoint. Empty/absent = ungrouped (renderer falls back to
   // getModelGroup(id) heuristic).
   group?: string
+  // Full image generation target URL resolved by the engine registry.
+  image_generation_url?: string
 }
 
 interface ProviderInfo {
@@ -611,6 +613,7 @@ interface EndpointPatchPayload {
   enable_thinking?: boolean | null
   disabled?: boolean
   // Engine 2026-05-19+: per-endpoint capability override. [] clears it.
+  // Allowed tokens include image_generation for image tool models.
   model_type?: string[]
   // Engine 2026-05-30+: free-text display tag. Sending `""` explicitly
   // clears it (yaml key removed); omitting leaves it unchanged.
@@ -624,6 +627,7 @@ interface EndpointPatchPayload {
 interface AgentConfigInfo {
   primary: string
   fallback_chain: string[]
+  image_generation?: string
   max_tokens?: number
   // Canonical range [0, 1]; engine rescales per provider type
   // (anthropic ×1, openai/gemini ×2). 0 means "fall back to endpoint
@@ -638,9 +642,68 @@ interface AgentConfigInfo {
 interface AgentPatchPayload {
   primary?: string
   fallback_chain?: string[]
+  image_generation?: string
+  // Engine 2026-06+: canonical `provider:endpoint` ref for the video
+  // generation tool target (e.g. `doubao:seedance-lite-i2v`). Omitted =
+  // unchanged.
+  video_generation?: string
   max_tokens?: number
   temperature?: number
   context_window?: number
+}
+
+// Video Generation Management API — GET|PATCH /api/v1/videogen. Mirrors
+// the providers management types but scoped to the `videogen` config
+// tree (credentials + per-endpoint model bindings).
+interface VideoEndpointInfo {
+  model: string
+}
+interface VideoProviderListing {
+  api_key: string
+  base_url: string
+  endpoints: Record<string, VideoEndpointInfo>
+}
+interface VideoGenListing {
+  config_source: string
+  providers: Record<string, VideoProviderListing>
+}
+interface VideoGenPatchPayload {
+  providers: Record<
+    string,
+    {
+      api_key?: string
+      base_url?: string
+      endpoints?: Record<string, { model: string }>
+    }
+  >
+}
+
+// Image Generation Management API — GET|PATCH /api/v1/imagegen. Mirrors
+// the videogen management types but scoped to the `imagegen` config tree
+// (credentials + path + per-endpoint model bindings).
+interface ImageEndpoint {
+  model: string
+}
+interface ImageProviderListing {
+  api_key: string
+  base_url: string
+  path: string
+  endpoints: Record<string, ImageEndpoint>
+}
+interface ImageGenListing {
+  config_source: string
+  providers: Record<string, ImageProviderListing>
+}
+interface ImageGenPatch {
+  providers: Record<
+    string,
+    {
+      api_key?: string
+      base_url?: string
+      path?: string
+      endpoints?: Record<string, { model: string }>
+    }
+  >
 }
 
 type ProvidersResult<T> =
@@ -715,6 +778,18 @@ interface AgentApiInterface {
   patchAgentConfig: (
     patch: AgentPatchPayload,
   ) => Promise<ProvidersResult<AgentConfigInfo>>
+  /** GET /api/v1/videogen — videogen providers + per-endpoint model bindings. */
+  listVideoProviders: () => Promise<ProvidersResult<VideoGenListing>>
+  /** PATCH /api/v1/videogen — partial update; omitted fields unchanged. */
+  patchVideoConfig: (
+    patch: VideoGenPatchPayload,
+  ) => Promise<ProvidersResult<VideoGenListing>>
+  /** GET /api/v1/imagegen — imagegen providers + per-endpoint model bindings. */
+  listImageProviders: () => Promise<ProvidersResult<ImageGenListing>>
+  /** PATCH /api/v1/imagegen — partial update; omitted fields unchanged. */
+  patchImageConfig: (
+    patch: ImageGenPatch,
+  ) => Promise<ProvidersResult<ImageGenListing>>
   patchProvider: (
     name: string,
     patch: ProviderPatchPayload,

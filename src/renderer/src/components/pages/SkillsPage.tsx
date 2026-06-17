@@ -326,6 +326,15 @@ export function SkillsPage() {
 
       <div className="relative flex-1 overflow-hidden">
         <div className="h-full overflow-y-auto p-3">
+          {skills.length > 0 && (
+            // Tell the user how to actually invoke a skill in chat (#76):
+            // hand-typed `/skill-id` is sent verbatim and the engine
+            // never applies the SKILL.md prompt. The composer's `/`
+            // autocomplete is what wires the chip → engine payload.
+            <p className="mb-3 rounded-lg border border-border bg-muted/30 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
+              {t('skills.usageHint')}
+            </p>
+          )}
           {filtered.length === 0 ? (
             search ? (
               <div className="rounded-xl border border-dashed border-border p-8 text-center">

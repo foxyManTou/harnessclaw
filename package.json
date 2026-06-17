@@ -1,13 +1,15 @@
 {
   "name": "harnessclaw",
   "productName": "HarnessClaw",
-  "version": "0.0.20",
+  "version": "0.0.23-beta.0",
   "description": "harnessclaw,your agent is ready",
   "license": "Apache-2.0",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
+    "dev:vscode": "yarn ensure:electron-native && yarn dev",
     "build": "electron-vite build",
+    "ensure:electron-native": "node scripts/ensure-electron-native.cjs",
     "postinstall": "electron-builder install-app-deps",
     "rebuild:electron-native": "electron-builder install-app-deps",
     "changelog:build": "node scripts/build-changelog.cjs",

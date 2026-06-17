@@ -1,8 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowRight, Check, ChevronLeft, ChevronRight, Languages, Loader2, Sparkles } from 'lucide-react'
+import { ArrowRight, Check, ChevronDown, ChevronLeft, Languages, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { ProviderLogo } from '@/components/common/ProviderLogo'
+import emmaAvatar from '@/assets/emma-avatar.svg'
+import emmaText from '@/assets/emma-text.svg'
+import welcomeHeading from '@/assets/welcome-heading.svg'
 import {
+  AGENT_PROVIDER_KEYS,
   MANAGED_PROVIDER_KEYS,
   PROVIDER_DEFAULT_BASES,
   PROVIDER_DISPLAY_NAMES,
@@ -13,11 +18,9 @@ import {
   type ProtocolProviderKey,
   type ProviderConfig,
 } from '@/lib/providers'
-import emmaAvatar from '../assets/sidebar-logo.png'
 
-type ProfileKey = 'A' | 'B' | 'C'
 type StartupOverlayState = 'checking' | 'setup' | 'hidden'
-type StageKey = 'emma' | 'engine' | 'connection' | 'profile'
+type StageKey = 'intro' | 'connection'
 
 interface SetupDraft {
   engineMode: ManagedProviderKey | null
@@ -28,7 +31,6 @@ interface SetupDraft {
   // Only meaningful when engineMode === 'custom' (mirrors Settings'
   // protocol toggle inside the custom-provider editor).
   protocol: ProtocolProviderKey
-  profile: ProfileKey | null
 }
 
 type ConfigRecord = Record<string, unknown>
@@ -36,38 +38,17 @@ type ConfigRecord = Record<string, unknown>
 const WORKSPACE_ROOT = '~/.harnessclaw/workspace'
 const FIRST_RUN_DONE_STORAGE_KEY = 'harnessclaw-first-run-complete'
 
-const emmaPrompts = (t: any): Array<{ category: string; prompt: string }> => [
-  // 研发
-  { category: t('welcome.prompts.categories.dev'), prompt: t('welcome.prompts.items.dev1') },
-  { category: t('welcome.prompts.categories.dev'), prompt: t('welcome.prompts.items.dev2') },
-  { category: t('welcome.prompts.categories.dev'), prompt: t('welcome.prompts.items.dev3') },
-  { category: t('welcome.prompts.categories.dev'), prompt: t('welcome.prompts.items.dev4') },
-  // 研究
-  { category: t('welcome.prompts.categories.research'), prompt: t('welcome.prompts.items.res1') },
-  { category: t('welcome.prompts.categories.research'), prompt: t('welcome.prompts.items.res2') },
-  { category: t('welcome.prompts.categories.research'), prompt: t('welcome.prompts.items.res3') },
-  { category: t('welcome.prompts.categories.research'), prompt: t('welcome.prompts.items.res4') },
-  // 写作
-  { category: t('welcome.prompts.categories.writing'), prompt: t('welcome.prompts.items.wri1') },
-  { category: t('welcome.prompts.categories.writing'), prompt: t('welcome.prompts.items.wri2') },
-  { category: t('welcome.prompts.categories.writing'), prompt: t('welcome.prompts.items.wri3') },
-  { category: t('welcome.prompts.categories.writing'), prompt: t('welcome.prompts.items.wri4') },
-  // 数据
-  { category: t('welcome.prompts.categories.data'), prompt: t('welcome.prompts.items.dat1') },
-  { category: t('welcome.prompts.categories.data'), prompt: t('welcome.prompts.items.dat2') },
-  { category: t('welcome.prompts.categories.data'), prompt: t('welcome.prompts.items.dat3') },
-  { category: t('welcome.prompts.categories.data'), prompt: t('welcome.prompts.items.dat4') },
-  // 生活
-  { category: t('welcome.prompts.categories.life'), prompt: t('welcome.prompts.items.lif1') },
-  { category: t('welcome.prompts.categories.life'), prompt: t('welcome.prompts.items.lif2') },
-  { category: t('welcome.prompts.categories.life'), prompt: t('welcome.prompts.items.lif3') },
-  { category: t('welcome.prompts.categories.life'), prompt: t('welcome.prompts.items.lif4') },
-  // 日常
-  { category: t('welcome.prompts.categories.daily'), prompt: t('welcome.prompts.items.dai1') },
-  { category: t('welcome.prompts.categories.daily'), prompt: t('welcome.prompts.items.dai2') },
-  { category: t('welcome.prompts.categories.daily'), prompt: t('welcome.prompts.items.dai3') },
-  { category: t('welcome.prompts.categories.daily'), prompt: t('welcome.prompts.items.dai4') },
-]
+// Provider list shown in the connection dropdown — the full managed
+// set minus `custom` (first-run keeps it simple; custom gateways are
+// configured later in Settings > Models).
+const ONBOARDING_PROVIDER_KEYS: ManagedProviderKey[] = MANAGED_PROVIDER_KEYS.filter(
+  (key) => key !== 'custom',
+)
+
+// Number of intro feature categories shown in the left nav. Content
+// lives under `welcome.intro.categories.<index>` in both locale files.
+// Placeholder copy for now — product will supply real data later.
+const INTRO_CATEGORY_COUNT = 5
 
 function asRecord(value: unknown): ConfigRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -78,20 +59,6 @@ function asRecord(value: unknown): ConfigRecord {
 function getDefaultApiBase(key: ManagedProviderKey | null): string {
   if (!key) return ''
   return PROVIDER_DEFAULT_BASES[key] || ''
-}
-
-function getProfilePreset(profile: ProfileKey | null): {
-  workspace: string
-  maxToolIterations: number
-  reasoningEffort: 'medium' | 'high'
-} {
-  if (profile === 'A') {
-    return { workspace: `${WORKSPACE_ROOT}/engineering`, maxToolIterations: 60, reasoningEffort: 'high' }
-  }
-  if (profile === 'B') {
-    return { workspace: `${WORKSPACE_ROOT}/research`, maxToolIterations: 36, reasoningEffort: 'medium' }
-  }
-  return { workspace: `${WORKSPACE_ROOT}/operations`, maxToolIterations: 24, reasoningEffort: 'medium' }
 }
 
 // Build a complete providers map seeded with empty configs, then
@@ -114,6 +81,14 @@ function buildWelcomeProviders(
   const modelId = draft.modelId.trim()
   const modelGroup = draft.modelGroup.trim()
 
+  // Save only the user-configured model. Settings page will:
+  // 1. Show this model at the top of the list (as a custom/user-added model)
+  // 2. Allow user to click "Fetch from Provider" to load the full registry
+  // 3. Mark this model as enabled/active since it was the onboarding choice
+  //
+  // This approach handles both scenarios:
+  // - User entered a standard model (e.g. "deepseek-v4-pro") → shows in list, can fetch more
+  // - User entered a custom model ID → preserved as user's choice, can fetch more later
   const models = modelId
     ? [{ id: modelId, enabled: true, ...(modelGroup ? { group: modelGroup } : {}) }]
     : []
@@ -245,11 +220,34 @@ async function registerEngineProvider(
 
     // ── 3. Append to fallback chain so the dispatcher routes here ──
     const chain = await window.agentApi.getFallbackChain()
-    if (!chain.ok) return
+    if (!chain.ok) {
+      console.error('[WelcomeModal] getFallbackChain failed:', chain)
+      return
+    }
+    console.log('[WelcomeModal] Current chain:', chain.data.chain)
+
     const chainRef = `${key}:${endpointName}`
     const legacyRef = `${key}.${endpointName}`
-    if (chain.data.chain.includes(chainRef) || chain.data.chain.includes(legacyRef)) return
-    await window.agentApi.updateFallbackChain([...chain.data.chain, chainRef])
+
+    // Check if this exact reference is already in the chain
+    if (chain.data.chain.includes(chainRef) || chain.data.chain.includes(legacyRef)) {
+      console.log('[WelcomeModal] Chain already includes', chainRef, '- skipping update')
+      return
+    }
+
+    // Replace any existing endpoint for this provider (to handle re-onboarding
+    // with a different model) and add the new one to the front of the chain.
+    // This ensures the onboarding choice becomes the primary/default.
+    const providerPrefix = `${key}:`
+    const legacyProviderPrefix = `${key}.`
+    const filteredChain = chain.data.chain.filter(
+      (ref) => !ref.startsWith(providerPrefix) && !ref.startsWith(legacyProviderPrefix)
+    )
+    console.log('[WelcomeModal] Filtered chain (removed', key, '):', filteredChain)
+    console.log('[WelcomeModal] New chain:', [chainRef, ...filteredChain])
+
+    const updateResult = await window.agentApi.updateFallbackChain([chainRef, ...filteredChain])
+    console.log('[WelcomeModal] updateFallbackChain result:', updateResult)
   } catch {
     // Best-effort — swallow.
   }
@@ -261,27 +259,13 @@ function buildAppConfig(previous: ConfigRecord, draft: SetupDraft): ConfigRecord
   const base = buildAppModelConfig(previous, providers, draft.engineMode)
 
   // buildAppModelConfig already filled modelProviders + agents.defaults
-  // (provider + model). Layer onboarding metadata + (optional) profile
-  // preset on top so the wizard's choices stick.
+  // (provider + model). Do not silently overwrite workspace /
+  // maxToolIterations / reasoningEffort: the profile step is gone,
+  // so preserving existing Agent defaults keeps onboarding from
+  // clobbering Settings -> Agents choices.
   const baseAgents = asRecord(base.agents)
   const baseDefaults = asRecord(baseAgents.defaults)
   const onboarding = asRecord(previous.onboarding)
-
-  // Profile is optional (#73). When the user skips it, leave
-  // workspace / maxToolIterations / reasoningEffort untouched so a
-  // returning user's Settings → Agents tweaks aren't silently
-  // clobbered. Only apply the preset when an explicit profile was
-  // picked.
-  const presetDefaults = draft.profile
-    ? (() => {
-        const preset = getProfilePreset(draft.profile)
-        return {
-          workspace: preset.workspace,
-          maxToolIterations: preset.maxToolIterations,
-          reasoningEffort: preset.reasoningEffort,
-        }
-      })()
-    : {}
 
   return {
     ...base,
@@ -289,7 +273,6 @@ function buildAppConfig(previous: ConfigRecord, draft: SetupDraft): ConfigRecord
       ...baseAgents,
       defaults: {
         ...baseDefaults,
-        ...presetDefaults,
       },
     },
     onboarding: {
@@ -297,7 +280,7 @@ function buildAppConfig(previous: ConfigRecord, draft: SetupDraft): ConfigRecord
       version: 1,
       completedAt: new Date().toISOString(),
       engineMode: draft.engineMode,
-      profile: draft.profile,
+      profile: null,
     },
   }
 }
@@ -317,60 +300,40 @@ export function WelcomeModal() {
     }
   }
 
-  // Full managed provider list — mirrors `Settings > Models` so the
-  // welcome flow can configure any vendor the user normally would.
-  // Detail strings live under `welcome.engineOptions.<key>Detail` in
-  // both locale files.
-  const ENGINE_DETAIL_KEYS: Record<ManagedProviderKey, string> = useMemo(() => ({
-    xunfei: 'welcome.engineOptions.xunfeiDetail',
-    anthropic: 'welcome.engineOptions.anthropicDetail',
-    openai: 'welcome.engineOptions.openaiDetail',
-    google: 'welcome.engineOptions.googleDetail',
-    deepseek: 'welcome.engineOptions.deepseekDetail',
-    zhipu: 'welcome.engineOptions.zhipuDetail',
-    moonshot: 'welcome.engineOptions.moonshotDetail',
-    minimax: 'welcome.engineOptions.minimaxDetail',
-    custom: 'welcome.engineOptions.customDetail',
-  }), [])
+  // Intro feature categories shown in stage 1. Each category has its own
+  // set of conversation examples.
+  const introCategories: Array<{
+    key: string
+    label: string
+    cards: Array<{ title: string; description: string | string[] }>
+  }> = useMemo(() => {
+    return Array.from({ length: INTRO_CATEGORY_COUNT }, (_, i) => {
+      const categoryCards = (t(`welcome.intro.categories.${i}.cards`, { returnObjects: true }) as Array<{
+        title: string
+        description: string | string[]
+      }>) || []
+      return {
+        key: `cat${i}`,
+        label: t(`welcome.intro.categories.${i}.label`),
+        cards: Array.isArray(categoryCards) ? categoryCards : [],
+      }
+    })
+  }, [t])
 
-  const engineOptions: Array<{
-    key: ManagedProviderKey
-    title: string
-    detail: string
-  }> = useMemo(() => MANAGED_PROVIDER_KEYS.map((key) => ({
-    key,
-    title: PROVIDER_DISPLAY_NAMES[key],
-    detail: t(ENGINE_DETAIL_KEYS[key]),
-  })), [t, ENGINE_DETAIL_KEYS])
+  // Provider dropdown options for the connection stage — managed set
+  // minus custom. Display names come from the shared providers module.
+  const providerOptions: Array<{ key: ManagedProviderKey; title: string }> = useMemo(
+    () => ONBOARDING_PROVIDER_KEYS.map((key) => ({
+      key,
+      title: PROVIDER_DISPLAY_NAMES[key],
+    })),
+    [],
+  )
 
-  const profileOptions: Array<{
-    key: ProfileKey
-    title: string
-    detail: string
-  }> = useMemo(() => [
-    {
-      key: 'A',
-      title: t('welcome.profileOptions.devTitle'),
-      detail: t('welcome.profileOptions.devDetail'),
-    },
-    {
-      key: 'B',
-      title: t('welcome.profileOptions.researchTitle'),
-      detail: t('welcome.profileOptions.researchDetail'),
-    },
-    {
-      key: 'C',
-      title: t('welcome.profileOptions.opsTitle'),
-      detail: t('welcome.profileOptions.opsDetail'),
-    },
-  ], [t])
-
-  const stages: Array<{ key: StageKey; title: string; subtitle: string }> = useMemo(() => [
-    { key: 'emma', title: t('welcome.stages.emma'), subtitle: t('welcome.stages.emmaSubtitle') },
-    { key: 'engine', title: t('welcome.stages.engine'), subtitle: t('welcome.stages.engineSubtitle') },
-    { key: 'connection', title: t('welcome.stages.connection'), subtitle: '' },
-    { key: 'profile', title: t('welcome.stages.profile'), subtitle: '' },
-  ], [t])
+  const stages: Array<{ key: StageKey }> = useMemo(
+    () => [{ key: 'intro' }, { key: 'connection' }],
+    [],
+  )
 
   const [overlayState, setOverlayState] = useState<StartupOverlayState>(() => {
     if (typeof window === 'undefined') return 'checking'
@@ -384,17 +347,9 @@ export function WelcomeModal() {
     modelId: '',
     modelGroup: '',
     protocol: 'openai',
-    profile: null,
   })
   const [submitting, setSubmitting] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [username] = useState<string>(() => {
-    try {
-      return window.appBridge?.getUsername?.() || ''
-    } catch {
-      return ''
-    }
-  })
 
   useEffect(() => {
     let cancelled = false
@@ -420,33 +375,17 @@ export function WelcomeModal() {
   }, [])
 
   const stageDone = useMemo(() => ({
-    emma: true,
-    engine: Boolean(draft.engineMode),
-    connection: Boolean(draft.apiKey.trim() && draft.modelId.trim()),
-    // Profile is optional (#73): users reported the wizard wouldn't
-    // let them past this step, and the chosen value had no obvious
-    // edit surface afterwards. The Stepper / Next button now treat
-    // it as always-complete; `buildAppConfig` skips the preset
-    // overwrite when the user leaves it null, so the engine YAML
-    // keeps whatever workspace / iterations / reasoning defaults the
-    // user (or Settings → Agents) already set.
-    profile: true,
+    intro: true,
+    // Connection is "complete" once a provider is chosen along with a
+    // key + model id. The provider picker now lives in this same stage.
+    connection: Boolean(draft.engineMode && draft.apiKey.trim() && draft.modelId.trim()),
   }), [draft])
 
-  const allStagesDone = stageDone.engine && stageDone.connection && stageDone.profile
+  const allStagesDone = stageDone.connection
   const currentStage = stages[stageIndex]
   const currentStageDone = stageDone[currentStage.key]
   const isLastStage = stageIndex === stages.length - 1
 
-  const goToStage = (index: number) => {
-    if (index < 0 || index >= stages.length) return
-    // Allow jumping to a stage if all earlier stages are done
-    for (let i = 0; i < index; i++) {
-      if (!stageDone[stages[i].key]) return
-    }
-    setErrorMessage(null)
-    setStageIndex(index)
-  }
 
   const handleNext = () => {
     if (!currentStageDone) return
@@ -464,14 +403,16 @@ export function WelcomeModal() {
 
   const handleFinish = async () => {
     if (!allStagesDone || submitting || !draft.engineMode) return
+    const engineMode = draft.engineMode
     setSubmitting(true)
     setErrorMessage(null)
     try {
       const finalDraft: SetupDraft = {
         ...draft,
-        apiBase: draft.apiBase.trim() || getDefaultApiBase(draft.engineMode),
+        apiBase: draft.apiBase.trim() || getDefaultApiBase(engineMode),
         apiKey: draft.apiKey.trim(),
         modelId: draft.modelId.trim(),
+        modelGroup: draft.modelGroup.trim(),
       }
       const currentAppConfig = asRecord(await window.appConfig.read())
       // Persist the welcome-flow inputs into appConfig using the same
@@ -484,14 +425,32 @@ export function WelcomeModal() {
       }
 
       // Best-effort engine-side registration via Providers Management API.
-      // Silently skipped when API isn't mounted (chain<2) or unreachable.
-      // resolveProviderProtocol/buildAppModelConfig already wrote the
-      // correct agents.defaults.{provider,model} (anthropic / openai /
-      // custom-via-protocol); registerEngineProvider just mirrors the
-      // credentials onto the engine's in-memory provider table.
+      // Wait for it to complete so Agent settings immediately reflect the
+      // onboarding choice when the user navigates there. If the API is
+      // unavailable (404/network), registerEngineProvider returns early.
       const providers = buildWelcomeProviders(finalDraft)
-      void registerEngineProvider(finalDraft.engineMode, providers[finalDraft.engineMode])
+      await registerEngineProvider(engineMode, providers[engineMode])
 
+      // Always set the local flag regardless of markLaunched result so a
+      // failed markLaunched doesn't leave the user re-seeing onboarding.
+      await window.appBridge.markLaunched()
+      window.localStorage.setItem(FIRST_RUN_DONE_STORAGE_KEY, 'true')
+
+      setOverlayState('hidden')
+    } catch (error) {
+      setErrorMessage(String((error as Error)?.message || error))
+      setSubmitting(false)
+    }
+  }
+
+  // Skip onboarding entirely: discard whatever's in the draft, write no
+  // provider config, just mark first-run complete and drop into the
+  // home screen. Users configure providers later in Settings > Models.
+  const handleSkip = async () => {
+    if (submitting) return
+    setSubmitting(true)
+    setErrorMessage(null)
+    try {
       const launched = await window.appBridge.markLaunched()
       if (launched.ok) {
         window.localStorage.setItem(FIRST_RUN_DONE_STORAGE_KEY, 'true')
@@ -512,107 +471,77 @@ export function WelcomeModal() {
       aria-modal="true"
       aria-labelledby="first-run-title"
     >
-      <div className="relative flex h-[540px] max-h-[calc(100vh-3rem)] w-[874px] max-w-full flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
-        <header className="flex items-center justify-between border-b border-border/70 px-7 pb-4 pt-6">
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/12 text-primary">
-              <Sparkles size={16} />
-            </div>
-            <h2 id="first-run-title" className="text-base font-semibold leading-tight text-foreground">
-              {username ? `${username}，` : ''}{t('welcome.greeting')}
-            </h2>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void toggleLanguage()}
-              title={i18n.language.startsWith('zh') ? t('sidebar.switchToEnglish') : t('sidebar.switchToChinese')}
-              aria-label={i18n.language.startsWith('zh') ? t('sidebar.switchToEnglish') : t('sidebar.switchToChinese')}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      <div className="relative flex h-[540px] max-h-[calc(100vh-3rem)] w-[720px] max-w-full flex-col overflow-hidden rounded-2xl border border-border bg-white shadow-2xl">
+        {/* Right-top triangular orange gradient with noise texture - no hard edge */}
+        <div className="pointer-events-none absolute right-0 top-0 h-full w-full">
+          <div
+            className="absolute right-0 top-0 h-full w-full"
+            style={{
+              background: 'radial-gradient(ellipse 120% 120% at 100% 0%, #fb923c 0%, #fed7aa 25%, #fef3c7 40%, rgba(255,255,255,0.6) 60%, transparent 80%)',
+              maskImage: 'linear-gradient(to bottom left, black 0%, black 30%, transparent 100%)',
+              WebkitMaskImage: 'linear-gradient(to bottom left, black 0%, black 30%, transparent 100%)'
+            }}
+          />
+        </div>
+
+        {/* Title area */}
+        <div className="relative z-10 flex h-[92px] shrink-0 items-center justify-center">
+          {currentStage.key === 'intro' ? (
+            <img
+              src={welcomeHeading}
+              alt={t('welcome.intro.heading')}
+              className="h-10 object-contain"
+            />
+          ) : (
+            <h2
+              id="first-run-title"
+              className="px-12 text-center text-lg font-semibold leading-snug text-foreground"
             >
-              <Languages size={15} aria-hidden="true" />
-            </button>
-            <span className="text-xs tabular-nums text-muted-foreground">
-              {stageIndex + 1} / {stages.length}
-            </span>
-          </div>
-        </header>
+              {t('welcome.stages.connection')}
+            </h2>
+          )}
+          <button
+            type="button"
+            onClick={() => void toggleLanguage()}
+            title={i18n.language.startsWith('zh') ? t('sidebar.switchToEnglish') : t('sidebar.switchToChinese')}
+            aria-label={i18n.language.startsWith('zh') ? t('sidebar.switchToEnglish') : t('sidebar.switchToChinese')}
+            className="absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <Languages size={15} aria-hidden="true" />
+          </button>
+        </div>
 
-        <Stepper stages={stages} stageIndex={stageIndex} stageDone={stageDone} onJump={goToStage} />
-
-        <div className="min-h-0 flex-1 overflow-hidden px-7 py-6">
-          {/* Engine stage gets a wider column so more provider cards
-              are visible at once in the slider — the other stages
-              stay at the original 540px reading width. */}
+        <div className="relative z-10 min-h-0 flex-1 overflow-hidden px-7 py-5">
           <div
             className={cn(
-              'mx-auto w-full',
-              currentStage.key === 'engine' ? 'max-w-[780px]' : 'max-w-[540px]'
+              'mx-auto h-full w-full',
+              currentStage.key === 'intro' ? 'max-w-full' : 'max-w-[460px]'
             )}
           >
-          {currentStage.key !== 'emma' && currentStage.key !== 'engine' && (
-            <div className="mb-5">
-              <h3 className="text-sm font-semibold text-foreground">{currentStage.title}</h3>
-              <p className="mt-1 text-xs text-muted-foreground">{currentStage.subtitle}</p>
-            </div>
-          )}
-
-          {currentStage.key === 'emma' && (
-            <div className="flex flex-col items-center text-center">
-              <img
-                src={emmaAvatar}
-                alt="Emma"
-                className="h-16 w-16 rounded-2xl object-cover shadow-sm"
-              />
-              <h3 className="mt-5 text-[2.6rem] font-semibold leading-none tracking-tight text-foreground">
-                emma
-              </h3>
-
-              <TypedQuotes prompts={emmaPrompts(t)} />
-            </div>
-          )}
-
-          {currentStage.key === 'engine' && (
-            <EngineSlider
-              options={engineOptions}
-              selected={draft.engineMode}
-              onSelect={(key) => setDraft((d) => ({ ...d, engineMode: key }))}
-            />
+          {currentStage.key === 'intro' && (
+            <IntroShowcase categories={introCategories} />
           )}
 
           {currentStage.key === 'connection' && (
-            <div className="grid gap-3.5">
-              {draft.engineMode === 'custom' && (
-                <div>
-                  <div className="mb-1.5 flex items-center gap-1 text-xs font-medium text-foreground">
-                    <span>{t('welcome.protocolLabel')}</span>
-                  </div>
-                  <div className="inline-flex rounded-lg border border-border bg-muted/50 p-0.5">
-                    {(['openai', 'anthropic'] as ProtocolProviderKey[]).map((p) => {
-                      const active = draft.protocol === p
-                      return (
-                        <button
-                          key={p}
-                          type="button"
-                          onClick={() => setDraft((d) => ({ ...d, protocol: p }))}
-                          className={cn(
-                            'px-3 py-1 rounded-md text-xs font-medium transition-colors',
-                            active
-                              ? 'bg-card text-foreground shadow-sm'
-                              : 'text-muted-foreground hover:text-foreground'
-                          )}
-                        >
-                          {p === 'openai' ? 'OpenAI' : 'Anthropic'}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
+            <div className="grid gap-3">
+              <ProviderSelect
+                label={t('welcome.providerLabel')}
+                placeholder={t('welcome.providerPlaceholder')}
+                options={providerOptions}
+                value={draft.engineMode}
+                onChange={(key) =>
+                  setDraft((d) => ({
+                    ...d,
+                    engineMode: key,
+                    apiBase: '',
+                    protocol: key === 'anthropic' ? 'anthropic' : 'openai',
+                  }))
+                }
+              />
               <FormField
                 label="API Base URL"
                 value={draft.apiBase}
-                placeholder={getDefaultApiBase(draft.engineMode)}
+                placeholder={getDefaultApiBase(draft.engineMode) || 'https://api.example.com/v1'}
                 onChange={(v) => setDraft((d) => ({ ...d, apiBase: v }))}
               />
               <FormField
@@ -625,9 +554,8 @@ export function WelcomeModal() {
               />
               <FormField
                 label="Model ID"
-                hint={t('welcome.modelIdHint')}
                 value={draft.modelId}
-                placeholder="model-id"
+                placeholder="model-id，例：gpt-4o-mini 或 claude-sonnet-4"
                 required
                 onChange={(v) => setDraft((d) => ({ ...d, modelId: v }))}
               />
@@ -641,83 +569,6 @@ export function WelcomeModal() {
             </div>
           )}
 
-          {currentStage.key === 'profile' && (
-            <div className="space-y-3">
-              <p className="text-[11px] leading-5 text-muted-foreground">
-                {t('welcome.profileOptions.optional')}
-              </p>
-              <div className="grid grid-cols-3 gap-3">
-                {profileOptions.map((option) => {
-                  const selected = draft.profile === option.key
-                  return (
-                    <button
-                      key={option.key}
-                      type="button"
-                      onClick={() => setDraft((d) => ({
-                        ...d,
-                        // Allow toggling the same card off so users
-                        // can change their mind and finish without a
-                        // preset overwrite (mirrors the optional
-                        // semantics introduced for #73).
-                        profile: d.profile === option.key ? null : option.key,
-                      }))}
-                      className={cn(
-                        'group relative flex h-full flex-col items-start gap-2 rounded-2xl border px-4 py-4 text-left transition-all',
-                        selected
-                          ? 'border-primary/70 bg-primary/8 shadow-sm ring-1 ring-primary/30'
-                          : 'border-border bg-background hover:-translate-y-0.5 hover:border-primary/40 hover:bg-muted/30 hover:shadow-sm'
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          'absolute right-3 top-3 flex h-5 w-5 items-center justify-center rounded-full border transition-colors',
-                          selected ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background opacity-0 group-hover:opacity-100'
-                        )}
-                        aria-hidden="true"
-                      >
-                        {selected && <Check size={12} strokeWidth={3} />}
-                      </span>
-                      <span
-                        className={cn(
-                          'rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider transition-colors',
-                          selected
-                            ? 'border-primary/40 bg-primary/15 text-primary'
-                            : 'border-border bg-muted/60 text-muted-foreground'
-                        )}
-                      >
-                        {option.key}
-                      </span>
-                      <div className="mt-1 text-sm font-semibold leading-tight text-foreground">
-                        {option.title}
-                      </div>
-                      <div className="text-[11px] leading-5 text-muted-foreground">
-                        {option.detail}
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-              <div className="flex items-center justify-between gap-3 pt-1">
-                <p className="text-[11px] leading-5 text-muted-foreground">
-                  {t('welcome.profileOptions.editLater')}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setDraft((d) => ({ ...d, profile: null }))}
-                  className={cn(
-                    'inline-flex shrink-0 items-center rounded-md border border-border bg-background px-2.5 py-1 text-[11px] font-medium transition-colors',
-                    draft.profile === null
-                      ? 'text-foreground'
-                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                  )}
-                  aria-pressed={draft.profile === null}
-                >
-                  {t('welcome.profileOptions.skip')}
-                </button>
-              </div>
-            </div>
-          )}
-
           {errorMessage && (
             <div className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-300">
               {errorMessage}
@@ -726,340 +577,231 @@ export function WelcomeModal() {
           </div>
         </div>
 
-        <footer className="flex items-center justify-between border-t border-border/70 bg-muted/20 px-7 py-4">
-          {stageIndex === 0 ? (
-            <span aria-hidden="true" />
-          ) : (
-            <button
-              type="button"
-              onClick={handleBack}
-              disabled={submitting}
-              className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <ChevronLeft size={14} />
-              {t('welcome.back')}
-            </button>
-          )}
+        <footer className="grid grid-cols-3 items-center border-t border-border/70 bg-card px-7 py-4">
+          {/* Left: back button (hidden on first stage) */}
+          <div className="flex justify-start">
+            {stageIndex > 0 && (
+              <button
+                type="button"
+                onClick={handleBack}
+                disabled={submitting}
+                className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <ChevronLeft size={14} />
+                {t('welcome.back')}
+              </button>
+            )}
+          </div>
 
-          {isLastStage ? (
+          {/* Center: page dots */}
+          <div className="flex justify-center gap-1.5">
+            {stages.map((stage, index) => (
+              <span
+                key={stage.key}
+                className={cn(
+                  'h-1.5 rounded-full transition-all',
+                  index === stageIndex ? 'w-5 bg-orange-400' : 'w-1.5 bg-border'
+                )}
+                aria-hidden="true"
+              />
+            ))}
+          </div>
+
+          {/* Right: skip + primary action */}
+          <div className="flex items-center justify-end gap-2">
             <button
               type="button"
-              onClick={handleFinish}
-              disabled={!allStagesDone || submitting}
-              className="group inline-flex items-center gap-2 rounded-full bg-primary px-5 py-2 text-[13px] font-medium tracking-wide text-primary-foreground shadow-sm transition-all hover:bg-primary/90 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:shadow-sm"
+              onClick={() => void handleSkip()}
+              disabled={submitting}
+              className="rounded-lg px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {submitting ? (
-                <>
-                  <Loader2 size={14} className="animate-spin" />
-                  <span>{t('welcome.submitting')}</span>
-                </>
-              ) : (
-                <>
+              {t('welcome.skip')}
+            </button>
+            {isLastStage ? (
+              <button
+                type="button"
+                onClick={handleFinish}
+                disabled={!allStagesDone || submitting}
+                className="inline-flex items-center gap-2 rounded-lg bg-slate-800 px-5 py-2 text-[13px] font-medium text-white shadow-sm transition-colors hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-700 dark:hover:bg-slate-600"
+              >
+                {submitting ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" />
+                    <span>{t('welcome.submitting')}</span>
+                  </>
+                ) : (
                   <span>{t('welcome.finish')}</span>
-                  <ArrowRight
-                    size={14}
-                    className="transition-transform duration-300 group-hover:translate-x-0.5 group-disabled:translate-x-0"
-                  />
-                </>
-              )}
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={handleNext}
-              disabled={!currentStageDone}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {t('welcome.next')}
-              <ArrowRight size={14} />
-            </button>
-          )}
+                )}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleNext}
+                disabled={!currentStageDone}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-slate-800 px-5 py-2 text-[13px] font-medium text-white shadow-sm transition-colors hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-700 dark:hover:bg-slate-600"
+              >
+                {t('welcome.next')}
+                <ArrowRight size={14} />
+              </button>
+            )}
+          </div>
         </footer>
       </div>
     </div>
   )
 }
 
-// Horizontal-scrolling engine picker. With 9 managed providers the old
-// vertical list was too long for the wizard's max-w-[540px] column, so
-// we surface them as a snap-scroll carousel with prev/next chevrons.
-// Selection is decoupled from the visible "active" card so users can
-// preview without committing.
-function EngineSlider({
-  options,
-  selected,
-  onSelect,
+// Stage 1 feature showcase: a left category nav + a right chat preview
+// (Emma avatar + conversation bubbles). Content is placeholder (all
+// categories share one set) until product supplies real per-category copy.
+function IntroShowcase({
+  categories,
 }: {
-  options: Array<{ key: ManagedProviderKey; title: string; detail: string }>
-  selected: ManagedProviderKey | null
-  onSelect: (key: ManagedProviderKey) => void
+  categories: Array<{ key: string; label: string; cards: Array<{ title: string; description: string | string[] }> }>
 }) {
-  const scrollerRef = useRef<HTMLDivElement | null>(null)
-  const [activeIndex, setActiveIndex] = useState<number>(() => {
-    const idx = selected ? options.findIndex((o) => o.key === selected) : -1
-    return idx >= 0 ? idx : 0
-  })
-
-  // Keep activeIndex aligned with external selection changes (e.g. Back
-  // returning to this stage with engineMode already set).
-  useEffect(() => {
-    if (!selected) return
-    const idx = options.findIndex((o) => o.key === selected)
-    if (idx >= 0) setActiveIndex(idx)
-  }, [selected, options])
-
-  // Scroll the active card into view whenever activeIndex changes.
-  useEffect(() => {
-    const scroller = scrollerRef.current
-    if (!scroller) return
-    const card = scroller.children[activeIndex] as HTMLElement | undefined
-    if (!card) return
-    card.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })
-  }, [activeIndex])
-
-  const goPrev = () => setActiveIndex((i) => Math.max(0, i - 1))
-  const goNext = () => setActiveIndex((i) => Math.min(options.length - 1, i + 1))
+  const [activeIndex, setActiveIndex] = useState(0)
+  const active = categories[activeIndex] ?? categories[0]
 
   return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={goPrev}
-        disabled={activeIndex === 0}
-        aria-label="previous"
-        className={cn(
-          'absolute left-[-12px] top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground',
-          activeIndex === 0 && 'cursor-not-allowed opacity-40 hover:bg-card hover:text-muted-foreground'
-        )}
-      >
-        <ChevronLeft size={16} />
-      </button>
-      <button
-        type="button"
-        onClick={goNext}
-        disabled={activeIndex === options.length - 1}
-        aria-label="next"
-        className={cn(
-          'absolute right-[-12px] top-1/2 z-10 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-card text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground',
-          activeIndex === options.length - 1
-            && 'cursor-not-allowed opacity-40 hover:bg-card hover:text-muted-foreground'
-        )}
-      >
-        <ChevronRight size={16} />
-      </button>
-
-      <div
-        ref={scrollerRef}
-        className="flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-smooth px-6 pb-3 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-      >
-        {options.map((option, index) => {
-          const isSelected = selected === option.key
+    <div className="flex h-full gap-5">
+      {/* Left nav */}
+      <nav className="flex w-[140px] shrink-0 flex-col gap-1">
+        {categories.map((cat, index) => {
           const isActive = index === activeIndex
           return (
             <button
-              key={option.key}
+              key={cat.key}
               type="button"
-              onClick={() => {
-                setActiveIndex(index)
-                onSelect(option.key)
-              }}
+              onClick={() => setActiveIndex(index)}
               className={cn(
-                'group relative flex w-[240px] shrink-0 snap-center flex-col gap-3 rounded-xl border px-5 py-4 pr-10 text-left transition-all',
-                isSelected
-                  ? 'border-primary/60 bg-primary/8 ring-1 ring-primary/30'
-                  : isActive
-                    ? 'border-border bg-background shadow-sm'
-                    : 'border-border/70 bg-background/60 opacity-70 hover:opacity-100'
+                'rounded-lg px-3 py-2 text-left text-[13px] font-medium transition-colors',
+                isActive
+                  ? 'bg-orange-100 text-orange-700 dark:bg-orange-500/15 dark:text-orange-300'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
               )}
             >
-              {/* Check indicator sits in the top-right corner so it
-                  never crowds the provider title at narrow widths. */}
-              <span
-                className={cn(
-                  'absolute right-3 top-3 flex h-5 w-5 items-center justify-center rounded-full border transition-colors',
-                  isSelected
-                    ? 'border-primary bg-primary text-primary-foreground'
-                    : 'border-border bg-background opacity-0 group-hover:opacity-100'
-                )}
-                aria-hidden="true"
-              >
-                {isSelected && <Check size={12} strokeWidth={3} />}
-              </span>
-              <div className="text-sm font-medium text-foreground">{option.title}</div>
-              <div className="text-xs leading-5 text-muted-foreground line-clamp-3">
-                {option.detail}
-              </div>
+              {cat.label}
             </button>
           )
         })}
-      </div>
+      </nav>
 
-      <div className="mt-2 flex justify-center gap-1">
-        {options.map((option, index) => (
-          <button
-            key={option.key}
-            type="button"
-            onClick={() => setActiveIndex(index)}
-            aria-label={option.title}
-            className={cn(
-              'h-1.5 rounded-full transition-all',
-              index === activeIndex ? 'w-5 bg-primary/70' : 'w-1.5 bg-border hover:bg-muted-foreground/40'
-            )}
-          />
-        ))}
+      {/* Right: chat preview */}
+      <div className="flex min-w-0 flex-1 flex-col gap-6 overflow-y-auto pr-1">
+        {active.cards.map((card, index) => {
+          const replies = Array.isArray(card.description) ? card.description : [card.description]
+          return (
+            <div key={index} className="flex flex-col gap-4">
+              {/* User question bubble (right-aligned) */}
+              <div className="flex justify-end">
+                <div className="max-w-[80%] rounded-2xl rounded-tr-sm bg-orange-100 px-4 py-2.5 text-[13px] leading-6 text-orange-950 dark:bg-orange-500/15 dark:text-orange-100">
+                  {card.title}
+                </div>
+              </div>
+              {/* Emma answer bubbles (left-aligned with avatar) */}
+              {replies.map((reply, replyIndex) => (
+                <div key={replyIndex} className="flex items-start gap-2">
+                  <div className="flex shrink-0 flex-col items-center gap-1">
+                    <img
+                      src={emmaAvatar}
+                      alt="Emma"
+                      className="h-9 w-9 rounded-full object-cover"
+                    />
+                    <img
+                      src={emmaText}
+                      alt="EMMA"
+                      className="h-3 object-contain"
+                    />
+                  </div>
+                  <div className="max-w-[80%] rounded-2xl rounded-tl-sm border border-border bg-background px-4 py-2.5 text-[13px] leading-6 text-foreground">
+                    {reply}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        })}
       </div>
     </div>
   )
 }
-
-function Stepper({
-  stages,
-  stageIndex,
-  stageDone,
-  onJump,
+// __PROVIDER_SELECT_PLACEHOLDER__
+// Provider dropdown for the connection stage. A lightweight custom
+// popover (not a native <select>) so it matches the modal's styling and
+// shows a check on the active provider.
+function ProviderSelect({
+  label,
+  placeholder,
+  options,
+  value,
+  onChange,
 }: {
-  stages: Array<{ key: StageKey; title: string; subtitle: string }>
-  stageIndex: number
-  stageDone: Record<StageKey, boolean>
-  onJump: (index: number) => void
+  label: string
+  placeholder: string
+  options: Array<{ key: ManagedProviderKey; title: string }>
+  value: ManagedProviderKey | null
+  onChange: (key: ManagedProviderKey) => void
 }) {
-  // Count consecutive completed stages from the left to determine progress line width.
-  let consecutiveDone = 0
-  for (let i = 0; i < stages.length; i++) {
-    if (stageDone[stages[i].key]) consecutiveDone += 1
-    else break
-  }
-  const progressFraction = stages.length > 1
-    ? Math.min(1, Math.max(0, (consecutiveDone - 1) / (stages.length - 1)))
-    : 0
-
-  return (
-    <div className="px-7 pb-3 pt-4">
-      <div className="relative mx-auto w-full max-w-[540px]">
-        {/* background line */}
-        <div className="absolute left-[14px] right-[14px] top-[13px] h-px bg-border" aria-hidden="true" />
-        {/* progress line */}
-        <div
-          className="absolute left-[14px] top-[13px] h-px bg-primary/60 transition-[width] duration-300"
-          style={{ width: `calc((100% - 28px) * ${progressFraction})` }}
-          aria-hidden="true"
-        />
-
-        <div className="relative flex justify-between">
-          {stages.map((stage, index) => {
-            const active = index === stageIndex
-            const done = stageDone[stage.key]
-            const reachable = index === 0 || stages.slice(0, index).every((s) => stageDone[s.key])
-            return (
-              <button
-                key={stage.key}
-                type="button"
-                onClick={() => onJump(index)}
-                disabled={!reachable}
-                className={cn(
-                  'flex flex-col items-center gap-2',
-                  reachable ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
-                )}
-                aria-label={stage.title}
-              >
-                <span
-                  className={cn(
-                    'flex h-7 w-7 items-center justify-center rounded-full border text-[11px] font-semibold transition-colors',
-                    done
-                      ? 'border-primary bg-primary text-primary-foreground'
-                      : active
-                        ? 'border-primary bg-card text-primary'
-                        : 'border-border bg-card text-muted-foreground',
-                    reachable && !active && !done && 'hover:border-primary/60'
-                  )}
-                >
-                  {done ? <Check size={13} strokeWidth={3} /> : index + 1}
-                </span>
-                <span
-                  className={cn(
-                    'whitespace-nowrap text-[11px] font-medium leading-4',
-                    active ? 'text-foreground' : done ? 'text-foreground/75' : 'text-muted-foreground'
-                  )}
-                >
-                  {stage.title}
-                </span>
-              </button>
-            )
-          })}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function TypedQuotes({ prompts }: { prompts: Array<{ category: string; prompt: string }> }) {
-  // Shuffle once on mount so each session sees a different ordering, then loop.
-  const shuffled = useMemo(() => {
-    const arr = prompts.slice()
-    for (let i = arr.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1))
-      const tmp = arr[i]
-      arr[i] = arr[j]
-      arr[j] = tmp
-    }
-    return arr
-  }, [prompts])
-
-  const [index, setIndex] = useState(0)
-  const [text, setText] = useState('')
-  const [phase, setPhase] = useState<'typing' | 'holding' | 'erasing'>('typing')
-  const timerRef = useRef<number | null>(null)
-
-  const current = shuffled[index] ?? shuffled[0]
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement | null>(null)
+  const selected = options.find((o) => o.key === value) || null
 
   useEffect(() => {
-    const full = current.prompt
-    if (timerRef.current) window.clearTimeout(timerRef.current)
-
-    if (phase === 'typing') {
-      if (text.length < full.length) {
-        timerRef.current = window.setTimeout(() => setText(full.slice(0, text.length + 1)), 42)
-      } else {
-        timerRef.current = window.setTimeout(() => setPhase('holding'), 1400)
-      }
-    } else if (phase === 'holding') {
-      timerRef.current = window.setTimeout(() => setPhase('erasing'), 900)
-    } else {
-      if (text.length > 0) {
-        timerRef.current = window.setTimeout(() => setText(full.slice(0, text.length - 1)), 22)
-      } else {
-        timerRef.current = window.setTimeout(() => {
-          setIndex((i) => (i + 1) % shuffled.length)
-          setPhase('typing')
-        }, 220)
-      }
+    if (!open) return
+    const onClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
     }
-
-    return () => {
-      if (timerRef.current) window.clearTimeout(timerRef.current)
-    }
-  }, [text, phase, current.prompt, shuffled.length])
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [open])
 
   return (
-    <div className="mt-8 w-full">
-      <div className="mx-auto min-h-[120px] max-w-[520px] rounded-2xl border border-border bg-background/60 px-5 py-5 text-left">
-        <div className="mb-2 inline-flex items-center gap-1.5 rounded-md bg-muted/60 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-          {current.category}
-        </div>
-        <div className="text-[15px] leading-7 text-foreground/90">
-          <span className="text-muted-foreground/60">“</span>
-          <span>{text}</span>
-          <span
-            className="ml-[2px] inline-block h-[1.05em] w-[2px] translate-y-[3px] animate-pulse bg-foreground/70"
-            aria-hidden="true"
-          />
-          {text === current.prompt && phase !== 'erasing' && (
-            <span className="text-muted-foreground/60">”</span>
-          )}
-        </div>
+    <div className="block">
+      <div className="mb-1.5 flex items-center gap-1 text-xs font-medium text-foreground">
+        <span>{label}</span>
+        <span className="text-red-500">*</span>
       </div>
-      <div className="mt-3 flex justify-center text-[10px] tabular-nums text-muted-foreground/70">
-        {index + 1} / {shuffled.length}
+      <div ref={ref} className="relative">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex w-full items-center justify-between rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition-colors focus:border-primary/60 focus:ring-2 focus:ring-primary/20"
+        >
+          <div className="flex items-center gap-2">
+            {selected && <ProviderLogo provider={selected.key} size={20} />}
+            <span className={cn(selected ? 'text-foreground' : 'text-muted-foreground/60')}>
+              {selected ? selected.title : placeholder}
+            </span>
+          </div>
+          <ChevronDown size={15} className="text-muted-foreground" />
+        </button>
+        {open && (
+          <div className="absolute z-10 mt-1 max-h-[240px] w-full overflow-y-auto rounded-lg border border-border bg-card p-1 shadow-lg">
+            {options.map((option) => {
+              const isSelected = option.key === value
+              return (
+                <button
+                  key={option.key}
+                  type="button"
+                  onClick={() => {
+                    onChange(option.key)
+                    setOpen(false)
+                  }}
+                  className={cn(
+                    'flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-sm transition-colors',
+                    isSelected ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-muted'
+                  )}
+                >
+                  <div className="flex items-center gap-2">
+                    <ProviderLogo provider={option.key} size={20} />
+                    <span>{option.title}</span>
+                  </div>
+                  {isSelected && <Check size={14} strokeWidth={3} />}
+                </button>
+              )
+            })}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -1099,5 +841,4 @@ function FormField({
     </label>
   )
 }
-
 

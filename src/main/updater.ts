@@ -95,58 +95,6 @@ async function fetchReleaseNotes(version: string): Promise<string> {
   }
 }
 
-async function showDownloadPrompt(window: BrowserWindow, version: string): Promise<void> {
-  if (promptInFlight || window.isDestroyed()) return
-  promptInFlight = true
-  try {
-    const result = await dialog.showMessageBox(window, {
-      type: 'info',
-      buttons: ['下载更新', '稍后'],
-      defaultId: 0,
-      cancelId: 1,
-      title: '发现新版本',
-      message: `发现新版本 ${version}`,
-      detail: '是否现在下载并安装更新？',
-      noLink: true,
-    })
-
-    if (result.response === 0) {
-      sendUpdateEvent(window, 'download-started', { version })
-      // Release the prompt lock before the long download so that
-      // showInstallPrompt can fire as soon as the download completes.
-      promptInFlight = false
-      await autoUpdater.downloadUpdate()
-    } else {
-      sendUpdateEvent(window, 'download-deferred', { version })
-    }
-  } finally {
-    promptInFlight = false
-  }
-}
-
-async function showInstallPrompt(window: BrowserWindow, version: string): Promise<void> {
-  if (promptInFlight || window.isDestroyed()) return
-  promptInFlight = true
-  try {
-    const result = await dialog.showMessageBox(window, {
-      type: 'info',
-      buttons: ['立即重启', '稍后'],
-      defaultId: 0,
-      cancelId: 1,
-      title: '更新已准备完成',
-      message: `版本 ${version} 已下载完成`,
-      detail: '重启应用后将安装更新。',
-      noLink: true,
-    })
-
-    if (result.response === 0) {
-      autoUpdater.quitAndInstall(false, true)
-    }
-  } finally {
-    promptInFlight = false
-  }
-}
-
 async function checkForUpdates(window: BrowserWindow): Promise<{ ok: boolean; error?: string }> {
   if (!app.isPackaged) {
     return { ok: false, error: 'Auto update is disabled in development mode' }
@@ -196,7 +144,6 @@ export function setupAutoUpdater(window: BrowserWindow): void {
       version: info.version,
       releaseNotes,
     })
-    void showDownloadPrompt(window, info.version)
   })
 
   autoUpdater.on('update-not-available', (info) => {
@@ -212,10 +159,24 @@ export function setupAutoUpdater(window: BrowserWindow): void {
     })
   })
 
-  autoUpdater.on('update-downloaded', (info) => {
+  autoUpdater.on('update-downloaded', async (info) => {
     downloadedVersion = info.version
     sendUpdateEvent(window, 'downloaded', { version: info.version })
-    void showInstallPrompt(window, info.version)
+
+    // Show system dialog for install confirmation
+    const { response } = await dialog.showMessageBox(window, {
+      type: 'info',
+      title: 'Update Downloaded',
+      message: `Version ${info.version} is ready to install`,
+      detail: 'The application will restart to complete the update.',
+      buttons: ['Restart Now', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+    })
+
+    if (response === 0) {
+      autoUpdater.quitAndInstall(false, true)
+    }
   })
 
   autoUpdater.on('error', (error) => {
@@ -263,4 +224,18 @@ export async function manuallyCheckForUpdates(window: BrowserWindow): Promise<{ 
   }
 
   return { ok: true, version: downloadedVersion || undefined }
+}
+
+export async function downloadUpdate(): Promise<{ ok: boolean }> {
+  try {
+    await autoUpdater.downloadUpdate()
+    return { ok: true }
+  } catch (error) {
+    console.error('[AutoUpdater] download failed:', error)
+    return { ok: false }
+  }
+}
+
+export function quitAndInstall(): void {
+  autoUpdater.quitAndInstall(false, true)
 }

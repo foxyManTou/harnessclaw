@@ -32,13 +32,15 @@
   },
   "sidebar": {
     "home": "首页",
+    "newTask": "新任务",
+    "scheduler": "定时任务",
     "xLab": "X·LAB",
-    "skills": "Skill",
+    "skills": "技能",
     "chat": "对话",
     "projects": "项目",
     "team": "团队",
     "settings": "设置",
-    "recent": "最近",
+    "recent": "最近对话",
     "noRecent": "没有最近对话",
     "rename": "重命名",
     "delete": "删除",
@@ -103,14 +105,17 @@
       "missingKey": "{{name}} 缺少 API 密钥",
       "missingBase": "{{name}} 缺少 API 地址",
       "noModels": "{{name}} 至少需要添加一个模型",
-      "noneSelected": "{{name}} 至少需要勾选一个模型"
+      "noneSelected": "{{name}} 至少需要勾选一个模型",
+      "providerDisabledModelSaved": "{{name}} 供应商尚未启用 —— 已保存模型选择，启用 {{name}} 后将立即生效。"
     },
     "capabilities": {
       "vision": "视觉",
+      "image_generation": "生图",
       "search": "联网",
       "reasoning": "推理",
       "tools": "工具",
       "visionHint": "模型可处理图片输入（截图、照片、PDF 等）",
+      "image_generationHint": "模型可通过图片接口生成或编辑图片",
       "searchHint": "模型可联网检索外部信息",
       "reasoningHint": "模型支持长链路推理（thinking / 深度思考）",
       "toolsHint": "模型支持工具调用（function calling / tool use）"
@@ -327,6 +332,7 @@
     "emptyDesc": "去 Skill 市场挑选需要的能力，安装后会立即出现在这里。第一次安装一个 Skill，就能开始扩展 HarnessClaw 的工作方式。",
     "goToMarket": "前往 Skill 市场",
     "autoAppear": "挑选并安装后，这里会自动出现",
+    "usageHint": "要在聊天里调用某个 skill，请在输入框打 \"/\" 后从自动补全里选 —— 手打整段斜杠文本会被当作普通内容发送，不会套用 skill 的 prompt。",
     "confirm": "确认",
     "cancel": "取消",
     "delete": "删除",
@@ -568,7 +574,8 @@
       "TaskList": "任务列表",
       "SendMessage": "发送消息",
       "TeamCreate": "创建团队",
-      "TeamDelete": "删除团队"
+      "TeamDelete": "删除团队",
+      "ImageGenerate": "生成图片"
     },
     "status": {
       "executingSubAgent": "正在执行子 Agent 任务",
@@ -778,6 +785,7 @@
       "markdownSummary": "已抓取并整理为 Markdown 内容。",
       "terminalSummary": "命令执行已完成。",
       "agentSummary": "子 Agent 已返回摘要。",
+      "imageGenerated": "已生成 {{n}} 张图片。",
       "writeSummary": "文件写入已完成。",
       "editSummary": "文件变更已生成。",
       "stepCompleted": "这个步骤已执行完成。"
@@ -913,6 +921,20 @@
       "detailsLabel": "任务",
       "viewDetails": "查看任务详情",
       "hideDetails": "收起任务详情"
+    },
+    "sidePanel": {
+      "label": "对话辅助面板",
+      "expandAria": "展开侧边面板",
+      "collapseAria": "收起侧边面板",
+      "tabsAria": "侧边面板标签",
+      "tabLogs": "日志",
+      "tabArtifacts": "产物",
+      "completedPrefix": "已完成",
+      "unnamedStep": "未命名步骤",
+      "noLogs": "暂无运行日志",
+      "noLogsDesc": "运行过程将在这里展示",
+      "noArtifacts": "暂无产物",
+      "noArtifactsDesc": "运行过程中产生的文件将在这里展示"
     }
   },
   "settings": {
@@ -1019,6 +1041,8 @@
       "title": "模型配置",
       "subtitle": "管理您的模型供应商、API 密钥与连接端点",
       "primaryProvider": "主 Provider",
+      "imageGenerationProvider": "图片生成模型",
+      "imageGenerationProviderDesc": "供 image_generate 工具使用，不参与主回答模型和 fallback_chain",
       "jumpToSettings": "跳转设置",
       "fallbackEnabled": "Provider 负载兜底",
       "fallbackEnabledDesc": "当主模型不可用时按 fallback_chain 顺序降级",
@@ -1090,7 +1114,8 @@
         "missingKey": "{{name}} 缺少 API 密钥",
         "missingBase": "{{name}} 缺少 API 地址",
         "noModels": "{{name}} 至少需要添加一个模型",
-        "noneSelected": "{{name}} 至少需要勾选一个模型"
+        "noneSelected": "{{name}} 至少需要勾选一个模型",
+        "providerDisabledModelSaved": "{{name}} 供应商尚未启用 —— 已保存模型选择，启用 {{name}} 后将立即生效。"
       },
       "persist": {
         "readFailed": "模型配置读取失败",
@@ -1099,6 +1124,7 @@
       },
       "capabilities": {
         "vision": "视觉",
+        "image_generation": "生图",
         "web": "联网",
         "reasoning": "推理",
         "tools": "工具"
@@ -1501,11 +1527,13 @@
       "openaiDetail": "接入 OpenAI 官方 API 或兼容其模型命名与网关配置的账户。",
       "anthropicDetail": "接入 Anthropic 官方 API，作为 Claude 系列模型的默认入口。",
       "xunfeiDetail": "接入科大讯飞 Spark，适合中文场景与国内开发者生态。",
+      "gptImageDetail": "OpenAI 图片生成模型。请在设置 > 模型配置中维护。",
       "googleDetail": "通过 gemini 协议接入 Google Generative Language，使用 Gemini 系列模型。",
       "deepseekDetail": "接入 DeepSeek 的 OpenAI 兼容 API，代码与推理性价比高。",
       "zhipuDetail": "通过 OpenAI 兼容网关接入智谱 GLM，支持 GLM-4 等系列。",
       "moonshotDetail": "通过 OpenAI 兼容 API 接入 Moonshot Kimi，适合长上下文对话。",
       "minimaxDetail": "通过 OpenAI 兼容 API 接入 MiniMax，支持 abab 系列模型。",
+      "doubaoDetail": "豆包 Seedream 图片生成模型。请在设置 > 模型配置中维护。",
       "customDetail": "自定义网关：自行设置 Base URL、Key 以及协议（OpenAI 或 Anthropic）。"
     },
     "protocolLabel": "协议",
@@ -1524,6 +1552,62 @@
     "modelGroupLabel": "分组名（可选）",
     "modelGroupHint": "可选展示分组，仅影响客户端模型列表上的分组渲染；引擎不感知。留空则按系列自动推断。",
     "modelGroupPlaceholder": "例如 GPT-5",
+    "intro": {
+      "heading": "你好，我是 Emma，你的私人秘书，我可以帮你",
+      "categories": {
+        "0": {
+          "label": "日常办公",
+          "cards": [
+            {
+              "title": "帮我给这篇博客起一个引人入胜的标题",
+              "description": [
+                "好的老板，任务已经收到，我先来看看这个博客内容",
+                "哇~这篇博客写的真精彩，特别是对于超级团队协作的方式我觉得十分有道理，那我建议这个标题就叫《超级团队养成计划》怎么样~"
+              ]
+            }
+          ]
+        },
+        "1": {
+          "label": "代码编程",
+          "cards": [
+            {
+              "title": "帮我写一个Python爬虫脚本",
+              "description": "好的，我先了解一下您要爬取的网站结构，然后用合适的库来实现。"
+            }
+          ]
+        },
+        "2": {
+          "label": "制定计划",
+          "cards": [
+            {
+              "title": "帮我制定本周的工作计划",
+              "description": "好的，让我先看看您的日历和待办事项，然后合理安排优先级。"
+            }
+          ]
+        },
+        "3": {
+          "label": "文档管理",
+          "cards": [
+            {
+              "title": "帮我整理这些文档",
+              "description": "好的，我会按照类型和时间帮您归类整理。"
+            }
+          ]
+        },
+        "4": {
+          "label": "电脑控制",
+          "cards": [
+            {
+              "title": "帮我打开VS Code",
+              "description": "好的，正在为您打开 VS Code。"
+            }
+          ]
+        }
+      }
+    },
+    "providerLabel": "模型选择",
+    "providerPlaceholder": "请选择",
+    "skip": "跳过",
     "prompts": {
       "categories": {
         "dev": "研发",
@@ -1592,8 +1676,16 @@
     "newTeam": "新建 Agent Team",
     "emptyAgents": "还没有角色",
     "emptyAgentsDesc": "从上方创建第一个角色，后续可用于 Team 组合。",
+    "agentsScopeBanner": {
+      "title": "自定义角色目前归 Agent Team 注册表管",
+      "description": "在这里创建的角色会接入 Agent Team。聊天台（Emma）目前调度的仍是引擎内置的 scheduler / freelancer 等角色；要调用自定义角色，请把它编入某个 Team。"
+    },
     "emptyTeams": "还没有 Agent Team",
     "emptyTeamsDesc": "创建一个 Team，把多个角色组合成固定协作编组。",
+    "previewBanner": {
+      "title": "Agent Team 处于早期预览阶段",
+      "description": "工作流设计、协作配置、测试等步骤暂未上线；已发布的团队仅在本次会话内保留，重启应用后会丢失。"
+    },
     "agentType": {
       "sync": "sync（同步子体）",
       "async": "async（异步子体）",
@@ -1886,5 +1978,16 @@
     "subtitle": "管理自动更新与检查新版本。",
     "title": "更新",
     "version": "版本 {{version}}"
+  },
+  "updateModal": {
+    "title": "发现新版本 V{{version}}",
+    "downloadCompleted": "更新已下载完成",
+    "updateNow": "立即更新",
+    "backgroundUpdate": "后台更新",
+    "restartNow": "立即重启",
+    "downloadProgress": "下载进度",
+    "updateFailed": "更新失败",
+    "retry": "重试",
+    "errorMessage": "下载更新时出错，请稍后重试"
   }
 }
