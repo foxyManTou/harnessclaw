@@ -2,6 +2,7 @@ import { useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Sidebar } from './Sidebar'
 import { WelcomeModal } from '../WelcomeModal'
+import { UpdateModal } from '../common/UpdateModal'
 
 interface AppLayoutProps {
   children: React.ReactNode
@@ -23,6 +24,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         </div>
       </div>
       <WelcomeModal />
+      <UpdateModal />
     </div>
   )
 }

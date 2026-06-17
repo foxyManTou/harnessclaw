@@ -4,12 +4,78 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, with versions tracked in the repository and published to GitHub Releases.
 
+## [0.0.23-beta.0] - 2026-06-16
+
+### Fixed
+
+- Telemetry reporting now signs event uploads with the server-compatible HMAC headers, restoring delivery to the production telemetry endpoint.
+- Generated image links in assistant replies now render local `file://` and absolute-path outputs through HarnessClaw's safe local file protocol instead of showing broken previews.
+- Browser Agent sessions now run in a dedicated helper process with isolated CDP targets, preventing commands from taking over the main HarnessClaw window or another browser session.
+
+## [0.0.22] - 2026-06-12
+
+### Added
+
+- The Models settings page is split into three sections — 对话 / 图片 / 视频 — with built-in image providers (OpenAI, 火山引擎) and a built-in video provider (火山引擎) always available; Ark default values are prefilled out of the box.
+- Agents now support dedicated `image_generation` and `video_generation` endpoint bindings; the selectors list candidates from the new ImageGen / VideoGen configs.
+- Homepage case data was lifted into `data/homeCases`, the secretary illustration switched to SVG, and a new conversation side panel plus matching sidebar icons (more / recent-arrow / settings / sidebar-collapse / sidebar-open / secretary-corner) were added.
+- Bundled `imagegen` and `videogen` IPC bridges expose `listImageProviders` / `patchImageConfig` (and the video equivalents) to the renderer.
+
+### Changed
+
+- Image provider config merges the API base URL and path into a single full-URL field, and adopts the same 28px brand-icon style as the chat-model picker (new 火山引擎 SVG, DeepSeek switched from PNG to SVG, image/video icons no longer use a background container).
+- The streaming breathing-dot indicator now renders inline with the 鎏金 shimmer status text instead of in the bottom-right of the last assistant message.
+- Sidebar: in collapsed state the collapse/expand toggle now sits directly above Settings (6px gap) with a matching icon color; the recent-conversation "more" button is hidden by default and only appears on row hover, keyboard focus, or while its menu is open; macOS traffic-light buttons are centered within the 78px collapsed sidebar rail.
+- Homepage polish: the "24h Online" badge now uses success color `#02B578`, the input placeholder grows from 22px to 26px, the textarea height adapts to its content, and the case category labels were restyled.
+- The pre-send vision gate was removed — images now pass through directly to the engine for the upgraded multimodal pipeline.
+
+### Fixed
+
+- Unfinished navigation items (Scheduler / Projects / Team / x-Lab) are hidden from the sidebar until they ship, so users can no longer wander into pages that are not yet wired up.
+
+## [0.0.21-beta.3] - 2026-06-10
+
+### Added
+
+- Packaged beta builds now bundle the matching `v0.0.21-beta.3` engine runtime with true image-to-image support for attached chat images and explicit source image paths.
+
+### Fixed
+
+- Image generation retries no longer surface empty mask/source-image parameters or PNG compression settings that are not sent to the provider.
+
+## [0.0.21-beta.2] - 2026-06-10
+
+### Fixed
+
+- Restored the image generation Settings and Chat UI after the feature branch UI rollback, including the image model selector, generated-image preview cards, and GPT Image / Doubao Seedream presets.
+- Reused the shared provider logo component in Settings so the restored image generation provider entries compile with the latest UI structure.
+
+## [0.0.21-beta.1] - 2026-06-09
+
+### Fixed
+
+- Packaged beta builds now bundle the matching `v0.0.21-beta.1` engine runtime so image generation can wait for slower upstream providers instead of failing on the generic tool timeout.
+
+## [0.0.21-beta.0] - 2026-06-09
+
+### Added
+
+- Agent image generation now has a dedicated model selector backed by provider state.
+- Generated image tool results now render as preview cards in chat.
+- Image-capable provider entries now show backend-resolved target URLs on the image capability badge.
+
+### Fixed
+
+- Packaged Browser Agent is enabled by default for new and upgraded desktop configs.
+- Local dev startup now rebuilds Electron native dependencies when needed and clears stale engine port listeners before spawning the bundled engine.
+
 ## [0.0.20] - 2026-06-04
 
 ### Fixed
 
 - Packaged Browser Agent now always launches the `agent-browser` binary bundled with the desktop app. Stale local engine configs that point to a bare `agent-browser` command no longer override the packaged runtime.
 - Bundled runtime lookup now requires exact platform filenames, preventing legacy fallback paths from hiding missing release assets.
+- Existing desktop configs now migrate Browser Agent to enabled once, so upgraded installs can use the packaged sidecar without manual tool configuration.
 
 ### Changed
 
@@ -31,6 +97,7 @@ The format is based on Keep a Changelog, with versions tracked in the repository
 ### Added
 
 - Model entries now carry an optional group tag (free-form display label). The welcome wizard exposes a Group input on the connection stage; the value is persisted to the engine via the endpoint API so it survives restarts and is visible across clients pointing at the same engine. The Settings model list reconciles the local group with the engine on load — engine wins when set, otherwise the local value is silently backfilled to the engine.
+- Settings > Models now lists image-generation-only providers for GPT Image and Doubao Seedream, tags image-capable models with an Image Gen chip, and keeps those endpoints out of Agent LLM routing/fallback selection.
 
 ### Fixed
 

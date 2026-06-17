@@ -169,6 +169,7 @@ export interface RegistryModelSupports {
   audio_input?: boolean
   audio_output?: boolean
   video_input?: boolean
+  image_generation?: boolean
   streaming?: boolean
   function_calling?: boolean
   parallel_function_calling?: boolean
@@ -269,13 +270,15 @@ export interface ProviderEndpointInfo {
   disabled?: boolean
   in_chain: boolean
   // Engine 2026-05-19+: per-endpoint capability override. Tokens from
-  // {vision, pdf, audio, video, reasoning, tools, search}; empty / absent
-  // means "inherit manifest baseline".
+  // {vision, pdf, audio, video, reasoning, tools, search,
+  // image_generation}; empty / absent means "inherit manifest baseline".
   model_type?: string[]
   // Engine 2026-05-30+: optional display-only tag persisted on the
   // endpoint. Empty/absent = ungrouped (renderer falls back to
   // getModelGroup(id) heuristic).
   group?: string
+  // Full image generation target URL resolved by the engine registry.
+  image_generation_url?: string
 }
 
 export interface ProviderInfo {
@@ -323,6 +326,7 @@ export interface ProviderChain {
 export interface AgentConfig {
   primary: string
   fallback_chain: string[]
+  image_generation?: string
   max_tokens?: number
   temperature?: number
   context_window?: number
@@ -332,6 +336,11 @@ export interface AgentConfig {
 export interface AgentPatch {
   primary?: string
   fallback_chain?: string[]
+  image_generation?: string
+  // Engine 2026-06+: canonical `provider:endpoint` ref for the video
+  // generation tool target (e.g. `doubao:seedance-lite-i2v`). Same
+  // omit-means-unchanged semantics as the other fields.
+  video_generation?: string
   max_tokens?: number
   temperature?: number
   context_window?: number
@@ -397,8 +406,8 @@ export interface EndpointPatch {
   // Engine 2026-05-19+: capability token override. Sending an empty
   // array explicitly clears the override (reverts to manifest baseline);
   // omitting the key leaves it unchanged. Allowed tokens:
-  // vision/pdf/audio/video/reasoning/tools/search. Unknown tokens →
-  // 400 invalid_model_type.
+  // vision/pdf/audio/video/reasoning/tools/search/image_generation.
+  // Unknown tokens → 400 invalid_model_type.
   model_type?: string[]
   // Engine 2026-05-30+: free-text display tag. Sending `""` explicitly
   // clears it (yaml key removed); omitting leaves it unchanged.
@@ -600,6 +609,96 @@ export function getAgentConfig(): Promise<ProvidersResult<AgentConfig>> {
 
 export function patchAgentConfig(patch: AgentPatch): Promise<ProvidersResult<AgentConfig>> {
   return providersRequest<AgentConfig>('PATCH', '/agent', patch)
+}
+
+// ─── Video Generation Management API ────────────────────────────────────
+//
+// GET|PATCH /api/v1/videogen — hot-edit the video generation providers
+// block (credentials + per-endpoint model bindings), mirroring the
+// providers management API but scoped to the `videogen` config tree.
+// Responses wrap data as `{ code, data }` so they go through the same
+// `providersRequest` helper.
+
+export interface VideoEndpointInfo {
+  model: string
+}
+
+export interface VideoProviderInfo {
+  api_key: string
+  base_url: string
+  endpoints: Record<string, VideoEndpointInfo>
+}
+
+export interface VideoGenInfo {
+  config_source: string
+  providers: Record<string, VideoProviderInfo>
+}
+
+// PATCH body. Any subset; omitted = unchanged. Mirrors the engine's
+// videogen management contract.
+export interface VideoGenPatch {
+  providers: Record<
+    string,
+    {
+      api_key?: string
+      base_url?: string
+      endpoints?: Record<string, { model: string }>
+    }
+  >
+}
+
+export function listVideoProviders(): Promise<ProvidersResult<VideoGenInfo>> {
+  return providersRequest<VideoGenInfo>('GET', '/videogen')
+}
+
+export function patchVideoConfig(patch: VideoGenPatch): Promise<ProvidersResult<VideoGenInfo>> {
+  return providersRequest<VideoGenInfo>('PATCH', '/videogen', patch)
+}
+
+// ─── Image Generation Management API ────────────────────────────────────
+//
+// GET|PATCH /api/v1/imagegen — hot-edit the image generation providers
+// block (credentials + path + per-endpoint model bindings), mirroring the
+// videogen management API but scoped to the `imagegen` config tree.
+// Responses wrap data as `{ code, data }` so they go through the same
+// `providersRequest` helper.
+
+export interface ImageEndpointInfo {
+  model: string
+}
+
+export interface ImageProviderInfo {
+  api_key: string
+  base_url: string
+  path: string
+  endpoints: Record<string, ImageEndpointInfo>
+}
+
+export interface ImageGenInfo {
+  config_source: string
+  providers: Record<string, ImageProviderInfo>
+}
+
+// PATCH body. Any subset; omitted = unchanged. Mirrors the engine's
+// imagegen management contract.
+export interface ImageGenPatch {
+  providers: Record<
+    string,
+    {
+      api_key?: string
+      base_url?: string
+      path?: string
+      endpoints?: Record<string, { model: string }>
+    }
+  >
+}
+
+export function listImageProviders(): Promise<ProvidersResult<ImageGenInfo>> {
+  return providersRequest<ImageGenInfo>('GET', '/imagegen')
+}
+
+export function patchImageConfig(patch: ImageGenPatch): Promise<ProvidersResult<ImageGenInfo>> {
+  return providersRequest<ImageGenInfo>('PATCH', '/imagegen', patch)
 }
 
 // Flatten the agent payload into the legacy `{chain, entries}` shape

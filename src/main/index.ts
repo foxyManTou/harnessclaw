@@ -1,18 +1,15 @@
-import { app, shell, BrowserWindow, ipcMain, dialog, nativeImage, screen, globalShortcut, protocol, net, type BrowserWindowConstructorOptions } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog, nativeImage, screen, globalShortcut, protocol, net } from 'electron'
 import { basename, dirname, extname, isAbsolute, join } from 'path'
 import { homedir } from 'os'
-import { connect as connectTcp } from 'node:net'
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync, copyFileSync } from 'fs'
-import { spawn, ChildProcess } from 'child_process'
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, copyFileSync } from 'fs'
+import { spawn, execFileSync, ChildProcess } from 'child_process'
 import { pathToFileURL } from 'url'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { harnessclawClient } from './harnessclaw'
-import {
-  BrowserAgentSessionManager,
-  DEFAULT_BROWSER_AGENT_CDP_PORT,
-  createRemoteDebuggingTargetResolver,
-} from './browser-agent-session'
-import { manuallyCheckForUpdates, setupAutoUpdater } from './updater'
+import type { BrowserAgentSessionManagerLike } from './browser-agent-session'
+import { BrowserAgentHelperClient } from './browser-agent-helper-client'
+import { runBrowserAgentHelper } from './browser-agent-helper'
+import { manuallyCheckForUpdates, setupAutoUpdater, downloadUpdate, quitAndInstall } from './updater'
 import {
   HARNESSCLAW_DIR,
   ENGINE_CONFIG_PATH,
@@ -92,6 +89,10 @@ import {
   updateFallbackChain,
   getAgentConfig,
   patchAgentConfig,
+  listVideoProviders,
+  patchVideoConfig,
+  listImageProviders,
+  patchImageConfig,
   patchProvider,
   listEndpoints,
   createEndpoint,
@@ -106,6 +107,8 @@ import {
   type EndpointCreatePayload,
   type EndpointPatch,
   type AgentPatch,
+  type VideoGenPatch,
+  type ImageGenPatch,
   type ToolPatchPayload,
 } from './console-api'
 
@@ -142,6 +145,16 @@ type WindowState = {
   width: number
   height: number
   isMaximized?: boolean
+}
+
+const isBrowserAgentHelperProcess =
+  process.env.HARNESSCLAW_BROWSER_AGENT_HELPER === '1' || process.argv.includes('--browser-agent-helper')
+
+if (isBrowserAgentHelperProcess) {
+  void runBrowserAgentHelper().catch((error) => {
+    process.stderr.write(`Browser Agent helper failed: ${error instanceof Error ? error.stack || error.message : String(error)}\n`)
+    app.exit(1)
+  })
 }
 
 function stripProjectContextBlock(content: string): string {
@@ -769,7 +782,7 @@ function initializeTelemetry(): void {
     const deviceId = getOrCreateDeviceId(HARNESSCLAW_DIR)
     const clientSessionId = generateClientSessionId()
     telemetryConfigManager = new TelemetryConfigManager(HARNESSCLAW_DIR)
-    telemetryReporter = new TelemetryReporter(deviceId, clientSessionId, telemetryConfigManager)
+    telemetryReporter = new TelemetryReporter(deviceId, clientSessionId, telemetryConfigManager, HARNESSCLAW_DIR)
     setSharedReporter(telemetryReporter)
     writeAppLog('info', 'telemetry', 'Telemetry initialized', {
       device_id: deviceId,
@@ -921,6 +934,69 @@ function logProcessStream(level: LogLevel, source: string, payload: Buffer | str
     })
 }
 
+function asPort(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 65535
+    ? value
+    : fallback
+}
+
+function resolveEnginePortsToClear(): number[] {
+  const cfg = asRecord(readEngineConfig({}))
+  const channels = asRecord(cfg.channels)
+  const websocket = asRecord(channels.websocket)
+  const consoleConfig = asRecord(cfg.console)
+  return [...new Set([
+    asPort(websocket.port, 8081),
+    asPort(consoleConfig.port, 8090),
+  ])]
+}
+
+function clearPortListeners(ports: number[]): void {
+  if (process.platform === 'win32') return
+
+  const killed = new Set<string>()
+  for (const port of ports) {
+    let output = ''
+    try {
+      output = execFileSync('lsof', [`-tiTCP:${port}`, '-sTCP:LISTEN'], {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim()
+    } catch {
+      continue
+    }
+
+    const pids = output
+      .split(/\s+/)
+      .map((pid) => pid.trim())
+      .filter((pid) => pid && pid !== String(process.pid) && !killed.has(pid))
+
+    if (pids.length === 0) continue
+    writeAppLog('warn', 'harnessclaw-engine.process', 'Killing stale engine port listeners', {
+      port,
+      pids,
+    })
+    try {
+      execFileSync('kill', pids, { stdio: 'ignore' })
+      pids.forEach((pid) => killed.add(pid))
+    } catch (err) {
+      writeAppLog('warn', 'harnessclaw-engine.process', 'Failed to kill stale engine port listeners', {
+        port,
+        pids,
+        error: String(err),
+      })
+    }
+  }
+
+  if (killed.size > 0) {
+    try {
+      execFileSync('sleep', ['0.3'], { stdio: 'ignore' })
+    } catch {
+      // Ignore; the next bind attempt will report any remaining conflict.
+    }
+  }
+}
+
 function startHarnessclawEngine(): void {
   if (harnessclawEngineProcess) return
   if (!HARNESSCLAW_ENGINE_BIN || !existsSync(HARNESSCLAW_ENGINE_BIN)) {
@@ -935,6 +1011,7 @@ function startHarnessclawEngine(): void {
     })
     return
   }
+  clearPortListeners(resolveEnginePortsToClear())
   writeAppLog('info', 'harnessclaw-engine.process', 'Starting engine', {
     binary: HARNESSCLAW_ENGINE_BIN,
     agentBrowserBinary: HARNESSCLAW_AGENT_BROWSER_BIN,
@@ -966,52 +1043,6 @@ function startHarnessclawEngine(): void {
     })
     harnessclawEngineProcess = null
   })
-}
-
-function resolveEngineProbeTarget(): { host: string; port: number } {
-  const cfg = asRecord(readEngineConfig({}))
-  const channels = asRecord(cfg.channels)
-  const websocket = asRecord(channels.websocket)
-  const rawHost = typeof websocket.host === 'string' && websocket.host.trim()
-    ? websocket.host.trim()
-    : '127.0.0.1'
-  const host = rawHost === '0.0.0.0' || rawHost === '::' ? '127.0.0.1' : rawHost
-  const port = typeof websocket.port === 'number' && Number.isFinite(websocket.port)
-    ? websocket.port
-    : 8081
-  return { host, port }
-}
-
-function probeEnginePort(host: string, port: number, timeoutMs = 350): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = connectTcp({ host, port })
-    let settled = false
-    const finish = (ok: boolean) => {
-      if (settled) return
-      settled = true
-      socket.removeAllListeners()
-      socket.destroy()
-      resolve(ok)
-    }
-    socket.setTimeout(timeoutMs)
-    socket.once('connect', () => finish(true))
-    socket.once('error', () => finish(false))
-    socket.once('timeout', () => finish(false))
-  })
-}
-
-async function shouldUseExistingDevEngine(): Promise<boolean> {
-  if (!is.dev || app.isPackaged) return false
-  if (process.env.HARNESSCLAW_FORCE_BUNDLED_ENGINE === '1') return false
-  const { host, port } = resolveEngineProbeTarget()
-  const available = await probeEnginePort(host, port)
-  if (available) {
-    writeAppLog('info', 'harnessclaw-engine.process', 'Using existing dev engine', {
-      host,
-      port,
-    })
-  }
-  return available
 }
 
 async function stopHarnessclawEngine(): Promise<void> {
@@ -1060,7 +1091,9 @@ async function stopHarnessclawEngine(): Promise<void> {
 }
 
 async function startHarnessclawRuntimeAsync(): Promise<void> {
-  if (!(await shouldUseExistingDevEngine())) {
+  if (process.env.HARNESSCLAW_SKIP_ENGINE_START === '1') {
+    writeAppLog('info', 'harnessclaw-engine.process', 'Skipping bundled engine start')
+  } else {
     startHarnessclawEngine()
   }
   harnessclawClient.connect()
@@ -1088,10 +1121,22 @@ function createWindow(): BrowserWindow {
     minHeight: MIN_WINDOW_HEIGHT,
     show: false,
     autoHideMenuBar: true,
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 16, y: 16 },
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
+    // Center the macOS traffic lights within the 78px collapsed sidebar rail
+    // so the left/right gaps match ((78 - ~52px cluster) / 2 ≈ 13).
+    trafficLightPosition: { x: 13, y: 16 },
     backgroundColor: '#F5F5F7',
-    ...(process.platform === 'darwin' ? {} : devIconPath ? { icon: devIconPath } : {}),
+    ...(process.platform === 'darwin'
+      ? {}
+      : {
+          // Windows/Linux: 隐藏左侧图标+标题文字,保留右上角的最小化/最大化/关闭按钮
+          titleBarOverlay: {
+            color: '#F5F5F7',
+            symbolColor: '#1A1A1A',
+            height: 32,
+          },
+          ...(devIconPath ? { icon: devIconPath } : {}),
+        }),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
@@ -1203,7 +1248,7 @@ function createWindow(): BrowserWindow {
 
 let launcherWindow: BrowserWindow | null = null
 let mainWindowRef: BrowserWindow | null = null
-let browserAgentSessions: BrowserAgentSessionManager | null = null
+let browserAgentSessions: BrowserAgentSessionManagerLike | null = null
 
 function extractBrowserAgentSessionIDsFromMessages(messages: ReturnType<typeof getMessages>): string[] {
   const seen = new Set<string>()
@@ -1271,22 +1316,6 @@ const LAUNCHER_HEIGHT = 90
 // The user pins this at 140px so the bar feels anchored just below
 // the top of the screen — a familiar Spotlight-ish anchor point.
 const LAUNCHER_TOP_OFFSET = 140
-
-function resolveBrowserAgentCDPPort(): number {
-  const raw = process.env.HARNESSCLAW_BROWSER_CDP_PORT
-  if (!raw) {
-    return DEFAULT_BROWSER_AGENT_CDP_PORT
-  }
-  const parsed = Number(raw)
-  if (Number.isInteger(parsed) && parsed > 0 && parsed < 65536) {
-    return parsed
-  }
-  return DEFAULT_BROWSER_AGENT_CDP_PORT
-}
-
-const browserAgentCDPPort = resolveBrowserAgentCDPPort()
-app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1')
-app.commandLine.appendSwitch('remote-debugging-port', String(browserAgentCDPPort))
 
 function createLauncherWindow(): BrowserWindow {
   // Anchor the launcher to whichever display currently has the cursor
@@ -1470,6 +1499,7 @@ function applyLauncherConfig(): void {
   }
 }
 
+if (!isBrowserAgentHelperProcess) {
 // 注册自定义协议 `local-file://`，用于在渲染端安全加载磁盘上的图片 /
 // 音视频等本地资源。直接 <img src="file:///..."> 在 Electron 默认安全
 // 配置（webSecurity=true, contextIsolation=true）下会被跨源策略拦截，
@@ -1552,23 +1582,19 @@ app.whenReady().then(() => {
     },
   })
 
-  browserAgentSessions = new BrowserAgentSessionManager({
-    createWindow: (options) => new BrowserWindow(options as BrowserWindowConstructorOptions),
-    resolveCDPEndpoint: createRemoteDebuggingTargetResolver(browserAgentCDPPort),
+  browserAgentSessions = new BrowserAgentHelperClient({
     onSessionChanged: (session) => broadcastBrowserAgentSessionChanged(session as unknown as Record<string, unknown>),
   })
   harnessclawClient.setBrowserAgentSessionManager(browserAgentSessions)
-  writeAppLog('info', 'browser-agent.session', 'Browser Agent client session manager ready', {
-    cdp_port: browserAgentCDPPort,
-  })
+  writeAppLog('info', 'browser-agent.session', 'Browser Agent helper client ready')
 
-  ipcMain.handle('browser-agent:listSessions', () => {
-    return { ok: true, sessions: browserAgentSessions?.listSessions() || [] }
+  ipcMain.handle('browser-agent:listSessions', async () => {
+    return { ok: true, sessions: await browserAgentSessions?.listSessions() || [] }
   })
-  ipcMain.handle('browser-agent:setVisibility', (_, input: Record<string, unknown>) => {
+  ipcMain.handle('browser-agent:setVisibility', async (_, input: Record<string, unknown>) => {
     if (!browserAgentSessions) return { ok: false, error: 'Browser Agent session manager is not available' }
     try {
-      return { ok: true, session: browserAgentSessions.setVisibility(input || {}) }
+      return { ok: true, session: await browserAgentSessions.setVisibility(input || {}) }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
@@ -1582,10 +1608,10 @@ app.whenReady().then(() => {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
   })
-  ipcMain.handle('browser-agent:closeSessions', (_, input: Record<string, unknown>) => {
+  ipcMain.handle('browser-agent:closeSessions', async (_, input: Record<string, unknown>) => {
     if (!browserAgentSessions) return { ok: false, error: 'Browser Agent session manager is not available' }
     try {
-      return { ok: true, result: browserAgentSessions.closeSessions(input || {}) }
+      return { ok: true, result: await browserAgentSessions.closeSessions(input || {}) }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
@@ -2229,6 +2255,8 @@ app.whenReady().then(() => {
       const hasField =
         'primary' in patch ||
         'fallback_chain' in patch ||
+        'image_generation' in patch ||
+        'video_generation' in patch ||
         'max_tokens' in patch ||
         'temperature' in patch ||
         'context_window' in patch
@@ -2236,6 +2264,52 @@ app.whenReady().then(() => {
         return { ok: false, status: 400, error: 'bad_request', message: 'patch must include at least one field' }
       }
       return await patchAgentConfig(patch)
+    } catch (error) {
+      return { ok: false, status: 0, error: 'network_error', message: String(error) }
+    }
+  })
+
+  // Video Generation Management API — GET|PATCH /api/v1/videogen. Mirrors
+  // the providers handlers: hot-edit the videogen provider credentials +
+  // per-endpoint model bindings at runtime. See the engine's
+  // videogen-management contract.
+  ipcMain.handle('console:listVideoProviders', async () => {
+    try {
+      return await listVideoProviders()
+    } catch (error) {
+      return { ok: false, status: 0, error: 'network_error', message: String(error) }
+    }
+  })
+
+  ipcMain.handle('console:patchVideoConfig', async (_, patch: VideoGenPatch) => {
+    try {
+      if (!patch || typeof patch !== 'object' || !patch.providers || typeof patch.providers !== 'object') {
+        return { ok: false, status: 400, error: 'bad_request', message: 'patch.providers required' }
+      }
+      return await patchVideoConfig(patch)
+    } catch (error) {
+      return { ok: false, status: 0, error: 'network_error', message: String(error) }
+    }
+  })
+
+  // Image Generation Management API — GET|PATCH /api/v1/imagegen. Mirrors
+  // the videogen handlers: hot-edit the imagegen provider credentials + path
+  // + per-endpoint model bindings at runtime. See the engine's
+  // imagegen-management contract.
+  ipcMain.handle('console:listImageProviders', async () => {
+    try {
+      return await listImageProviders()
+    } catch (error) {
+      return { ok: false, status: 0, error: 'network_error', message: String(error) }
+    }
+  })
+
+  ipcMain.handle('console:patchImageConfig', async (_, patch: ImageGenPatch) => {
+    try {
+      if (!patch || typeof patch !== 'object' || !patch.providers || typeof patch.providers !== 'object') {
+        return { ok: false, status: 400, error: 'bad_request', message: 'patch.providers required' }
+      }
+      return await patchImageConfig(patch)
     } catch (error) {
       return { ok: false, status: 0, error: 'network_error', message: String(error) }
     }
@@ -3372,6 +3446,14 @@ app.whenReady().then(() => {
     return manuallyCheckForUpdates(win)
   })
 
+  ipcMain.handle('app:update:download', async () => {
+    return downloadUpdate()
+  })
+
+  ipcMain.handle('app:update:install', () => {
+    quitAndInstall()
+  })
+
   // Quick-launcher IPC: renderer (LauncherPage) → main.
   // `submit` carries the typed prompt; we hide the launcher, focus the
   // main window, and forward the prompt to it via webContents.send so
@@ -3459,3 +3541,4 @@ app.on('will-quit', () => {
   stopHarnessclawEngine()
   closeDb()
 })
+}

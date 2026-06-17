@@ -1,11 +1,9 @@
-import { randomUUID, createHmac } from 'crypto'
+import { createHmac, randomUUID } from 'crypto'
 import { app } from 'electron'
 import type { TelemetryConfigManager } from './config'
 import type { TelemetryEvent, TelemetryEventBatch, TelemetryEventInput } from './events'
 
-// HMAC 签名密钥 — 与服务端 TELEMETRY_HMAC_SECRET 保持一致
-// 注意:客户端代码会随 clone/打包一起交付,secret 会被看到,
-// 这里的签名本质是"挡随手乱发的脏数据 + 基本身份校验",不是强加密
+// 与服务端 (spark-pai master) pai_config.TELEMETRY_HMAC_SECRET 一致
 const HMAC_SECRET = 'harnessclaw-telemetry-2026-v1-shared-secret'
 
 /**
@@ -14,7 +12,7 @@ const HMAC_SECRET = 'harnessclaw-telemetry-2026-v1-shared-secret'
  * 职责:
  * 1. 检查隐私开关
  * 2. 补全事件字段 (event_id / device_id / timestamp / app_version 等)
- * 3. 异步发送到服务端 (fire-and-forget,失败静默,不重试)
+ * 3. HMAC-SHA256 签名后发送到服务端 (fire-and-forget,失败静默,不重试)
  */
 export class TelemetryReporter {
   private appVersion: string
@@ -24,7 +22,8 @@ export class TelemetryReporter {
   constructor(
     private deviceId: string,
     private clientSessionId: string,
-    private configManager: TelemetryConfigManager
+    private configManager: TelemetryConfigManager,
+    _harnessclawDir: string
   ) {
     this.appVersion = app.getVersion()
     this.platform = process.platform
@@ -38,18 +37,7 @@ export class TelemetryReporter {
     if (!this.configManager.shouldReport(input.category, input.action)) {
       return
     }
-    const event: TelemetryEvent = {
-      event_id: randomUUID(),
-      device_id: this.deviceId,
-      client_session_id: this.clientSessionId,
-      timestamp: Date.now(),
-      category: input.category,
-      action: input.action,
-      app_version: this.appVersion,
-      platform: this.platform,
-      environment: this.environment,
-      properties: input.properties || {}
-    }
+    const event = this.buildEvent(input)
     void this.send([event])
   }
 
@@ -60,7 +48,15 @@ export class TelemetryReporter {
     if (!this.configManager.shouldReport(input.category, input.action)) {
       return
     }
-    const event: TelemetryEvent = {
+    const event = this.buildEvent(input)
+    await this.send([event], timeoutMs)
+  }
+
+  /**
+   * 构建事件对象
+   */
+  private buildEvent(input: TelemetryEventInput): TelemetryEvent {
+    return {
       event_id: randomUUID(),
       device_id: this.deviceId,
       client_session_id: this.clientSessionId,
@@ -72,7 +68,6 @@ export class TelemetryReporter {
       environment: this.environment,
       properties: input.properties || {}
     }
-    await this.send([event], timeoutMs)
   }
 
   private async send(events: TelemetryEvent[], timeoutMs = 5000): Promise<void> {
@@ -80,8 +75,9 @@ export class TelemetryReporter {
     const batch: TelemetryEventBatch = { schema_version: '1.0', events }
     const body = JSON.stringify(batch)
 
-    // HMAC-SHA256 签名:对 "{timestamp}.{body}" 算签名,服务端用同样规则验签。
-    // timestamp 防重放(服务端可校验时间窗口),body 防篡改。
+    // HMAC-SHA256 签名 — 必须与服务端 receiver.py 规则一致:
+    //   signature = HMAC-SHA256(secret, f"{timestamp}.{body}")
+    // 时间戳为毫秒,服务端窗口 ±5 分钟。签名和发送必须用同一份 body 字符串。
     const timestamp = Date.now().toString()
     const signature = createHmac('sha256', HMAC_SECRET)
       .update(`${timestamp}.${body}`)
@@ -93,13 +89,16 @@ export class TelemetryReporter {
         headers: {
           'Content-Type': 'application/json',
           'X-Telemetry-Timestamp': timestamp,
-          'X-Telemetry-Signature': signature,
+          'X-Telemetry-Signature': signature
         },
         body,
         signal: AbortSignal.timeout(timeoutMs)
       })
+
       if (!res.ok) {
-        console.debug(`[Telemetry] Server returned ${res.status} for ${events[0]?.category}.${events[0]?.action}`)
+        console.debug(
+          `[Telemetry] Server returned ${res.status} for ${events[0]?.category}.${events[0]?.action}`
+        )
       }
     } catch (err) {
       // 静默失败 — 埋点不能影响主流程

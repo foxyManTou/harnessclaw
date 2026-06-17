@@ -32,8 +32,10 @@
   },
   "sidebar": {
     "home": "Home",
+    "newTask": "New Task",
+    "scheduler": "Scheduler",
     "xLab": "X·LAB",
-    "skills": "Skill",
+    "skills": "Skills",
     "chat": "Chat",
     "projects": "Projects",
     "team": "Team",
@@ -157,7 +159,8 @@
       "missingKey": "{{name}} is missing API key",
       "missingBase": "{{name}} is missing API base URL",
       "noModels": "{{name}} needs at least one model added",
-      "noneSelected": "{{name}} needs at least one model selected"
+      "noneSelected": "{{name}} needs at least one model selected",
+      "providerDisabledModelSaved": "{{name}} provider isn't enabled yet — your model selection is saved and will apply once you enable {{name}}."
     },
     "persist": {
       "readFailed": "Failed to read model config",
@@ -172,10 +175,12 @@
     },
     "capabilities": {
       "vision": "Vision",
+      "image_generation": "Image Gen",
       "search": "Web",
       "reasoning": "Reasoning",
       "tools": "Tools",
       "visionHint": "Model accepts image inputs (screenshots, photos, PDFs).",
+      "image_generationHint": "Model can generate or edit images through image APIs.",
       "searchHint": "Model can search the web for external information.",
       "reasoningHint": "Model supports extended chain-of-thought / thinking mode.",
       "toolsHint": "Model supports tool use / function calling."
@@ -314,6 +319,7 @@
     "emptyDesc": "Go to the Skill Market to pick the capabilities you need. They will appear here immediately after installation. Installing your first Skill will expand how HarnessClaw works.",
     "goToMarket": "Go to Skill Market",
     "autoAppear": "They will appear here after selection and installation",
+    "usageHint": "To invoke a skill in chat, type \"/\" in the composer and pick it from the autocomplete — typing the slash text by hand sends it as plain content, without applying the skill prompt.",
     "confirm": "Confirm",
     "cancel": "Cancel",
     "delete": "Delete",
@@ -558,7 +564,8 @@
       "TaskList": "Task List",
       "SendMessage": "Send Message",
       "TeamCreate": "Create Team",
-      "TeamDelete": "Delete Team"
+      "TeamDelete": "Delete Team",
+      "ImageGenerate": "Generate Image"
     },
     "status": {
       "executingSubAgent": "Executing Sub-agent task",
@@ -768,6 +775,7 @@
       "markdownSummary": "Fetched and organized as Markdown.",
       "terminalSummary": "Command execution completed.",
       "agentSummary": "Sub Agent summary returned.",
+      "imageGenerated": "Generated {{n}} image(s).",
       "writeSummary": "File write completed.",
       "editSummary": "File changes generated.",
       "stepCompleted": "This step has completed."
@@ -903,6 +911,20 @@
       "detailsLabel": "Task",
       "viewDetails": "View task details",
       "hideDetails": "Hide task details"
+    },
+    "sidePanel": {
+      "label": "Conversation side panel",
+      "expandAria": "Expand side panel",
+      "collapseAria": "Collapse side panel",
+      "tabsAria": "Side panel tabs",
+      "tabLogs": "Logs",
+      "tabArtifacts": "Artifacts",
+      "completedPrefix": "Completed: ",
+      "unnamedStep": "Unnamed step",
+      "noLogs": "No run logs yet",
+      "noLogsDesc": "Run progress will appear here",
+      "noArtifacts": "No artifacts yet",
+      "noArtifactsDesc": "Files produced during the run will appear here"
     }
   },
   "settings": {
@@ -1009,6 +1031,8 @@
       "title": "Models",
       "subtitle": "Manage your providers, API keys, and endpoints",
       "primaryProvider": "Primary Provider",
+      "imageGenerationProvider": "Image Generation Model",
+      "imageGenerationProviderDesc": "Used by image_generate; separate from the primary answer model and fallback chain",
       "jumpToSettings": "Jump to Settings",
       "fallbackEnabled": "Provider Fallback",
       "fallbackEnabledDesc": "Automatic fallback chain when primary model is unavailable",
@@ -1080,7 +1104,8 @@
         "missingKey": "{{name}} is missing API key",
         "missingBase": "{{name}} is missing API base URL",
         "noModels": "{{name}} needs at least one model added",
-        "noneSelected": "{{name}} needs at least one model selected"
+        "noneSelected": "{{name}} needs at least one model selected",
+        "providerDisabledModelSaved": "{{name}} provider isn't enabled yet — your model selection is saved and will apply once you enable {{name}}."
       },
       "persist": {
         "readFailed": "Failed to read model config",
@@ -1089,6 +1114,7 @@
       },
       "capabilities": {
         "vision": "Vision",
+        "image_generation": "Image Gen",
         "web": "Web",
         "reasoning": "Reasoning",
         "tools": "Tools"
@@ -1491,11 +1517,13 @@
       "openaiDetail": "Connect to OpenAI official API or accounts compatible with its model naming and gateway configuration.",
       "anthropicDetail": "Connect to Anthropic official API as the default entry point for Claude series models.",
       "xunfeiDetail": "Connect to iFlytek Spark, suited for Chinese-language scenarios and the domestic developer ecosystem.",
+      "gptImageDetail": "OpenAI image generation models. Configure them in Settings > Models.",
       "googleDetail": "Connect to Google Generative Language for Gemini-series models via the gemini protocol.",
       "deepseekDetail": "Connect to DeepSeek's OpenAI-compatible API — great for code and reasoning at low cost.",
       "zhipuDetail": "Connect to Zhipu GLM via the OpenAI-compatible gateway; supports GLM-4 series models.",
       "moonshotDetail": "Connect to Moonshot Kimi via the OpenAI-compatible API for long-context conversations.",
       "minimaxDetail": "Connect to MiniMax via the OpenAI-compatible API; supports the abab series.",
+      "doubaoDetail": "Doubao Seedream image generation models. Configure them in Settings > Models.",
       "customDetail": "Bring your own gateway — set base URL, key and a protocol (OpenAI or Anthropic) yourself."
     },
     "protocolLabel": "Protocol",
@@ -1511,6 +1539,23 @@
     "modelGroupLabel": "Group name (optional)",
     "modelGroupHint": "Optional display group; only affects how the client lists models. The engine ignores it. Leave blank to auto-infer by series.",
     "modelGroupPlaceholder": "e.g. GPT-5",
+    "intro": {
+      "heading": "Hi, I'm Emma, your personal secretary. I can help you",
+      "categories": {
+        "0": "Daily Office",
+        "1": "Coding",
+        "2": "Planning",
+        "3": "Document Management",
+        "4": "Computer Control"
+      },
+      "cards": [
+        { "title": "Turn this week's meeting notes into a to-do list", "description": "Done — I split the notes into 6 tasks ordered by due date. Want me to sync them to your calendar?" },
+        { "title": "Hey, what do these feature menus do?", "description": "I'm great with collaborative development and workflows. Tell me a goal and I'll break it into steps, call the right tools, and report progress as I go." }
+      ]
+    },
+    "providerLabel": "Model",
+    "providerPlaceholder": "Please select",
+    "skip": "Skip",
     "prompts": {
       "categories": {
         "dev": "Engineering",
@@ -1579,8 +1624,16 @@
     "newTeam": "New Agent Team",
     "emptyAgents": "No Agents yet",
     "emptyAgentsDesc": "Create your first agent above to use in teams later.",
+    "agentsScopeBanner": {
+      "title": "Custom Agents live in the Agent Team registry",
+      "description": "Agents you create here are wired into Agent Teams. The chat console (Emma) still dispatches the engine's built-in roles such as scheduler / freelancer; to invoke a custom agent, add it to a Team."
+    },
     "emptyTeams": "No Agent Teams yet",
     "emptyTeamsDesc": "Create a team to combine multiple agents into fixed collaborative groups.",
+    "previewBanner": {
+      "title": "Agent Team is in early preview",
+      "description": "Workflow design, collaboration settings, and testing steps are still coming soon. Published teams are kept only for this session and won't persist after a restart."
+    },
     "agentType": {
       "sync": "sync (Sync Sub-agent)",
       "async": "async (Async Sub-agent)",
@@ -1873,5 +1926,16 @@
     "subtitle": "Manage automatic updates and check for new releases.",
     "title": "Updates",
     "version": "Version {{version}}"
+  },
+  "updateModal": {
+    "title": "New Version Available V{{version}}",
+    "downloadCompleted": "Update Downloaded",
+    "updateNow": "Update Now",
+    "backgroundUpdate": "Background Update",
+    "restartNow": "Restart Now",
+    "downloadProgress": "Download Progress",
+    "updateFailed": "Update Failed",
+    "retry": "Retry",
+    "errorMessage": "An error occurred while downloading the update. Please try again later."
   }
 }

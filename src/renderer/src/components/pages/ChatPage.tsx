@@ -7,12 +7,12 @@ import {
   Loader2, Wrench, Brain, AlertCircle, RefreshCw, ChevronDown, ChevronUp,
   FileText, File, Folder, X, ArrowDown, AtSign, GitBranch, ListTodo, Users, MessagesSquare, ChevronLeft, ChevronRight, Search, HelpCircle, FolderOpen, Download,
   Globe, ExternalLink, Pencil, FolderPlus, FolderMinus,
-  PenLine, Clock, ShieldQuestion, ThumbsUp, ThumbsDown
+  PenLine, Clock, ShieldQuestion, ThumbsUp, ThumbsDown, Image as ImageIcon
 } from 'lucide-react'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { visit, SKIP } from 'unist-util-visit'
-import { cn, localFileUrl } from '@/lib/utils'
+import { cn, localFileUrl, normalizeMarkdownImageSrc } from '@/lib/utils'
 import { trackSessionCreate, trackMessageSent } from '@/lib/telemetry'
 import {
   AttachmentPreviewPanel,
@@ -26,15 +26,16 @@ import {
 } from '../common/SkillComposerInput'
 import { useAppConfig } from '@/hooks/useEngineConfig'
 import { getProjectDisplayDescription, getProjectDisplayName } from '@/lib/projectDisplay'
-import { useActiveModelCapabilities } from '@/hooks/useActiveModelCapabilities'
 import { PastedBlocksBar, usePastedBlocks } from '../common/PastedBlocksBar'
 import { PlanDraftCard, type PlanDraftStep } from '../common/PlanDraftCard'
 import { PlanStatusButton } from '../common/PlanStatusButton'
 import { SessionStatsButton } from '../common/SessionStatsButton'
 import { AvatarLightbox } from '../common/AvatarLightbox'
 import { ConfirmDeleteSessionDialog } from '../common/ConfirmDeleteSessionDialog'
+import { ConversationSidePanel } from '../common/ConversationSidePanel'
 import { SystemNoticeModal, type SystemNotice } from '../common/SystemNoticeModal'
-import emmaAvatar from '../../assets/sidebar-logo.png'
+import emmaAvatar from '../../assets/emma-avatar.svg'
+import emmaText from '../../assets/emma-text.svg'
 import analystAvatar from '../../assets/team/analyst.png'
 import developerAvatar from '../../assets/team/developer.png'
 import lifestyleAvatar from '../../assets/team/lifestyle.png'
@@ -156,7 +157,7 @@ interface ContentSegment {
  * Stored inside `ToolActivity.metadata.artifacts` so it round-trips through the
  * existing metadata_json DB column without a schema change.
  */
-interface ArtifactRef {
+export interface ArtifactRef {
   artifact_id: string
   name?: string
   type?: string
@@ -369,6 +370,16 @@ interface WebPreviewData {
   url: string
   title?: string
   query?: string
+}
+
+interface GeneratedImagePreview {
+  path: string
+  fileName: string
+  mime?: string
+  bytes?: number
+  model?: string
+  prompt?: string
+  size?: string
 }
 
 /**
@@ -806,6 +817,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   onRespondStepDecision: RespondStepDecisionHandler
   onRespondPlan: (planId: string, approved: boolean, options?: { steps?: PlanDraftStep[]; reason?: string }) => void
 }) {
+  const { t } = useTranslation()
   return (
     <div
       ref={messagesViewportRef}
@@ -824,7 +836,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
             <MessageBubble
               message={message}
               syncAgents={collaboration.syncAgents}
-              hasPendingPlanDraft={!!planDraft && !planDraft.confirmed}
               onOpenFilePreview={onOpenFilePreview}
               onPreviewUserImage={onPreviewUserImage}
               onOpenArtifact={onOpenArtifact}
@@ -880,9 +891,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
 
         {/* Emma intent 鎏光：作为"呼应节点"渲染在列表底部，跟着 messagesEndRef
             一起永远靠近视口底部。优先级低于 ThinkingIndicator（thinking-mode
-            reasoning 内容更重要），但优先于通用 Thinking… 兜底。 */}
+            reasoning 内容更重要），但优先于通用 Thinking… 兜底。
+            呼吸闪烁小点和鎏金字体放在同一行。 */}
         {isProcessing && !isPaused && !isStopping && !currentThinking && currentIntent?.text && (
-          <div className="-my-[17px] flex justify-start pl-[2.625rem]">
+          <div className="-my-[17px] flex items-center gap-2 justify-start pl-[2.625rem]">
+            <span className="streaming-breathing-dot shrink-0" aria-label={t('chat.status.serviceContinuing')} />
             <span
               className="chat-thinking-shimmer min-w-0 truncate"
               aria-live="polite"
@@ -894,7 +907,8 @@ const ConversationTimeline = memo(function ConversationTimeline({
         )}
 
         {isProcessing && !isPaused && !isStopping && !currentThinking && !currentIntent?.text && !pendingAssistantMessage?.content && !(pendingAssistantMessage?.tools && pendingAssistantMessage.tools.length > 0) && (
-          <div className="-my-[17px] flex justify-start pl-[2.625rem]">
+          <div className="-my-[17px] flex items-center gap-2 justify-start pl-[2.625rem]">
+            <span className="streaming-breathing-dot shrink-0" aria-label={t('chat.status.serviceContinuing')} />
             <span className="chat-thinking-shimmer" aria-live="polite">Thinking…</span>
           </div>
         )}
@@ -1637,6 +1651,27 @@ function extractSearchResultCount(metadata?: Record<string, unknown>): number | 
   return typeof metadata.result_count === 'number' && Number.isFinite(metadata.result_count)
     ? metadata.result_count
     : undefined
+}
+
+function extractGeneratedImagesFromMetadata(metadata?: Record<string, unknown>): GeneratedImagePreview[] {
+  const raw = metadata?.images
+  if (!Array.isArray(raw)) return []
+  const images: GeneratedImagePreview[] = []
+  for (const item of raw) {
+    if (!isRecord(item)) continue
+    const path = typeof item.path === 'string' ? item.path.trim() : ''
+    if (!path || !path.startsWith('/')) continue
+    images.push({
+      path,
+      fileName: getFileName(path),
+      mime: typeof item.mime === 'string' ? item.mime : undefined,
+      bytes: typeof item.bytes === 'number' && Number.isFinite(item.bytes) ? item.bytes : undefined,
+      model: typeof item.model === 'string' ? item.model : undefined,
+      prompt: typeof item.prompt === 'string' ? item.prompt : undefined,
+      size: typeof item.size === 'string' ? item.size : undefined,
+    })
+  }
+  return images
 }
 
 function safeUrlHostname(url: string): string {
@@ -2488,6 +2523,7 @@ function getToolDisplayName(t: (key: string) => string, name?: string): string {
     SendMessage: t('chat.tools.SendMessage'),
     TeamCreate: t('chat.tools.TeamCreate'),
     TeamDelete: t('chat.tools.TeamDelete'),
+    image_generate: t('chat.tools.ImageGenerate'),
     read_file: t('chat.tools.Read'),
     write_file: t('chat.tools.Write'),
     search_query: t('chat.tools.WebSearch'),
@@ -4028,11 +4064,6 @@ export function ChatPage() {
   const [sendBurstActive, setSendBurstActive] = useState(false)
   const [dropBurstActive, setDropBurstActive] = useState(false)
   const pasted = usePastedBlocks()
-  // Active model's resolved supports — used to gate image attachments
-  // before sending. Loads asynchronously on mount; until then we treat
-  // the model as vision-less to err on the side of caution (the gate
-  // never fails closed for text-only sends).
-  const modelCaps = useActiveModelCapabilities()
   const messagesViewportRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null)
@@ -4116,35 +4147,10 @@ export function ChatPage() {
     const imageFiles = initialFiles.filter((a) => a.kind === 'image')
     const otherFiles = initialFiles.filter((a) => a.kind !== 'image')
 
-    // Vision gate. modelCaps may still be loading on a fast first send;
-    // when it is, we err on the side of letting the message through and
-    // rely on the server-side multimodal.Gate (which always runs) to
-    // catch incompatible model + image combinations.
-    if (imageFiles.length > 0 && !modelCaps.loading && !modelCaps.supports.vision) {
-      const noticeAt = Date.now()
-      ensureLocalSession(sid)
-      updateSession(sid, (prev) => ({
-        ...prev,
-        messages: [
-          ...prev.messages,
-          {
-            id: `cap-${noticeAt}`,
-            role: 'assistant',
-            content: '',
-            timestamp: noticeAt,
-            systemNotice: {
-              kind: 'error',
-              title: '当前模型不支持图片输入',
-              message: `模型 ${modelCaps.modelKey || '(未配置)'} 没有 vision 能力，无法识别附带的图片。`,
-              hint: '请在右上角切换到具备多模态能力的模型（如 Claude Opus 4.7 或 GPT-5.5）后重试。',
-            },
-          },
-        ],
-      }))
-      setInput('')
-      setAttachments([])
-      return
-    }
+    // No vision pre-gate: images always pass through. The server no
+    // longer rejects image input for non-vision models either — many
+    // tools consume images (image_generate, video_create i2v, browser
+    // agent), so the downstream model/provider decides what to do.
 
     // Read each image to base64 + sniffed MIME. Limit (10MB) and MIME
     // whitelist enforced in main.
@@ -4217,7 +4223,7 @@ export function ChatPage() {
       has_attachments: initialFiles.length > 0,
       coordinator_mode: coordinatorMode,
     })
-  }, [ensureLocalSession, updateSession, modelCaps])
+  }, [ensureLocalSession, updateSession])
 
   const respondPermission = useCallback(async (requestId: string, approved: boolean, scope: 'once' | 'session') => {
     if (!requestId) return
@@ -6583,34 +6589,10 @@ export function ChatPage() {
     // option to window.harnessclaw.send.
     const imageAttachments = attachments.filter((a) => a.kind === 'image')
 
-    // Pre-send capability gate. The server runs the same check
-    // (multimodal.Gate in the router) and will reject with an
-    // unsupported_modality error frame, but checking client-side
-    // gives instant UX and prevents a pointless WebSocket round-trip.
-    // We skip the gate while caps are still loading (modelCaps.loading)
-    // so a fast user doesn't see false positives on app start.
-    if (imageAttachments.length > 0 && !modelCaps.loading && !modelCaps.supports.vision) {
-      const noticeAt = Date.now()
-      updateSession(sid, (prev) => ({
-        ...prev,
-        messages: [
-          ...prev.messages,
-          {
-            id: `cap-${noticeAt}`,
-            role: 'assistant',
-            content: '',
-            timestamp: noticeAt,
-            systemNotice: {
-              kind: 'error',
-              title: '当前模型不支持图片输入',
-              message: `模型 ${modelCaps.modelKey || '(未配置)'} 没有 vision 能力，无法识别附带的图片。`,
-              hint: '请在右上角切换到具备多模态能力的模型（如 Claude Opus 4.7 或 GPT-5.5）后重试。',
-            },
-          },
-        ],
-      }))
-      return
-    }
+    // No vision pre-gate: images always pass through. The server no
+    // longer rejects image input for non-vision models either — many
+    // tools consume images (image_generate, video_create i2v, browser
+    // agent), so the downstream model/provider decides what to do.
 
     // Read each image to base64 + sniffed MIME via the main-process
     // IPC. Hard limit (10 MB / file) and MIME whitelist are enforced
@@ -7267,7 +7249,7 @@ export function ChatPage() {
                           : t('chat.composer.placeholderDisconnected')
                       }
                       maxLength={maxLength}
-                      className="min-h-[26px] max-h-[120px] leading-6"
+                      className=""
                       rows={1}
                     />
                     <AttachmentPreviewPanel
@@ -7355,6 +7337,15 @@ export function ChatPage() {
         )}
       </div>
 
+      {/* Right-side panel: logs (plan steps) + artifacts. Default collapsed. */}
+      <ConversationSidePanel
+        steps={activeSession.planDraft?.steps || []}
+        artifacts={sessionArtifacts}
+        onSelectArtifact={(artifact) => {
+          void openArtifactPreview(artifact, activeSessionId)
+        }}
+      />
+
       <FilePreviewDrawer
         preview={filePreview}
         onClose={() => setFilePreview(null)}
@@ -7401,16 +7392,24 @@ export function ChatPage() {
 
 /** Extensible avatar: pass agentId to resolve a per-agent icon in the future. */
 function AgentAvatar({ agentId, agentName, size = 'md' }: { agentId?: string; agentName?: string; size?: 'md' | 'sm' }) {
-  const dim = size === 'sm' ? 'h-6 w-6' : 'h-8 w-8'
+  const dim = size === 'sm' ? 'h-7 w-7' : 'h-9 w-9'
+  const textHeight = size === 'sm' ? 'h-2.5' : 'h-3'
   // Main agent (emma) — or fallback when no agentId is given
   if (!agentId) {
     return (
-      <AvatarLightbox
-        src={emmaAvatar}
-        alt="Emma"
-        triggerClassName="flex-shrink-0 rounded-full"
-        imgClassName={cn(dim, 'rounded-full object-cover')}
-      />
+      <div className="flex shrink-0 flex-col items-center gap-1">
+        <AvatarLightbox
+          src={emmaAvatar}
+          alt="Emma"
+          triggerClassName="rounded-full"
+          imgClassName={cn(dim, 'rounded-full object-cover')}
+        />
+        <img
+          src={emmaText}
+          alt="EMMA"
+          className={cn(textHeight, 'object-contain')}
+        />
+      </div>
     )
   }
   // Sub-agent — resolve to one of the 5 team member avatars
@@ -7672,7 +7671,6 @@ function UserMessageText({ text }: { text: string }) {
 function MessageBubble({
   message,
   syncAgents,
-  hasPendingPlanDraft,
   onOpenFilePreview,
   onPreviewUserImage,
   onOpenArtifact,
@@ -7684,10 +7682,6 @@ function MessageBubble({
   /** v1.12: per-agent state used to render the sub-agent task expander and
    * intent shimmer inside the agent-team segment header. */
   syncAgents?: Record<string, SyncAgentState>
-  /** True while a `plan.proposed` PlanDraftCard is awaiting the user. The
-   * engine's turn is parked, so we suppress the breathing-dot indicator on
-   * the streaming assistant message during that window. */
-  hasPendingPlanDraft?: boolean
   onOpenFilePreview: (preview: FilePreviewData) => void
   /** v1.x: 用户消息中的图片点击改走居中 FilePreviewModal（与首页一致）。
    * 非图片附件仍走 onOpenFilePreview / openFilePathPreview。 */
@@ -7703,7 +7697,6 @@ function MessageBubble({
   const [rating, setRating] = useState<'up' | 'down' | null>(null)
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
-  const now = useSharedNowTicker(!isUser && !isSystem && !!message.isStreaming, 250)
   const openFilePathPreview = useCallback(async (path: string) => {
     try {
       const result = await window.files.read(path)
@@ -7921,22 +7914,8 @@ function MessageBubble({
   const userImageAttachments = isUser ? attachments.filter((a) => a.kind === 'image') : []
   const userNonImageAttachments = isUser ? attachments.filter((a) => a.kind !== 'image') : []
   const trailingAttachments = isUser ? userNonImageAttachments : attachments
-  const lastVisibleActivityTs = segments.reduce((latest, seg) => Math.max(latest, seg.ts), message.timestamp)
-  // While a `prompt.user` (AskUserQuestion / permission / plan_review) is
-  // awaiting the user's reply, the engine's turn is parked — nothing is
-  // actually running. Suppress the breathing dot in that case so the UI
-  // doesn't suggest "服务仍在继续" while we are really waiting on the user.
-  const hasUnresolvedPromptUser = segments.some(
-    (seg) =>
-      (seg.kind === 'question' || seg.kind === 'permission' || seg.kind === 'step_decision') && !seg.result,
-  )
-  const shouldShowBreathingDot = !isUser
-    && !isSystem
-    && !!message.isStreaming
-    && segments.length > 0
-    && !hasUnresolvedPromptUser
-    && !hasPendingPlanDraft
-    && now - lastVisibleActivityTs > 1000
+  // 呼吸闪烁小点已上移到 ConversationTimeline 尾部，与"鎏金"shimmer 文案
+  // 同行渲染（受 isProcessing 控制），所以这里不再做 per-message 计算。
   const shouldShowTimestamp = !message.isStreaming
   const hasRenderableAssistantBody = displaySegments.length > 0 || attachments.length > 0 || !!errorNotice
 
@@ -7976,13 +7955,16 @@ function MessageBubble({
         )}>
           <ReactMarkdown
             remarkPlugins={[remarkGfm, remarkFilePaths]}
-            // react-markdown v9 sanitizes hrefs by protocol via a default
+            // react-markdown v9 sanitizes href/src values by protocol via a default
             // `urlTransform` (only http/https/mailto/tel/... are kept). That
             // strips our custom `artifact://` and `filepath://` schemes to ''
             // so the `<a>` handler below can never see them. Whitelist them
-            // explicitly while still falling back to the safe default for
-            // every other URL.
-            urlTransform={(url) => {
+            // explicitly, and route Markdown image local paths through the
+            // renderer's `local-file://` protocol before they reach <img>.
+            urlTransform={(url, key, node) => {
+              if (key === 'src' && node?.tagName === 'img') {
+                return normalizeMarkdownImageSrc(url) || ''
+              }
               if (typeof url === 'string' && (url.startsWith('artifact:') || url.startsWith(FILEPATH_HREF_PREFIX))) {
                 return url
               }
@@ -8137,14 +8119,6 @@ function MessageBubble({
           isUser ? 'max-w-[88%] sm:max-w-[80%] items-end' : 'w-full sm:w-[min(88%,52rem)] xl:w-[min(80%,52rem)] items-start'
         )}
       >
-        {!isUser && (
-          // Emma 名字仅作 header 标识 — 鎏光 intent 已迁出，
-          // 在 ChatPage 列表底部（与 Thinking… 同位）渲染，避免长消息滚动时
-          // intent 被滚出视口看不到。
-          <div className="mb-1 flex items-center gap-2">
-            <span className="text-xs font-medium text-muted-foreground">Emma</span>
-          </div>
-        )}
         <div className={cn(
           'mb-1 flex justify-end gap-1 opacity-100 transition-opacity md:absolute md:top-1 md:z-10 md:mb-0 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100',
           isUser ? 'md:-left-14 md:right-auto' : 'md:-right-14'
@@ -8430,11 +8404,8 @@ function MessageBubble({
           </div>
         )}
 
-        {shouldShowBreathingDot && (
-          <div className="mb-1.5 flex justify-end pr-1">
-            <span className="streaming-breathing-dot" aria-label={t('chat.status.serviceContinuing')} />
-          </div>
-        )}
+        {/* 呼吸闪烁小点已移至会话尾部，与"鎏金"shimmer 文案同行渲染
+            (ConversationTimeline 中的 streaming-breathing-dot + chat-thinking-shimmer)。 */}
 
         {/* 点赞点踩 — AI 回复正文下方常显按钮(流式结束后才出现) */}
         {!isUser && !isSystem && !message.isStreaming && hasRenderableAssistantBody && (
@@ -8946,6 +8917,7 @@ function ToolCallCard({
   const [expanded, setExpanded] = useState(false)
   const contentId = useId()
   const filePreview = extractFilePreviewData(call, result)
+  const generatedImages = extractGeneratedImagesFromMetadata(result?.metadata)
   // Tool name always comes from card.add (i.e. `call.name`) — never from
   // close.inner.name which is empty by v2 protocol.
   const toolName = getToolDisplayName(t, call.name)
@@ -9002,7 +8974,7 @@ function ToolCallCard({
   const metadataForDisplay = (() => {
     if (!result?.metadata) return undefined
     if (isSearchResult) return undefined
-    const { errorInfo: _drop, ...rest } = result.metadata as Record<string, unknown>
+    const { errorInfo: _drop, images: _dropImages, ...rest } = result.metadata as Record<string, unknown>
     return Object.keys(rest).length > 0 ? rest : undefined
   })()
   const metadataText = metadataForDisplay ? JSON.stringify(metadataForDisplay, null, 2) : ''
@@ -9111,7 +9083,9 @@ function ToolCallCard({
             )}>
               {isRunning
                   ? (call.phaseHint || t('chat.toolResult.executing'))
-                  : getToolResultSummary(t, call, result, filePreview)}
+                  : generatedImages.length > 0
+                    ? t('chat.toolResult.imageGenerated', { n: generatedImages.length })
+                    : getToolResultSummary(t, call, result, filePreview)}
             </p>
 
             {/* v2 §12 — retry / recovery hints. Display-only; no control
@@ -9146,6 +9120,45 @@ function ToolCallCard({
                   {filePreview.operation === 'read_file' ? t('chat.toolResult.fileAssociated', { name: '' }).replace('Associated file', '').trim() : t('chat.toolResult.fileInvolved', { name: '' }).replace('Involves file', '').trim()}
                 </span>
               </button>
+            )}
+
+            {generatedImages.length > 0 && (
+              <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {generatedImages.map((image, idx) => {
+                  const subtitle = [image.model, image.size].filter(Boolean).join(' · ')
+                  return (
+                    <button
+                      key={`${image.path}-${idx}`}
+                      type="button"
+                      onClick={() => onOpenFilePreview({
+                        path: image.path,
+                        fileName: image.fileName,
+                        operation: 'read_file',
+                        content: '',
+                        isBinary: true,
+                      })}
+                      className="group overflow-hidden rounded-xl border border-border bg-accent/45 text-left transition-colors hover:border-primary/60 hover:bg-accent"
+                      title={image.prompt || image.fileName}
+                    >
+                      <div className="aspect-square w-full overflow-hidden bg-muted">
+                        <img
+                          src={localFileUrl(image.path)}
+                          alt={image.prompt || image.fileName}
+                          className="h-full w-full object-cover transition-transform group-hover:scale-[1.02]"
+                          loading="lazy"
+                        />
+                      </div>
+                      <div className="flex items-center gap-2 px-2 py-1.5">
+                        <ImageIcon size={12} className="flex-shrink-0 text-primary" />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-[11px] font-medium text-foreground">{image.fileName}</div>
+                          {subtitle && <div className="truncate text-[10px] text-muted-foreground">{subtitle}</div>}
+                        </div>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
             )}
 
           </div>

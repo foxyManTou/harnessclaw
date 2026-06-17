@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
 import { useLocation } from 'react-router-dom'
+import { ProviderLogo } from '../common/ProviderLogo'
 import {
   Wifi, Shield, Palette, HardDrive,
   Eye, EyeOff, Loader2, Check, X,
@@ -11,7 +12,7 @@ import {
   Pause, Play, RotateCcw, AlertTriangle,
   ChevronDown, ChevronRight, ExternalLink,
   SlidersHorizontal, RefreshCw, Settings2,
-  Globe, Sun, GripVertical, Plus,
+  Globe, Image, Film, Sun, GripVertical, Plus,
   // Keyboard = typing hint icon shown inside the hotkey-capture input
   // while we're waiting for the user to press a combination.
   Keyboard,
@@ -33,12 +34,16 @@ import {
   buildAppProviderRaw,
   createEmptyProviderConfig,
   getEffectiveEngineType,
+  getProviderDefaultModels,
+  isAgentProviderKey,
+  isImageGenerationProviderKey,
   isManagedProviderKey,
   resolveProviderProtocol,
   type ManagedProviderKey,
   type ProtocolProviderKey,
   type ProviderConfig,
   type ProviderModelEntry,
+  type ProviderType,
 } from '@/lib/providers'
 
 // ─── Primitives ────────────────────────────────────────────────────────────
@@ -151,6 +156,18 @@ function SectionHeader({
         <span className="text-xs text-muted-foreground">{subtitle}</span>
       </div>
       <div className="h-px bg-border" />
+    </div>
+  )
+}
+
+// Centered divider heading used to visually separate the three model
+// sub-sections (文本/图片/视频) inside the unified 模型 page.
+function SectionDivider({ label, className }: { label: string; className?: string }) {
+  return (
+    <div className={cn('flex items-center gap-3 mt-1 mb-3', className)}>
+      <div className="h-px flex-1 bg-border" />
+      <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>
+      <div className="h-px flex-1 bg-border" />
     </div>
   )
 }
@@ -511,12 +528,33 @@ interface ProviderEndpointRef {
   endpoint: string
   model?: string
   type: ProviderType
+  modelType?: string[]
+  providerEnabled?: boolean
   // Engine 2026-05-14+ provider.disabled. Endpoints under a disabled
   // provider are completely skipped by the dispatcher (effective
   // disabled = provider.disabled || endpoint.disabled), so the
   // fallback-chain "add node" menu hides them — picking one would
   // produce a chain entry that can never route.
   providerDisabled?: boolean
+  endpointDisabled?: boolean
+  engineProviderDisabled?: boolean
+  engineEndpointDisabled?: boolean
+  providerMissing?: boolean
+  endpointMissing?: boolean
+  providerEngineType?: ProviderType
+  providerApiBase?: string | null
+  providerApiKey?: string
+  endpointGroup?: string
+}
+
+function isImageGenerationEndpointRef(endpoint: ProviderEndpointRef): boolean {
+  return endpoint.modelType?.includes('image_generation') === true
+}
+
+function toStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+    : []
 }
 
 const PROTOCOL_GROUPS = (t: any): { type: ProviderType; label: string }[] => [
@@ -585,14 +623,91 @@ function ProviderStrategyRow({
     const out = new Set<string>()
     const modelProviders = asRecord((appConfigData ?? {}).modelProviders)
     for (const [name, raw] of Object.entries(modelProviders)) {
+      if (!isManagedProviderKey(name)) continue
       const rec = asRecord(raw)
       if (rec.enabled === false) out.add(name)
+    }
+    return out
+  }, [appConfigData])
+  const rendererEnabledNames = useMemo(() => {
+    const out = new Set<string>()
+    const modelProviders = asRecord((appConfigData ?? {}).modelProviders)
+    for (const [name, raw] of Object.entries(modelProviders)) {
+      if (!isManagedProviderKey(name)) continue
+      const rec = asRecord(raw)
+      if (rec.enabled === true) out.add(name)
+    }
+    return out
+  }, [appConfigData])
+  const rendererImageModelsByRef = useMemo(() => {
+    const out = new Map<
+      string,
+      {
+        provider: ManagedProviderKey
+        modelId: string
+        tags: string[]
+        engineType: ProviderType
+        apiBase: string | null
+        apiKey: string
+        group?: string
+      }
+    >()
+    const modelProviders = asRecord((appConfigData ?? {}).modelProviders)
+    for (const [providerName, rawProvider] of Object.entries(modelProviders)) {
+      if (!isManagedProviderKey(providerName)) continue
+      const provider = asRecord(rawProvider)
+      if (provider.enabled !== true) continue
+      const normalized = normalizeProviderConfig(provider)
+      const providerConfig: ProviderConfig = {
+        ...createEmptyProviderConfig(providerName),
+        ...normalized,
+        apiBase: normalized.apiBase ?? PROVIDER_DEFAULT_BASES[providerName] ?? null,
+        raw: provider,
+      }
+      const engineType = getEffectiveEngineType(providerName, providerConfig)
+      const models = Array.isArray(provider.models) ? provider.models : []
+      for (const rawModel of models) {
+        const model = asRecord(rawModel)
+        if (model.enabled !== true || typeof model.id !== 'string' || model.id.length === 0) {
+          continue
+        }
+        const tags = toStringList(model.tags).filter(
+          (tag) => VISIBLE_MODEL_TYPE_TOKENS.has(tag) || HIDDEN_MODEL_TYPE_TOKENS.has(tag),
+        )
+        if (!tags.includes('image_generation')) continue
+        out.set(`${providerName}:${model.id}`, {
+          provider: providerName,
+          modelId: model.id,
+          tags,
+          engineType,
+          apiBase: providerConfig.apiBase,
+          apiKey: providerConfig.apiKey,
+          ...(typeof model.group === 'string' && model.group.trim()
+            ? { group: model.group.trim() }
+            : {}),
+        })
+      }
     }
     return out
   }, [appConfigData])
   const [providers, setProviders] = useState<ProviderInfo[]>([])
   const [chain, setChain] = useState<string[]>([])
   const [chainEntries, setChainEntries] = useState<ProviderChainEntry[]>([])
+  const [imageGeneration, setImageGeneration] = useState('')
+  // Video generation tool target ref (`provider:endpoint`). Sourced from
+  // the videogen config tree (listVideoProviders) for the options and
+  // from agent.video_generation for the current value — independent of
+  // the model-provider chain that drives image_generation.
+  const [videoGeneration, setVideoGeneration] = useState('')
+  const [videoProviders, setVideoProviders] = useState<
+    Record<string, { endpoints?: Record<string, { model?: string }> }>
+  >({})
+  // Image endpoints come from the independent imagegen config tree
+  // (cfg.ImageGen via listImageProviders), parallel to videoProviders —
+  // no longer derived from the model-provider chain.
+  const [imageProviders, setImageProviders] = useState<
+    Record<string, { endpoints?: Record<string, { model?: string }> }>
+  >({})
   const [loading, setLoading] = useState(true)
   const [unavailable, setUnavailable] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -605,14 +720,15 @@ function ProviderStrategyRow({
   const loadAll = useCallback(async () => {
     setLoading(true)
     setUnavailable(null)
-    const [pRes, cRes] = await Promise.all([
+    const [pRes, aRes] = await Promise.all([
       window.agentApi.listProviders(),
-      window.agentApi.getFallbackChain(),
+      window.agentApi.getAgentConfig(),
     ])
     if (!pRes.ok) {
       setProviders([])
       setChain([])
       setChainEntries([])
+      setImageGeneration('')
       // Engine 2026-05-14+: providers + /agent are always mounted, even
       // in degraded mode (empty chain). A 404 here means the engine is
       // older than the rewrite or the path is genuinely wrong.
@@ -625,19 +741,54 @@ function ProviderStrategyRow({
       return
     }
     setProviders(Array.isArray(pRes.data.providers) ? pRes.data.providers : [])
-    if (cRes.ok) {
-      setChain(Array.isArray(cRes.data?.chain) ? cRes.data.chain : [])
-      setChainEntries(Array.isArray(cRes.data?.entries) ? cRes.data.entries : [])
+    if (aRes.ok) {
+      const fallback = Array.isArray(aRes.data?.fallback_chain) ? aRes.data.fallback_chain : []
+      setChain(aRes.data?.primary ? [aRes.data.primary, ...fallback] : fallback.slice())
+      setChainEntries(Array.isArray(aRes.data?.entries) ? aRes.data.entries : [])
+      setImageGeneration(
+        typeof aRes.data?.image_generation === 'string' ? aRes.data.image_generation : '',
+      )
+      // `video_generation` rides on the same GET /agent payload but the
+      // ambient AgentConfigInfo type predates the field, so read it via a
+      // narrow cast rather than widening the shared type.
+      const videoRef = (aRes.data as { video_generation?: string } | undefined)?.video_generation
+      setVideoGeneration(typeof videoRef === 'string' ? videoRef : '')
     } else {
       setChain([])
       setChainEntries([])
+      setImageGeneration('')
+      setVideoGeneration('')
     }
     setLoading(false)
-  }, [])
+  }, [t])
 
   useEffect(() => {
     void loadAll()
   }, [loadAll])
+
+  // Video endpoints come from the separate videogen config tree, not the
+  // model-provider chain. Load once; failures leave the dropdown with just
+  // the "(none)" option (and any unrecognized saved value).
+  useEffect(() => {
+    void (async () => {
+      const res = await window.agentApi.listVideoProviders()
+      if (res.ok) {
+        setVideoProviders(res.data?.providers ?? {})
+      }
+    })()
+  }, [])
+
+  // Image endpoints come from the separate imagegen config tree, not the
+  // model-provider chain. Load once; failures leave the dropdown with just
+  // the "(none)" option (and any unrecognized saved value).
+  useEffect(() => {
+    void (async () => {
+      const res = await window.agentApi.listImageProviders()
+      if (res.ok) {
+        setImageProviders(res.data?.providers ?? {})
+      }
+    })()
+  }, [])
 
   useEffect(() => {
     if (!addOpen) return
@@ -659,27 +810,73 @@ function ProviderStrategyRow({
 
   const allEndpoints = useMemo<ProviderEndpointRef[]>(() => {
     const out: ProviderEndpointRef[] = []
+    const seenRefs = new Set<string>()
+    const providersByName = new Map(providers.map((provider) => [provider.name, provider]))
     for (const p of providers) {
-      // Effective disabled = engine flag OR renderer-side enabled=false.
-      // The latter catches the gap where the user turned OFF the
-      // provider in the Models tab but the engine response either
-      // hasn't refreshed yet or didn't include the `disabled` field at
-      // all (older engines / 404 on PATCH because the provider was
-      // never created server-side).
-      const effectiveDisabled = p.disabled === true || rendererDisabledNames.has(p.name)
       for (const e of p.endpoints) {
+        const ref = `${p.name}:${e.name}`
+        const rendererImageModel = rendererImageModelsByRef.get(ref)
+        const engineModelType = toStringList(e.model_type)
+        const modelType = Array.from(
+          new Set([...engineModelType, ...(rendererImageModel?.tags ?? [])]),
+        )
+        // Effective disabled = renderer-side enabled=false OR engine flag.
+        // For image-generation models that are already enabled in
+        // appConfig, an engine-side disabled=true is treated as stale
+        // sync state so the selector can still show the row and repair it
+        // on selection. Chat/fallback routing still hides disabled
+        // endpoints, and image-generation rows are excluded from those
+        // selectors separately by modelType.
+        const enabledImageModel = Boolean(rendererImageModel)
+        const providerDisabled = rendererDisabledNames.has(p.name)
+          || (p.disabled === true && !enabledImageModel)
+        const endpointDisabled = e.disabled === true && !enabledImageModel
+        seenRefs.add(ref)
         out.push({
-          ref: `${p.name}:${e.name}`,
+          ref,
           provider: p.name,
           endpoint: e.name,
           model: e.model,
           type: p.type,
-          providerDisabled: effectiveDisabled,
+          modelType,
+          providerEnabled: rendererEnabledNames.has(p.name),
+          providerDisabled,
+          endpointDisabled,
+          engineProviderDisabled: p.disabled === true,
+          engineEndpointDisabled: e.disabled === true,
+          providerEngineType: rendererImageModel?.engineType ?? p.type,
+          providerApiBase: rendererImageModel?.apiBase ?? p.base_url,
+          providerApiKey: rendererImageModel?.apiKey ?? p.api_key,
+          endpointGroup: rendererImageModel?.group ?? e.group,
         })
       }
     }
+    for (const [ref, imageModel] of rendererImageModelsByRef.entries()) {
+      if (seenRefs.has(ref)) continue
+      const provider = providersByName.get(imageModel.provider)
+      const providerDisabled = rendererDisabledNames.has(imageModel.provider)
+      out.push({
+        ref,
+        provider: imageModel.provider,
+        endpoint: imageModel.modelId,
+        model: imageModel.modelId,
+        type: provider?.type ?? imageModel.engineType,
+        modelType: imageModel.tags,
+        providerEnabled: true,
+        providerDisabled,
+        endpointDisabled: false,
+        engineProviderDisabled: provider?.disabled === true,
+        engineEndpointDisabled: false,
+        providerMissing: !provider,
+        endpointMissing: true,
+        providerEngineType: imageModel.engineType,
+        providerApiBase: imageModel.apiBase,
+        providerApiKey: imageModel.apiKey,
+        endpointGroup: imageModel.group,
+      })
+    }
     return out
-  }, [providers, rendererDisabledNames])
+  }, [providers, rendererDisabledNames, rendererEnabledNames, rendererImageModelsByRef])
 
   // Split the flat chain into primary (head) + fallback (tail). The
   // engine enforces `fallback_chain` entries must be distinct from
@@ -700,7 +897,13 @@ function ProviderStrategyRow({
       // Skip primary (engine rejects fallback == primary), endpoints
       // already in fallback, and endpoints whose owning provider is
       // disabled (they can't route, so listing them would be a trap).
-      if (e.ref === primary || fallback.includes(e.ref) || e.providerDisabled) continue
+      if (
+        e.ref === primary
+        || fallback.includes(e.ref)
+        || e.providerDisabled
+        || e.endpointDisabled
+        || isImageGenerationEndpointRef(e)
+      ) continue
       const arr = groups.get(e.type) ?? []
       arr.push(e)
       groups.set(e.type, arr)
@@ -711,7 +914,12 @@ function ProviderStrategyRow({
   const addable = useMemo(
     () =>
       allEndpoints.filter(
-        (e) => e.ref !== primary && !fallback.includes(e.ref) && !e.providerDisabled,
+        (e) =>
+          e.ref !== primary
+          && !fallback.includes(e.ref)
+          && !e.providerDisabled
+          && !e.endpointDisabled
+          && !isImageGenerationEndpointRef(e),
       ),
     [allEndpoints, primary, fallback],
   )
@@ -728,6 +936,8 @@ function ProviderStrategyRow({
     if (!primary) opts.push({ label: t('models.select'), value: '' })
     for (const e of allEndpoints) {
       if (e.providerDisabled && e.ref !== primary) continue
+      if (e.endpointDisabled && e.ref !== primary) continue
+      if (isImageGenerationEndpointRef(e) && e.ref !== primary) continue
       opts.push({ label: e.ref, value: e.ref })
     }
     if (primary && !allEndpoints.some((e) => e.ref === primary)) {
@@ -735,6 +945,36 @@ function ProviderStrategyRow({
     }
     return opts
   }, [allEndpoints, primary, t])
+
+  const imageGenerationOptions = useMemo<{ label: string; value: string }[]>(() => {
+    const opts: { label: string; value: string }[] = [{ label: t('models.select'), value: '' }]
+    for (const [provider, listing] of Object.entries(imageProviders)) {
+      for (const [endpoint, info] of Object.entries(listing?.endpoints ?? {})) {
+        const ref = `${provider}:${endpoint}`
+        const model = (info as { model?: string })?.model?.trim()
+        opts.push({ label: model ? `${ref}（${model}）` : ref, value: ref })
+      }
+    }
+    if (imageGeneration && !opts.some((o) => o.value === imageGeneration)) {
+      opts.push({ label: t('models.unrecognized', { name: imageGeneration }), value: imageGeneration })
+    }
+    return opts
+  }, [imageProviders, imageGeneration, t])
+
+  const videoGenerationOptions = useMemo<{ label: string; value: string }[]>(() => {
+    const opts: { label: string; value: string }[] = [{ label: t('models.select'), value: '' }]
+    for (const [provider, listing] of Object.entries(videoProviders)) {
+      for (const [endpoint, info] of Object.entries(listing?.endpoints ?? {})) {
+        const ref = `${provider}:${endpoint}`
+        const model = info?.model?.trim()
+        opts.push({ label: model ? `${ref}（${model}）` : ref, value: ref })
+      }
+    }
+    if (videoGeneration && !opts.some((o) => o.value === videoGeneration)) {
+      opts.push({ label: t('models.unrecognized', { name: videoGeneration }), value: videoGeneration })
+    }
+    return opts
+  }, [videoProviders, videoGeneration, t])
 
   // persistChain takes the full flat chain; the main-process adapter
   // splits it back into `{primary, fallback_chain}` for PATCH /agent.
@@ -752,6 +992,45 @@ function ProviderStrategyRow({
     }
     setChain(Array.isArray(res.data?.chain) ? res.data.chain : [])
     setChainEntries(Array.isArray(res.data?.entries) ? res.data.entries : [])
+    setBusy(false)
+  }
+
+  // Mirrors handleVideoGenerationChange's optimistic-then-confirm flow.
+  // No endpoint-readiness step: image targets live in the imagegen config
+  // tree (cfg.ImageGen), which isn't subject to the model-chain repair logic.
+  const handleImageGenerationChange = async (newRef: string) => {
+    if (newRef === imageGeneration) return
+    setBusy(true)
+    const prev = imageGeneration
+    setImageGeneration(newRef)
+    const res = await window.agentApi.patchAgentConfig({ image_generation: newRef })
+    if (!res.ok) {
+      setImageGeneration(prev)
+      setBusy(false)
+      return
+    }
+    setImageGeneration(
+      typeof res.data?.image_generation === 'string' ? res.data.image_generation : '',
+    )
+    setBusy(false)
+  }
+
+  // Mirrors handleImageGenerationChange's optimistic-then-confirm flow.
+  // No endpoint-readiness step: video targets live in the videogen config
+  // tree, which isn't subject to the model-chain repair logic.
+  const handleVideoGenerationChange = async (newRef: string) => {
+    if (newRef === videoGeneration) return
+    setBusy(true)
+    const prev = videoGeneration
+    setVideoGeneration(newRef)
+    const res = await window.agentApi.patchAgentConfig({ video_generation: newRef })
+    if (!res.ok) {
+      setVideoGeneration(prev)
+      setBusy(false)
+      return
+    }
+    const confirmed = (res.data as { video_generation?: string } | undefined)?.video_generation
+    setVideoGeneration(typeof confirmed === 'string' ? confirmed : '')
     setBusy(false)
   }
 
@@ -874,6 +1153,38 @@ function ProviderStrategyRow({
               className={blinkingPrimary ? 'agent-primary-blink' : undefined}
             />
           </span>
+        </div>
+      </SettingRow>
+
+      <SettingRow
+        label={t('settings.models.imageGenerationProvider')}
+        description={t('settings.models.imageGenerationProviderDesc')}
+      >
+        <div className="flex items-center gap-2">
+          <SelectInput
+            value={imageGeneration}
+            onChange={handleImageGenerationChange}
+            options={imageGenerationOptions}
+          />
+          {busy && <Loader2 size={12} className="animate-spin text-muted-foreground" />}
+        </div>
+      </SettingRow>
+
+      {/* Label/description use inline literals rather than i18n keys: the
+          videoGenerationProvider locale entries don't exist yet, and this
+          task is scoped to SettingsPage.tsx only. Mirror the image row's
+          structure otherwise. */}
+      <SettingRow
+        label="视频生成模型"
+        description="供视频生成工具使用，不参与主回答模型和 fallback_chain"
+      >
+        <div className="flex items-center gap-2">
+          <SelectInput
+            value={videoGeneration}
+            onChange={handleVideoGenerationChange}
+            options={videoGenerationOptions}
+          />
+          {busy && <Loader2 size={12} className="animate-spin text-muted-foreground" />}
         </div>
       </SettingRow>
 
@@ -1545,21 +1856,7 @@ function AgentSection({
 // same shape under `appConfig.modelProviders.<key>` without
 // duplicating definitions here.
 
-const PROVIDER_LOGO_BG: Record<ManagedProviderKey, string> = {
-  xunfei: '#1A6BFF',
-  anthropic: '#F4F1EE',
-  openai: '#000000',
-  google: '#FFFFFF',
-  deepseek: '#4D6BFE',
-  zhipu: '#3859FF',
-  moonshot: '#6D28D9',
-  minimax: '#00B97F',
-  custom: '#F1F5F9',
-}
-
-// Brand mark identifiers. These are shared by `ProviderLogo` (sidebar) and
-// `ModelIcon` (per-row), so the user sees the same SVG whether they're
-// scanning vendors or scrolling models within a vendor.
+// Brand mark identifiers used by `ModelIcon` for per-row model badges.
 type BrandKey =
   | 'spark'
   | 'anthropic'
@@ -1576,8 +1873,7 @@ type BrandKey =
   | 'generic'
 
 // Foreground color used to fill the brand SVG paths in BrandMark.
-// Chosen for contrast against PROVIDER_LOGO_BG[provider] (sidebar) or
-// MODEL_BADGE_BG[brand] (per-row).
+// Chosen for contrast against MODEL_BADGE_BG[brand] in per-row model badges.
 const BRAND_FG: Record<BrandKey, string> = {
   spark: '#FFFFFF',
   anthropic: '#CC785C',
@@ -1594,110 +1890,42 @@ const BRAND_FG: Record<BrandKey, string> = {
   generic: '#FFFFFF',
 }
 
-// Inline brand marks. SVG path data is taken verbatim from the official
-// brand assets:
-//   - simple-icons (https://github.com/simple-icons/simple-icons) for the
-//     globally recognized vendors (OpenAI, Anthropic, Google Gemini, Meta,
-//     Mistral AI, Qwen, DeepSeek, Moonshot AI, MiniMax).
-//   - lobehub/lobe-icons (https://github.com/lobehub/lobe-icons) for AI
-//     vendors that aren't on simple-icons (iFlytek Spark, 智谱 Zhipu).
-// All paths share a 24x24 viewBox and are filled with `color`, so the
-// glyph can sit on any tinted background.
-const BRAND_PATHS: Partial<Record<BrandKey, string>> = {
-  // simple-icons/openai.svg
-  openai:
-    'M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667zm2.01-3.023l-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08L8.704 5.46a.795.795 0 0 0-.393.681zm1.097-2.365l2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5z',
-  // simple-icons/anthropic.svg — the slanted A wordmark
-  anthropic:
-    'M17.304 3.541h-3.672l6.696 16.918H24Zm-10.608 0L0 20.459h3.744l1.37-3.553h7.005l1.369 3.553h3.744L10.536 3.541Zm-.371 10.223L8.616 7.82l2.291 5.945Z',
-  // simple-icons/googlegemini.svg — official four-point spark
-  gemini:
-    'M11.04 19.32Q12 21.51 12 24q0-2.49.93-4.68.96-2.19 2.58-3.81t3.81-2.55Q21.51 12 24 12q-2.49 0-4.68-.93a12.3 12.3 0 0 1-3.81-2.58 12.3 12.3 0 0 1-2.58-3.81Q12 2.49 12 0q0 2.49-.96 4.68-.93 2.19-2.55 3.81a12.3 12.3 0 0 1-3.81 2.58Q2.49 12 0 12q2.49 0 4.68.96 2.19.93 3.81 2.55t2.55 3.81',
+// Legacy inline paths for brands not in the managed set (kept for model-row
+// icon inference). These will fall back to generic sparkle if missing.
+const BRAND_PATHS_FALLBACK: Partial<Record<BrandKey, string>> = {
   // simple-icons/meta.svg — Meta infinity mark
   meta:
     'M6.915 4.03c-1.968 0-3.683 1.28-4.871 3.113C.704 9.208 0 11.883 0 14.449c0 .706.07 1.369.21 1.973a6.624 6.624 0 0 0 .265.86 5.297 5.297 0 0 0 .371.761c.696 1.159 1.818 1.927 3.593 1.927 1.497 0 2.633-.671 3.965-2.444.76-1.012 1.144-1.626 2.663-4.32l.756-1.339.186-.325c.061.1.121.196.183.3l2.152 3.595c.724 1.21 1.665 2.556 2.47 3.314 1.046.987 1.992 1.22 3.06 1.22 1.075 0 1.876-.355 2.455-.843a3.743 3.743 0 0 0 .81-.973c.542-.939.861-2.127.861-3.745 0-2.72-.681-5.357-2.084-7.45-1.282-1.912-2.957-2.93-4.716-2.93-1.047 0-2.088.467-3.053 1.308-.652.57-1.257 1.29-1.82 2.05-.69-.875-1.335-1.547-1.958-2.056-1.182-.966-2.315-1.303-3.454-1.303zm10.16 2.053c1.147 0 2.188.758 2.992 1.999 1.132 1.748 1.647 4.195 1.647 6.4 0 1.548-.368 2.9-1.839 2.9-.58 0-1.027-.23-1.664-1.004-.496-.601-1.343-1.878-2.832-4.358l-.617-1.028a44.908 44.908 0 0 0-1.255-1.98c.07-.109.141-.224.211-.327 1.12-1.667 2.118-2.602 3.358-2.602zm-10.201.553c1.265 0 2.058.791 2.675 1.446.307.327.737.871 1.234 1.579l-1.02 1.566c-.757 1.163-1.882 3.017-2.837 4.338-1.191 1.649-1.81 1.817-2.486 1.817-.524 0-1.038-.237-1.383-.794-.263-.426-.464-1.13-.464-2.046 0-2.221.63-4.535 1.66-6.088.454-.687.964-1.226 1.533-1.533a2.264 2.264 0 0 1 1.088-.285z',
   // simple-icons/mistralai.svg — pixel-grid wordmark
   mistral:
     'M17.143 3.429v3.428h-3.429v3.429h-3.428V6.857H6.857V3.43H3.43v13.714H0v3.428h10.286v-3.428H6.857v-3.429h3.429v3.429h3.429v-3.429h3.428v3.429h-3.428v3.428H24v-3.428h-3.43V3.429z',
-  // simple-icons/qwen.svg — hexagonal Q with embedded W
-  qwen:
-    'M23.919 14.545 20.817 9.17l1.47-2.544a.56.56 0 0 0 0-.566l-1.633-2.83a.57.57 0 0 0-.49-.283h-6.207L12.487.402a.57.57 0 0 0-.49-.284H8.732a.56.56 0 0 0-.49.284L5.139 5.775h-2.94a.56.56 0 0 0-.49.284L.077 8.887a.56.56 0 0 0 0 .567L3.18 14.83l-1.47 2.545a.56.56 0 0 0 0 .566l1.634 2.83a.57.57 0 0 0 .49.283h6.205l1.47 2.545a.57.57 0 0 0 .49.284h3.266a.57.57 0 0 0 .49-.284l3.104-5.375h2.94a.57.57 0 0 0 .49-.283l1.634-2.828a.55.55 0 0 0-.004-.568M8.733.686l1.634 2.828-1.634 2.828H21.8L20.164 9.17H7.425L5.63 6.06Zm1.306 19.801-6.205-.002 1.634-2.83h3.265L2.201 6.344h3.267q3.182 5.517 6.367 11.032zm10.124-5.66L18.53 12l-6.532 11.315-1.634-2.83c2.129-3.673 4.25-7.351 6.373-11.028h3.592l3.102 5.374z',
   // simple-icons/deepseek.svg — whale silhouette
   deepseek:
     'M23.748 4.651c-.254-.124-.364.113-.512.233-.051.04-.094.09-.137.137-.372.397-.806.657-1.373.626-.829-.046-1.537.214-2.163.848-.133-.782-.575-1.248-1.247-1.548-.352-.155-.708-.311-.955-.65-.172-.24-.219-.509-.305-.774-.055-.16-.11-.323-.293-.35-.2-.031-.278.136-.356.276-.313.572-.434 1.202-.422 1.84.027 1.436.633 2.58 1.838 3.393.137.094.172.187.129.323-.082.28-.18.553-.266.833-.055.179-.137.218-.328.14a5.5 5.5 0 0 1-1.737-1.179c-.857-.828-1.631-1.743-2.597-2.46a12 12 0 0 0-.689-.47c-.985-.957.13-1.743.387-1.836.27-.098.094-.433-.778-.428-.872.003-1.67.295-2.687.685a3 3 0 0 1-.465.136 9.6 9.6 0 0 0-2.883-.101c-1.885.21-3.39 1.1-4.497 2.622C.082 8.776-.231 10.854.152 13.02c.403 2.284 1.568 4.175 3.36 5.653 1.857 1.533 3.997 2.284 6.438 2.14 1.482-.085 3.132-.284 4.994-1.86.47.234.962.328 1.78.398.629.058 1.235-.031 1.705-.129.735-.155.684-.836.418-.961-2.155-1.004-1.682-.595-2.112-.926 1.095-1.295 2.768-3.598 3.284-6.733.05-.346.115-.834.108-1.114-.004-.171.035-.238.23-.257a4.2 4.2 0 0 0 1.545-.475c1.397-.763 1.96-2.016 2.093-3.517.02-.23-.004-.467-.247-.588M11.58 18.168c-2.088-1.642-3.101-2.183-3.52-2.16-.39.024-.32.472-.234.763.09.288.207.487.371.74.114.167.192.416-.113.603-.673.416-1.842-.14-1.897-.168-1.361-.801-2.5-1.86-3.301-3.306-.775-1.393-1.225-2.888-1.299-4.482-.02-.385.094-.522.477-.592a4.7 4.7 0 0 1 1.53-.038c2.131.311 3.946 1.264 5.467 2.774.868.86 1.525 1.887 2.202 2.89.72 1.066 1.494 2.082 2.48 2.915.348.291.626.513.892.677-.802.09-2.14.109-3.055-.615zm1.001-6.44a.306.306 0 0 1 .415-.287.3.3 0 0 1 .113.074.3.3 0 0 1 .086.214c0 .17-.136.307-.308.307a.303.303 0 0 1-.306-.307m3.11 1.596c-.2.081-.4.151-.591.16a1.25 1.25 0 0 1-.798-.254c-.274-.23-.47-.358-.551-.758a1.7 1.7 0 0 1 .015-.588c.07-.327-.007-.537-.238-.727-.188-.156-.426-.199-.689-.199a.6.6 0 0 1-.254-.078.253.253 0 0 1-.114-.358 1 1 0 0 1 .192-.21c.356-.202.767-.136 1.146.016.352.144.618.408 1.001.782.392.451.462.576.685.915.176.264.336.536.446.848.066.194-.02.353-.25.45',
-  // simple-icons/moonshotai.svg — concentric arcs of the Kimi mark
-  kimi:
-    'm1.053 16.91 9.538 2.55a21 20.981 0 0 0 .06 2.031l5.956 1.592a12 11.99 0 0 1-15.554-6.172m-1.02-5.79 11.352 3.035a21 20.981 0 0 0-.469 2.01l10.817 2.89a12 11.99 0 0 1-1.845 2.004L.658 15.918a12 11.99 0 0 1-.625-4.796m1.593-5.146L13.573 9.17a21 20.981 0 0 0-1.01 1.874l11.297 3.02a21 20.981 0 0 1-.67 2.362l-11.55-3.087L.125 10.26a12 11.99 0 0 1 1.499-4.285ZM6.067 1.58l11.285 3.016a21 20.981 0 0 0-1.688 1.719l7.824 2.091a21 20.981 0 0 1 .513 2.664L2.107 5.218a12 11.99 0 0 1 3.96-3.638M21.68 4.866 7.222 1.003A12 11.99 0 0 1 21.68 4.866',
-  // simple-icons/minimax.svg — stepped staff-line wordmark
-  minimax:
-    'M11.43 3.92a.86.86 0 1 0-1.718 0v14.236a1.999 1.999 0 0 1-3.997 0V9.022a.86.86 0 1 0-1.718 0v3.87a1.999 1.999 0 0 1-3.997 0V11.49a.57.57 0 0 1 1.139 0v1.404a.86.86 0 0 0 1.719 0V9.022a1.999 1.999 0 0 1 3.997 0v9.134a.86.86 0 0 0 1.719 0V3.92a1.998 1.998 0 1 1 3.996 0v11.788a.57.57 0 1 1-1.139 0zm10.572 3.105a2 2 0 0 0-1.999 1.997v7.63a.86.86 0 0 1-1.718 0V3.923a1.999 1.999 0 0 0-3.997 0v16.16a.86.86 0 0 1-1.719 0V18.08a.57.57 0 1 0-1.138 0v2a1.998 1.998 0 0 0 3.996 0V3.92a.86.86 0 0 1 1.719 0v12.73a1.999 1.999 0 0 0 3.996 0V9.023a.86.86 0 1 1 1.72 0v6.686a.57.57 0 0 0 1.138 0V9.022a2 2 0 0 0-1.998-1.997',
-  // lobehub/lobe-icons/zhipu.svg — official 智谱 BigModel mark.
-  glm:
-    'M11.991 23.503a.24.24 0 00-.244.248.24.24 0 00.244.249.24.24 0 00.245-.249.24.24 0 00-.22-.247l-.025-.001zM9.671 5.365a1.697 1.697 0 011.099 2.132l-.071.172-.016.04-.018.054c-.07.16-.104.32-.104.498-.035.71.47 1.279 1.186 1.314h.366c1.309.053 2.338 1.173 2.286 2.523-.052 1.332-1.152 2.38-2.478 2.327h-.174c-.715.018-1.274.64-1.239 1.368 0 .124.018.23.053.337.209.373.54.658.96.8.75.23 1.517-.125 1.9-.782l.018-.035c.402-.64 1.17-.96 1.92-.711.854.284 1.378 1.226 1.099 2.167a1.661 1.661 0 01-2.077 1.102 1.711 1.711 0 01-.907-.711l-.017-.035c-.2-.323-.463-.58-.851-.711l-.056-.018a1.646 1.646 0 00-1.954.746 1.66 1.66 0 01-1.065.764 1.677 1.677 0 01-1.989-1.279c-.209-.906.332-1.83 1.257-2.043a1.51 1.51 0 01.296-.035h.018c.68-.071 1.151-.622 1.116-1.333a1.307 1.307 0 00-.227-.693 2.515 2.515 0 01-.366-1.403 2.39 2.39 0 01.366-1.208c.14-.195.21-.444.227-.693.018-.71-.506-1.261-1.186-1.332l-.07-.018a1.43 1.43 0 01-.299-.07l-.05-.019a1.7 1.7 0 01-1.047-2.114 1.68 1.68 0 012.094-1.101zm-5.575 10.11c.26-.264.639-.367.994-.27.355.096.633.379.728.74.095.362-.007.748-.267 1.013-.402.41-1.053.41-1.455 0a1.062 1.062 0 010-1.482zm14.845-.294c.359-.09.738.024.992.297.254.274.344.665.237 1.025-.107.36-.396.634-.756.718-.551.128-1.1-.22-1.23-.781a1.05 1.05 0 01.757-1.26zm-.064-4.39c.314.32.49.753.49 1.206 0 .452-.176.886-.49 1.206-.315.32-.74.5-1.185.5-.444 0-.87-.18-1.184-.5a1.727 1.727 0 010-2.412 1.654 1.654 0 012.369 0zm-11.243.163c.364.484.447 1.128.218 1.691a1.665 1.665 0 01-2.188.923c-.855-.36-1.26-1.358-.907-2.228a1.68 1.68 0 011.33-1.038c.593-.08 1.183.169 1.547.652zm11.545-4.221c.368 0 .708.2.892.524.184.324.184.724 0 1.048a1.026 1.026 0 01-.892.524c-.568 0-1.03-.47-1.03-1.048 0-.579.462-1.048 1.03-1.048zm-14.358 0c.368 0 .707.2.891.524.184.324.184.724 0 1.048a1.026 1.026 0 01-.891.524c-.569 0-1.03-.47-1.03-1.048 0-.579.461-1.048 1.03-1.048zm10.031-1.475c.925 0 1.675.764 1.675 1.706s-.75 1.705-1.675 1.705-1.674-.763-1.674-1.705c0-.942.75-1.706 1.674-1.706zm-2.626-.684c.362-.082.653-.356.761-.718a1.062 1.062 0 00-.238-1.028 1.017 1.017 0 00-.996-.294c-.547.14-.881.7-.752 1.257.13.558.675.907 1.225.783zm0 16.876c.359-.087.644-.36.75-.72a1.062 1.062 0 00-.237-1.019 1.018 1.018 0 00-.985-.301 1.037 1.037 0 00-.762.717c-.108.361-.017.754.239 1.028.245.263.606.377.953.305l.043-.01zM17.19 3.5a.631.631 0 00.628-.64c0-.355-.279-.64-.628-.64a.631.631 0 00-.628.64c0 .355.28.64.628.64zm-10.38 0a.631.631 0 00.628-.64c0-.355-.28-.64-.628-.64a.631.631 0 00-.628.64c0 .355.279.64.628.64zm-5.182 7.852a.631.631 0 00-.628.64c0 .354.28.639.628.639a.63.63 0 00.627-.606l.001-.034a.62.62 0 00-.628-.64zm5.182 9.13a.631.631 0 00-.628.64c0 .355.279.64.628.64a.631.631 0 00.628-.64c0-.355-.28-.64-.628-.64zm10.38.018a.631.631 0 00-.628.64c0 .355.28.64.628.64a.631.631 0 00.628-.64c0-.355-.279-.64-.628-.64zm5.182-9.148a.631.631 0 00-.628.64c0 .354.279.639.628.639a.631.631 0 00.628-.64c0-.355-.28-.64-.628-.64zm-.384-4.992a.24.24 0 00.244-.249.24.24 0 00-.244-.249.24.24 0 00-.244.249c0 .142.122.249.244.249zM11.991.497a.24.24 0 00.245-.248A.24.24 0 0011.99 0a.24.24 0 00-.244.249c0 .133.108.236.223.247l.021.001zM2.011 6.36a.24.24 0 00.245-.249.24.24 0 00-.244-.249.24.24 0 00-.244.249.24.24 0 00.244.249zm0 11.263a.24.24 0 00-.243.248.24.24 0 00.244.249.24.24 0 00.244-.249.252.252 0 00-.244-.248zm19.995-.018a.24.24 0 00-.245.248.24.24 0 00.245.25.24.24 0 00.244-.25.252.252 0 00-.244-.248z',
 }
 
+
 function BrandMark({ brand, size, color }: { brand: BrandKey; size: number; color: string }) {
+  // Custom provider shows a Settings icon
   if (brand === 'custom') {
     return <Settings2 size={size} color={color} />
   }
-  if (brand === 'spark') {
-    // Official iFlytek Spark mark, taken verbatim from lobehub/lobe-icons
-    // (packages/static-svg/icons/spark.svg). Two-path glyph: the upper
-    // tail + the swirl. Both share `color` so it can sit on any tinted
-    // background.
-    return (
-      <svg
-        width={size}
-        height={size}
-        xmlns="http://www.w3.org/2000/svg"
-        viewBox="0 0 24 24"
-        fill={color}
-        fillRule="evenodd"
-      >
-        <path d="M11.615 0l6.237 6.107c2.382 2.338 2.823 3.743 3.161 6.15-1.197-1.732-1.776-2.02-4.504-2.772C12.48 8.374 11.095 5.933 11.615 0z" />
-        <path d="M9.32 2.122C4.771 6.367 2 9.182 2 13.08c0 5.76 4.288 9.788 9.745 9.918 5.457.13 9.441-5.284 9.095-8.403-.347-3.118-4.418-3.81-4.418-3.81 1.69 3.16-.13 8.098-4.894 8.098-5.154 0-6.8-6.02-4.2-9.008.82 1.617 1.879 2.563 2.674 3.273.717.64 1.219 1.09 1.136 1.664-.173 1.213-1.385.866-1.385.866.346.607 3.6 1.473 4.59-1.342.613-1.741-.423-2.789-1.714-4.096-1.632-1.651-3.672-3.717-3.31-8.118z" />
-      </svg>
-    )
-  }
-  const d = BRAND_PATHS[brand]
-  if (!d) {
-    // Generic AI sparkle for any unknown provider.
+
+  // Legacy inline path for brands used in model-row inference (deepseek, meta, mistral, etc.)
+  const d = BRAND_PATHS_FALLBACK[brand]
+  if (d) {
     return (
       <svg width={size} height={size} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill={color}>
-        <path d="M12 2 L14 10 L22 12 L14 14 L12 22 L10 14 L2 12 L10 10 Z" />
+        <path d={d} />
       </svg>
     )
   }
+
+  // Generic AI sparkle for unknown brands
   return (
     <svg width={size} height={size} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill={color}>
-      <path d={d} />
+      <path d="M12 2 L14 10 L22 12 L14 14 L12 22 L10 14 L2 12 L10 10 Z" />
     </svg>
-  )
-}
-
-const PROVIDER_TO_BRAND: Record<ManagedProviderKey, BrandKey> = {
-  xunfei: 'spark',
-  anthropic: 'anthropic',
-  openai: 'openai',
-  google: 'gemini',
-  deepseek: 'deepseek',
-  zhipu: 'glm',
-  moonshot: 'kimi',
-  minimax: 'minimax',
-  custom: 'custom',
-}
-
-function ProviderLogo({ provider, size = 28 }: { provider: ManagedProviderKey; size?: number }) {
-  const innerSize = Math.round(size * 0.62)
-  const bg = PROVIDER_LOGO_BG[provider]
-  const brand = PROVIDER_TO_BRAND[provider]
-  return (
-    <div
-      className="rounded-full flex items-center justify-center flex-shrink-0"
-      style={{ width: size, height: size, backgroundColor: bg }}
-    >
-      <BrandMark brand={brand} size={innerSize} color={BRAND_FG[brand]} />
-    </div>
   )
 }
 
@@ -1705,15 +1933,52 @@ function getDisplayName(key: ManagedProviderKey): string {
   return PROVIDER_DISPLAY_NAMES[key]
 }
 
+// Friendly labels for image/video provider keys (cfg.ImageGen / cfg.VideoGen).
+// Unknown keys fall back to the raw key so user-added providers still render.
+const MEDIA_PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  openai: 'OpenAI',
+  jimeng: '即梦',
+  doubao: '豆包',
+  volcengine: '火山引擎',
+}
+function mediaProviderDisplayName(key: string): string {
+  return MEDIA_PROVIDER_DISPLAY_NAMES[key] ?? key
+}
+
+// Brand icons for image/video provider keys. Falls back to a generic lucide
+// icon (passed by the caller) for keys without a brand asset.
+const MEDIA_PROVIDER_ICONS: Record<string, string> = {
+  openai: new URL('../../assets/providers/openai.svg', import.meta.url).href,
+  volcengine: new URL('../../assets/providers/volcengine.svg', import.meta.url).href,
+}
+function MediaProviderIcon({
+  providerKey,
+  size = 16,
+  fallback,
+}: {
+  providerKey: string
+  size?: number
+  fallback: React.ReactNode
+}): React.ReactElement {
+  const url = MEDIA_PROVIDER_ICONS[providerKey]
+  if (url) {
+    return <img src={url} alt={providerKey} width={size} height={size} style={{ display: 'block' }} />
+  }
+  return <>{fallback}</>
+}
+
 const PROVIDER_APIKEY_PAGES: Record<ManagedProviderKey, string> = {
   xunfei: 'https://console.xfyun.cn/services/bm4',
   anthropic: 'https://console.anthropic.com/settings/keys',
   openai: 'https://platform.openai.com/api-keys',
+  'gpt-image': 'https://platform.openai.com/api-keys',
   google: 'https://aistudio.google.com/app/apikey',
-  deepseek: 'https://platform.deepseek.com/api_keys',
+  qwen: 'https://bailian.console.aliyun.com/?apiKey=1#/api-key',
+  minimax: 'https://platform.minimaxi.com/user-center/basic-information/interface-key',
   zhipu: 'https://open.bigmodel.cn/usercenter/apikeys',
   moonshot: 'https://platform.moonshot.cn/console/api-keys',
-  minimax: 'https://platform.minimaxi.com/user-center/basic-information/interface-key',
+  deepseek: 'https://platform.deepseek.com/api_keys',
+  doubao: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apikey',
   custom: '',
 }
 
@@ -1721,11 +1986,14 @@ const PROVIDER_DOCS_PAGES: Record<ManagedProviderKey, string> = {
   xunfei: 'https://www.xfyun.cn/doc/spark/X2-Flash.html',
   anthropic: 'https://docs.anthropic.com/',
   openai: 'https://platform.openai.com/docs',
+  'gpt-image': 'https://developers.openai.com/api/docs/models/gpt-image-2',
   google: 'https://ai.google.dev/gemini-api/docs',
-  deepseek: 'https://api-docs.deepseek.com/',
+  qwen: 'https://help.aliyun.com/zh/model-studio/developer-reference/',
+  minimax: 'https://platform.minimaxi.com/document/',
   zhipu: 'https://open.bigmodel.cn/dev/api',
   moonshot: 'https://platform.moonshot.cn/docs',
-  minimax: 'https://platform.minimaxi.com/document/',
+  deepseek: 'https://api-docs.deepseek.com/',
+  doubao: 'https://www.volcengine.com/docs/82379/1824692',
   custom: '',
 }
 
@@ -1733,11 +2001,14 @@ const PROVIDER_MODELS_PAGES: Record<ManagedProviderKey, string> = {
   xunfei: 'https://www.xfyun.cn/doc/spark/X2-Flash.html',
   anthropic: 'https://docs.anthropic.com/en/docs/about-claude/models',
   openai: 'https://platform.openai.com/docs/models',
+  'gpt-image': 'https://developers.openai.com/api/docs/models/gpt-image-2',
   google: 'https://ai.google.dev/gemini-api/docs/models/gemini',
-  deepseek: 'https://api-docs.deepseek.com/quick_start/pricing',
+  qwen: 'https://help.aliyun.com/zh/model-studio/getting-started/models',
+  minimax: 'https://platform.minimaxi.com/document/Models',
   zhipu: 'https://open.bigmodel.cn/dev/howuse/model',
   moonshot: 'https://platform.moonshot.cn/docs/pricing/chat',
-  minimax: 'https://platform.minimaxi.com/document/Models',
+  deepseek: 'https://api-docs.deepseek.com/quick_start/pricing',
+  doubao: 'https://www.volcengine.com/docs/82379/1824692',
   custom: '',
 }
 
@@ -1745,6 +2016,10 @@ function getApiPathSuffix(protocol: 'openai' | 'anthropic' | 'gemini'): string {
   if (protocol === 'anthropic') return '/v1/messages'
   if (protocol === 'gemini') return '/v1beta/models'
   return '/v1/chat/completions'
+}
+
+function buildApiTargetUrl(baseUrl: string, suffix: string): string {
+  return `${baseUrl.replace(/\/+$/, '')}${suffix}`
 }
 
 // Validate an API base URL. Empty is allowed (renderer falls back to
@@ -2017,6 +2292,7 @@ interface ModelTagDef {
 const MODEL_TAGS: ModelTagDef[] = [
   { key: 'vision',    label: 'models.capabilities.vision',    icon: Eye,    fg: '#16A34A', bg: '#DCFCE7', border: '#BBF7D0' },
   { key: 'search',    label: 'models.capabilities.search',    icon: Globe,  fg: '#2563EB', bg: '#DBEAFE', border: '#BFDBFE' },
+  { key: 'image_generation', label: 'models.capabilities.image_generation', icon: Image, fg: '#BE123C', bg: '#FFE4E6', border: '#FDA4AF' },
   { key: 'reasoning', label: 'models.capabilities.reasoning', icon: Sun,    fg: '#7C3AED', bg: '#EDE9FE', border: '#DDD6FE' },
   { key: 'tools',     label: 'models.capabilities.tools',     icon: Wrench, fg: '#EA580C', bg: '#FFEDD5', border: '#FED7AA' },
 ]
@@ -2035,7 +2311,23 @@ const VISIBLE_MODEL_TYPE_TOKENS: ReadonlySet<string> = new Set(MODEL_TAGS.map((t
 const MODEL_TAG_MAP: Record<string, ModelTagDef> =
   Object.fromEntries(MODEL_TAGS.map((t) => [t.key, t]))
 
-function ModelTagBadge({ tagKey, t }: { tagKey: string; t: (key: string) => string }) {
+function isImageGenerationModel(entry?: ProviderModelEntry | null): boolean {
+  return Boolean(entry?.tags?.includes('image_generation'))
+}
+
+function isAgentRoutableModel(provider: ManagedProviderKey, entry?: ProviderModelEntry | null): boolean {
+  return !isImageGenerationProviderKey(provider) && !isImageGenerationModel(entry)
+}
+
+function ModelTagBadge({
+  tagKey,
+  t,
+  detail,
+}: {
+  tagKey: string
+  t: (key: string) => string
+  detail?: string
+}) {
   const [tooltipPos, setTooltipPos] = useState<{ left: number; top: number } | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const badgeRef = useRef<HTMLSpanElement | null>(null)
@@ -2044,6 +2336,7 @@ function ModelTagBadge({ tagKey, t }: { tagKey: string; t: (key: string) => stri
   if (!tag) return null
 
   const Icon = tag.icon
+  const label = t(tag.label)
 
   // Tooltip is rendered via a portal with `position: fixed`, so it escapes
   // the model list's overflow-y-auto container and isn't clipped at the
@@ -2087,7 +2380,7 @@ function ModelTagBadge({ tagKey, t }: { tagKey: string; t: (key: string) => stri
     >
       <Icon size={11} />
       {tooltipPos && createPortal(
-        <span
+        <div
           role="tooltip"
           style={{
             position: 'fixed',
@@ -2096,10 +2389,20 @@ function ModelTagBadge({ tagKey, t }: { tagKey: string; t: (key: string) => stri
             transform: 'translateX(-50%)',
             zIndex: 1000,
           }}
-          className="pointer-events-none whitespace-nowrap rounded-md bg-foreground px-1.5 py-0.5 text-[10px] font-medium text-card shadow-md"
+          className={cn(
+            'pointer-events-none rounded-md bg-foreground text-card shadow-md',
+            detail
+              ? 'max-w-[28rem] px-2 py-1.5 text-[10px] leading-relaxed'
+              : 'whitespace-nowrap px-1.5 py-0.5 text-[10px] font-medium',
+          )}
         >
-          {t(tag.label)}
-        </span>,
+          {detail ? (
+            <>
+              <div className="font-medium">{label}</div>
+              <div className="mt-0.5 break-all font-mono text-card/90">{detail}</div>
+            </>
+          ) : label}
+        </div>,
         document.body,
       )}
     </span>
@@ -2114,10 +2417,12 @@ function HoverHint({
   label,
   children,
   className,
+  wide = false,
 }: {
   label: string
   children: React.ReactNode
   className?: string
+  wide?: boolean
 }) {
   const [tooltipPos, setTooltipPos] = useState<{ left: number; top: number } | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -2164,7 +2469,12 @@ function HoverHint({
             transform: 'translateX(-50%)',
             zIndex: 1000,
           }}
-          className="pointer-events-none whitespace-nowrap rounded-md bg-foreground px-1.5 py-0.5 text-[10px] font-medium text-card shadow-md"
+          className={cn(
+            'pointer-events-none rounded-md bg-foreground text-[10px] font-medium text-card shadow-md',
+            wide
+              ? 'max-w-[28rem] whitespace-normal break-all px-2 py-1 text-left font-mono leading-relaxed'
+              : 'whitespace-nowrap px-1.5 py-0.5',
+          )}
         >
           {label}
         </span>,
@@ -2400,6 +2710,40 @@ function normalizeProviderConfig(rawValue: unknown): ProviderConfig {
   }
 }
 
+function mergeProviderModelPresets(
+  models: ProviderModelEntry[],
+  presets: ProviderModelEntry[],
+): ProviderModelEntry[] {
+  if (presets.length === 0) return models
+  const merged = models.map((entry) => ({
+    ...entry,
+    ...(entry.tags ? { tags: [...entry.tags] } : {}),
+  }))
+  const byId = new Map(merged.map((entry, index) => [entry.id, index]))
+
+  for (const preset of presets) {
+    const index = byId.get(preset.id)
+    if (index === undefined) {
+      merged.push({
+        ...preset,
+        ...(preset.tags ? { tags: [...preset.tags] } : {}),
+      })
+      byId.set(preset.id, merged.length - 1)
+      continue
+    }
+
+    const existing = merged[index]
+    const tags = new Set([...(existing.tags ?? []), ...(preset.tags ?? [])])
+    merged[index] = {
+      ...existing,
+      name: existing.name ?? preset.name,
+      group: existing.group ?? preset.group,
+      ...(tags.size > 0 ? { tags: Array.from(tags) } : {}),
+    }
+  }
+  return merged
+}
+
 function mergeProviderSource(
   rootValue: unknown,
   llmValue: unknown,
@@ -2430,10 +2774,13 @@ function getManagedProviders(
       const fallback = mergeProviderSource(rootProviders.custom, llmProviders.custom)
       const source = Object.keys(raw).length > 0 ? raw : fallback
       const normalized = normalizeProviderConfig(source)
+      const defaultModels = getProviderDefaultModels('custom')
+      const models = mergeProviderModelPresets(normalized.models, defaultModels)
       result.custom = {
         ...createEmptyProviderConfig('custom'),
         ...normalized,
         apiBase: normalized.apiBase ?? null,
+        models,
         raw: source,
       }
       continue
@@ -2448,10 +2795,13 @@ function getManagedProviders(
       : {}
     const source = Object.keys(appProvider).length > 0 ? appProvider : engineMerged
     const normalized = normalizeProviderConfig(source)
+    const defaultModels = getProviderDefaultModels(key)
+    const models = mergeProviderModelPresets(normalized.models, defaultModels)
     result[key] = {
       ...createEmptyProviderConfig(key),
       ...normalized,
       apiBase: normalized.apiBase ?? (PROVIDER_DEFAULT_BASES[key] || null),
+      models,
       raw: appProvider,
     }
   }
@@ -2465,7 +2815,9 @@ function getManagedDefaultProvider(
 ): ManagedProviderKey {
   const modelProviders = getAppModelProvidersConfig(appConfig)
   const defaultSelection = modelProviders.defaultSelection
-  if (typeof defaultSelection === 'string' && isManagedProviderKey(defaultSelection)) {
+  if (typeof defaultSelection === 'string'
+      && isManagedProviderKey(defaultSelection)
+      && isAgentProviderKey(defaultSelection)) {
     return defaultSelection
   }
 
@@ -2478,7 +2830,7 @@ function getManagedDefaultProvider(
   }
 
   const appDefault = asRecord(asRecord(appConfig.agents).defaults).provider
-  if (typeof appDefault === 'string' && isManagedProviderKey(appDefault)) {
+  if (typeof appDefault === 'string' && isManagedProviderKey(appDefault) && isAgentProviderKey(appDefault)) {
     return appDefault
   }
 
@@ -2510,6 +2862,19 @@ function ModelSection({
   )
   const [defaultProvider, setDefaultProvider] = useState<ManagedProviderKey>('anthropic')
   const [selectedProvider, setSelectedProvider] = useState<ManagedProviderKey>('anthropic')
+  // Minimal-risk polymorphic selection: the existing text-provider logic
+  // keeps using the string `selectedProvider` untouched. A separate
+  // `selectedKind` + `selectedExtraKey` overlays the image/video segments:
+  // when kind !== 'text', the right pane renders the corresponding
+  // per-provider section instead of the text-provider card. Clicking any
+  // text provider resets kind back to 'text'.
+  const [selectedKind, setSelectedKind] = useState<'text' | 'image' | 'video'>('text')
+  const [selectedExtraKey, setSelectedExtraKey] = useState<string>('')
+  // Provider keys for the image/video config trees, hydrated on mount from
+  // the imagegen/videogen management listings (default config ships
+  // `openai` image + `doubao` video, so these are normally non-empty).
+  const [imageProviderKeys, setImageProviderKeys] = useState<string[]>([])
+  const [videoProviderKeys, setVideoProviderKeys] = useState<string[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [loading, setLoading] = useState(true)
   const [showApiKey, setShowApiKey] = useState(false)
@@ -2518,6 +2883,7 @@ function ModelSection({
   const [testState, setTestState] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle')
   const [toastNotice, setToastNotice] = useState<{ tone: 'error' | 'success'; message: string } | null>(null)
   const [modelFetchState, setModelFetchState] = useState<'idle' | 'loading'>('idle')
+  const [engineImageGenerationUrls, setEngineImageGenerationUrls] = useState<Record<string, string>>({})
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
   const [modelSearchVisible, setModelSearchVisible] = useState(false)
   const [modelSearchQuery, setModelSearchQuery] = useState('')
@@ -2609,6 +2975,25 @@ function ModelSection({
     }
   }, [engineTypePopupOpen])
 
+  const collectImageGenerationUrls = useCallback((enginePayload: ProviderInfo[]): Record<string, string> => {
+    const next: Record<string, string> = {}
+    for (const provider of enginePayload) {
+      for (const endpoint of provider.endpoints ?? []) {
+        if (endpoint.image_generation_url) {
+          next[`${provider.name}:${endpoint.name}`] = endpoint.image_generation_url
+        }
+      }
+    }
+    return next
+  }, [])
+
+  const refreshEngineImageGenerationUrls = useCallback(async () => {
+    const res = await window.agentApi.listProviders()
+    if (!res.ok) return
+    const enginePayload = Array.isArray(res.data?.providers) ? res.data.providers : []
+    setEngineImageGenerationUrls(collectImageGenerationUrls(enginePayload))
+  }, [collectImageGenerationUrls])
+
   useEffect(() => {
     ;(async () => {
       try {
@@ -2662,6 +3047,34 @@ function ModelSection({
     })()
   }, [])
 
+  // Load the image/video provider key lists for the left-rail segments.
+  // Independent of the text-provider load above — failures just leave the
+  // segment empty (a muted hint is shown). The default config ships an
+  // `openai` image provider + a `doubao` video provider, so these are
+  // normally populated.
+  useEffect(() => {
+    void (async () => {
+      const [imgRes, vidRes] = await Promise.all([
+        window.agentApi.listImageProviders(),
+        window.agentApi.listVideoProviders(),
+      ])
+      if (imgRes.ok) {
+        setImageProviderKeys(
+          Array.from(new Set([...IMAGE_BUILTIN_PROVIDERS, ...Object.keys(imgRes.data?.providers ?? {})])),
+        )
+      } else {
+        setImageProviderKeys([...IMAGE_BUILTIN_PROVIDERS])
+      }
+      if (vidRes.ok) {
+        setVideoProviderKeys(
+          Array.from(new Set([...VIDEO_BUILTIN_PROVIDERS, ...Object.keys(vidRes.data?.providers ?? {})])),
+        )
+      } else {
+        setVideoProviderKeys([...VIDEO_BUILTIN_PROVIDERS])
+      }
+    })()
+  }, [])
+
   // After the initial local-yaml load completes, reconcile each
   // ProviderModelEntry.group with the engine's authoritative value
   // (engine = source of truth per spec 2026-05-30). When the engine
@@ -2682,6 +3095,7 @@ function ModelSection({
       const res = await window.agentApi.listProviders()
       if (!res.ok) return // engine unreachable — silent skip
       const enginePayload = Array.isArray(res.data?.providers) ? res.data.providers : []
+      setEngineImageGenerationUrls(collectImageGenerationUrls(enginePayload))
 
       // Compute reconciled state + backfill plan purely against the
       // current `providers` closure value. Doing this OUTSIDE the
@@ -2732,7 +3146,84 @@ function ModelSection({
         void window.agentApi.patchEndpoint(item.provider, item.endpoint, { group: item.group })
       }
     })()
-  }, [loading, providers])
+  }, [collectImageGenerationUrls, loading, providers])
+
+  // Auto-populate model registry for providers configured in onboarding.
+  // After initial load, check each enabled provider: if it has API credentials
+  // but a minimal model list (≤1 model), fetch the full registry and merge it
+  // with the user's choice. This ensures Settings page always shows the complete
+  // model catalog, whether the user picked a standard model or a custom ID.
+  //
+  // Single-shot: runs once after loading completes. Providers with >1 model
+  // are skipped (user already fetched or manually added models).
+  const autoPopulatedRef = useRef(false)
+  useEffect(() => {
+    if (loading || autoPopulatedRef.current) return
+    autoPopulatedRef.current = true
+    void (async () => {
+      const registryRes = await window.agentApi.listRegistryModels()
+      if (!registryRes.ok) return // Registry unavailable — user can fetch manually later
+
+      const registryModels = Array.isArray(registryRes.data) ? registryRes.data : []
+
+      // Capture current providers state at the moment this effect runs.
+      // Don't read from `providers` prop to avoid dependency cycle.
+      setProviders((currentProviders) => {
+        const next = { ...currentProviders }
+        let mutated = false
+
+        for (const key of MANAGED_PROVIDER_KEYS) {
+          const provider = next[key]
+          // Skip if: not enabled, no API key, or already has multiple models
+          if (!provider.enabled || !provider.apiKey.trim() || provider.models.length > 1) {
+            continue
+          }
+
+          // Get all models for this provider from registry
+          const providerModels = registryModels.filter((m) => m.provider === key)
+          if (providerModels.length === 0) continue
+
+          // Merge: keep user's configured model(s) + add all registry models
+          const userModelIds = new Set(provider.models.map((m) => m.id))
+          const merged: ProviderModelEntry[] = [...provider.models]
+
+          for (const regModel of providerModels) {
+            const modelId = regModel.model_id || ''
+            if (!modelId || userModelIds.has(modelId)) continue
+
+            // Extract capabilities from registry metadata
+            const supports = regModel.supports || {}
+            const tags: string[] = []
+            if (supports.vision === true) tags.push('vision')
+            if (supports.web_search === true) tags.push('search')
+            if (supports.reasoning === true) tags.push('reasoning')
+            if (supports.function_calling === true) tags.push('tools')
+
+            merged.push({
+              id: modelId,
+              name: regModel.display_name || undefined,
+              group: regModel.family || undefined,
+              tags: tags.length > 0 ? tags : undefined,
+              enabled: false, // User's onboarding choice stays enabled; registry models start disabled
+            })
+          }
+
+          if (merged.length > provider.models.length) {
+            next[key] = { ...provider, models: merged }
+            mutated = true
+          }
+        }
+
+        // Persist the updated model lists to appConfig if anything changed
+        if (mutated && appConfig) {
+          const nextAppConfig = buildAppModelConfig(appConfig, next, defaultProvider)
+          void window.appConfig.save(nextAppConfig)
+        }
+
+        return mutated ? next : currentProviders
+      })
+    })()
+  }, [loading, appConfig, defaultProvider])
 
   // Persist only the renderer-side UI state (appConfig). The engine YAML
   // is owned by the Providers Management API — every mutation goes
@@ -2900,14 +3391,18 @@ function ModelSection({
     [providers, reportHotReloadError, t],
   )
 
-  // POST /api/v1/providers/{p}/endpoints + append to fallback-chain.
+  // POST /api/v1/providers/{p}/endpoints + append Agent-routable models
+  // to fallback-chain. Image-generation-only models are still persisted as
+  // disabled endpoints so credentials/model metadata remain editable here,
+  // but they are not eligible for Agent LLM routing.
   // When POST returns 400 update_failed (most often because the
   // endpoint already exists on the engine side), we transparently fall
   // back to "just add to chain" instead of surfacing an error.
   //
   // Idempotent: when the endpoint already exists we still PATCH
-  // `disabled=false` so re-enabling a previously-paused model
-  // (the new canonical flow) routes again.
+  // `disabled` to match the model category, so re-enabling a previously
+  // paused Agent model routes again while image-generation models stay
+  // out of the dispatcher.
   const hotCreateEndpoint = useCallback(
     async (
       key: ManagedProviderKey,
@@ -2915,6 +3410,7 @@ function ModelSection({
       maxTokens?: number,
       tags?: string[],
       group?: string,
+      routeToAgent = true,
     ): Promise<void> => {
       // Guard: the engine rejects POST endpoint when the provider entry
       // doesn't exist. Create it first if needed.
@@ -2930,8 +3426,10 @@ function ModelSection({
       } = {
         name: modelId,
         model: modelId,
-        // Explicitly mark active so the dispatcher routes immediately
-        // (engine default is also false; we send it for clarity).
+        // Enabled in the model list means the endpoint is available.
+        // routeToAgent below only controls whether it enters the chat
+        // fallback chain; image-generation endpoints stay available for
+        // image_generate without becoming answer-model fallbacks.
         disabled: false,
       }
       if (typeof maxTokens === 'number' && maxTokens > 0) payload.max_tokens = maxTokens
@@ -2950,10 +3448,9 @@ function ModelSection({
         const list = await window.agentApi.listEndpoints(key)
         if (list.ok && list.data.endpoints.some((e) => e.name === modelId)) {
           endpointReady = true
-          // Endpoint already on engine — make sure it's not paused.
-          // The user clicked enable, so reset `disabled=false`. Forward
-          // group too — this is still an enable path, so empty means
-          // "no group requested" (not a 3-state clear).
+          // Endpoint already on engine — make sure the enabled model is
+          // available. Forward group too; empty still means "no group
+          // requested" here, not a 3-state clear.
           const patchRes = await window.agentApi.patchEndpoint(key, modelId, {
             disabled: false,
             ...(group !== undefined && group !== '' ? { group } : {}),
@@ -2998,6 +3495,9 @@ function ModelSection({
         }
       }
 
+      void refreshEngineImageGenerationUrls()
+      if (!routeToAgent) return
+
       // After create (or detected-exists), append to chain so the
       // endpoint actually routes. Canonical chain ref separator is `:`
       // (engine 2026-05-14+); this lets endpoint names contain `.`
@@ -3018,7 +3518,7 @@ function ModelSection({
         )
       }
     },
-    [ensureProviderExists, reportHotReloadError],
+    [ensureProviderExists, refreshEngineImageGenerationUrls, reportHotReloadError],
   )
 
   // PATCH /api/v1/providers/{p}/endpoints/{e} { disabled }. The
@@ -3056,8 +3556,9 @@ function ModelSection({
       if (!res.ok && res.status !== 404 && res.status !== 0 && res.error !== 'update_failed') {
         reportHotReloadError(t('models.hotReloadLabels.delete'), res.error || `http_${res.status}`, res.message)
       }
+      void refreshEngineImageGenerationUrls()
     },
-    [reportHotReloadError, t],
+    [refreshEngineImageGenerationUrls, reportHotReloadError, t],
   )
 
   // PATCH /api/v1/providers/{p}/endpoints/{e}. Renames are not
@@ -3081,8 +3582,9 @@ function ModelSection({
       if (!res.ok && res.status !== 404 && res.status !== 0 && res.error !== 'update_failed') {
         reportHotReloadError(t('models.hotReloadLabels.modelUpdate'), res.error || `http_${res.status}`, res.message)
       }
+      void refreshEngineImageGenerationUrls()
     },
-    [reportHotReloadError, t],
+    [refreshEngineImageGenerationUrls, reportHotReloadError, t],
   )
 
   useEffect(() => {
@@ -3222,11 +3724,11 @@ function ModelSection({
       // Promote / demote `defaultProvider` to stay aligned with the
       // enabled set.
       let nextDefault = defaultProvider
-      if (nextEnabled && !Object.values(prev).some((p) => p.enabled)) {
+      if (nextEnabled && isAgentProviderKey(key) && !Object.values(prev).some((p) => p.enabled)) {
         nextDefault = key
       } else if (!nextEnabled && defaultProvider === key) {
         const nextActive = (Object.entries(updated) as Array<[ManagedProviderKey, ProviderConfig]>)
-          .find(([, p]) => p.enabled)
+          .find(([providerKey, p]) => p.enabled && isAgentProviderKey(providerKey))
         if (nextActive) nextDefault = nextActive[0]
       }
       if (nextDefault !== defaultProvider) setDefaultProvider(nextDefault)
@@ -3303,7 +3805,9 @@ function ModelSection({
         }
 
         // 2) Per-model: POST when missing, PATCH disabled=false when
-        //    present-and-paused, skip when already routing.
+        //    present-and-paused. routeToAgent only controls chat fallback
+        //    chain membership; image-generation endpoints must remain
+        //    available for the image_generate tool.
         const endpointMap = new Map<
           string,
           { name: string; disabled?: boolean; in_chain: boolean }
@@ -3312,6 +3816,8 @@ function ModelSection({
         const chainNeedsRefs: string[] = []
         for (const model of previous.models) {
           if (!model.enabled) continue
+          const routeToAgent = isAgentRoutableModel(key, model)
+          const modelType = model.tags?.filter((tag) => VISIBLE_MODEL_TYPE_TOKENS.has(tag)) ?? []
           const ep = endpointMap.get(model.id)
           if (!ep) {
             const postRes = await window.agentApi.createEndpoint(key, {
@@ -3322,8 +3828,11 @@ function ModelSection({
             if (!postRes.ok && postRes.status !== 404 && postRes.status !== 0) {
               if (postRes.status === 400 && /exist/i.test(postRes.message || '')) {
                 // race: another caller created it — make sure it's
-                // not paused.
-                await window.agentApi.patchEndpoint(key, model.id, { disabled: false })
+                // in the route state this model type expects.
+                await window.agentApi.patchEndpoint(key, model.id, {
+                  disabled: false,
+                  ...(modelType.length > 0 ? { model_type: modelType } : {}),
+                })
               } else {
                 reportHotReloadError(
                   t('models.hotReloadLabels.modelCreate'),
@@ -3333,26 +3842,32 @@ function ModelSection({
                 continue
               }
             }
+            if (postRes.ok && modelType.length > 0) {
+              await window.agentApi.patchEndpoint(key, model.id, { model_type: modelType })
+            }
             // Engine doesn't auto-chain newly created endpoints —
             // collect refs and PUT them in one chain update at the end.
-            chainNeedsRefs.push(`${key}:${model.id}`)
-          } else if (ep.disabled === true) {
-            const patchRes = await window.agentApi.patchEndpoint(key, model.id, {
-              disabled: false,
-            })
-            if (!patchRes.ok && patchRes.status !== 404 && patchRes.status !== 0
-                && patchRes.error !== 'update_failed') {
-              reportHotReloadError(
-                t('models.hotReloadLabels.enable'),
-                patchRes.error || `http_${patchRes.status}`,
-                patchRes.message,
-              )
+            if (routeToAgent) chainNeedsRefs.push(`${key}:${model.id}`)
+          } else {
+            const patchBody: { disabled?: boolean; model_type?: string[] } = {}
+            if (ep.disabled === true) patchBody.disabled = false
+            if (modelType.length > 0) patchBody.model_type = modelType
+            if (Object.keys(patchBody).length > 0) {
+              const patchRes = await window.agentApi.patchEndpoint(key, model.id, patchBody)
+              if (
+                !patchRes.ok
+                && patchRes.status !== 404
+                && patchRes.status !== 0
+                && patchRes.error !== 'update_failed'
+              ) {
+                reportHotReloadError(
+                  t('models.hotReloadLabels.enable'),
+                  patchRes.error || `http_${patchRes.status}`,
+                  patchRes.message,
+                )
+              }
             }
-            if (!ep.in_chain) chainNeedsRefs.push(`${key}:${model.id}`)
-          } else if (!ep.in_chain) {
-            // Already enabled engine-side but somehow not in chain
-            // (e.g. yaml-edited). Just queue the chain append.
-            chainNeedsRefs.push(`${key}:${model.id}`)
+            if (routeToAgent && !ep.in_chain) chainNeedsRefs.push(`${key}:${model.id}`)
           }
         }
 
@@ -3390,6 +3905,22 @@ function ModelSection({
             res.error || `http_${res.status}`,
             res.message,
           )
+          return
+        }
+        const agent = await window.agentApi.getAgentConfig()
+        if (
+          agent.ok
+          && typeof agent.data?.image_generation === 'string'
+          && agent.data.image_generation.startsWith(`${key}:`)
+        ) {
+          const patch = await window.agentApi.patchAgentConfig({ image_generation: '' })
+          if (!patch.ok && patch.status !== 404 && patch.status !== 0) {
+            reportHotReloadError(
+              t('models.hotReloadLabels.update'),
+              patch.error || `http_${patch.status}`,
+              patch.message,
+            )
+          }
         }
       })()
     }
@@ -3495,11 +4026,14 @@ function ModelSection({
         apiKey: currentProvider.apiKey.trim(),
       })
       if (!result.ok) {
-        const friendly = result.error === 'network_error'
-          ? t('models.engineError')
-          : result.error === 'timeout'
-            ? t('models.timeout')
-            : t('models.requestFailed', { error: `${result.error}${result.message ? ` (${result.message})` : ''}` })
+        let friendly = t('models.requestFailed', {
+          error: `${result.error}${result.message ? ` (${result.message})` : ''}`,
+        })
+        if (result.error === 'network_error') {
+          friendly = t('models.engineError')
+        } else if (result.error === 'timeout') {
+          friendly = t('models.timeout')
+        }
         setToastNotice({ tone: 'error', message: friendly })
         return
       }
@@ -3525,6 +4059,7 @@ function ModelSection({
         const tags: string[] = []
         if (s.vision === true) tags.push('vision')
         if (s.web_search === true) tags.push('search')
+        if (s.image_generation === true) tags.push('image_generation')
         if (s.reasoning === true) tags.push('reasoning')
         if (s.function_calling === true) tags.push('tools')
         return tags
@@ -3803,6 +4338,31 @@ function ModelSection({
 
     updateProvider(selectedProvider, patch)
 
+    // Skip engine sync when the provider itself isn't enabled yet.
+    //
+    // Without this guard, toggling a model on a disabled provider posts
+    // an endpoint to an engine entry that has no credentials applied,
+    // so the engine bounces the request with a misleading
+    // "API Key is Required" — even when the user already filled (and
+    // successfully tested) the API key in the form (#77).
+    //
+    // The renderer state is still updated above, so the model selection
+    // is remembered. When the user later enables the provider via
+    // handleToggleProviderEnabled, its bulk-sync pass walks
+    // `previous.models` and POSTs every enabled entry to the engine in
+    // one go — so deferring the sync here is loss-free.
+    if (!current.enabled) {
+      if (willEnable) {
+        setToastNotice({
+          tone: 'success',
+          message: t('models.validation.providerDisabledModelSaved', {
+            name: getDisplayName(selectedProvider),
+          }),
+        })
+      }
+      return
+    }
+
     // Hot-reload to the engine. Fire-and-forget; failures surface as toasts.
     // Pass the entry's tags so model_type lands in the engine the same
     // moment the endpoint is created — saves the user from having to
@@ -3816,6 +4376,7 @@ function ModelSection({
         tags,
         // omit empty — POST has no clear semantics.
         previousEntry?.group?.trim() || undefined,
+        isAgentRoutableModel(selectedProvider, previousEntry),
       )
     } else {
       void hotSetEndpointDisabled(selectedProvider, id, true)
@@ -3838,6 +4399,9 @@ function ModelSection({
   }
 
   const selected = providers[selectedProvider]
+  const selectedApiPathSuffix = getApiPathSuffix(getEffectiveEngineType(selectedProvider, selected))
+  const selectedBaseUrl = selected.apiBase?.trim() || PROVIDER_DEFAULT_BASES[selectedProvider] || ''
+  const selectedApiTargetUrl = buildApiTargetUrl(selectedBaseUrl, selectedApiPathSuffix)
   const showCustomProvider = selectedProvider === 'custom'
     || defaultProvider === 'custom'
     || Boolean(
@@ -3847,6 +4411,9 @@ function ModelSection({
       || providers.custom.models.length > 0
     )
   const providerKeys = MANAGED_PROVIDER_KEYS.filter((key) => {
+    // Image-generation providers (doubao/Doubao Seedream, gpt-image) are not
+    // chat models — they belong to the 图片生成 segment, not 对话模型.
+    if (!isAgentProviderKey(key)) return false
     if (key === selectedProvider) return true
     if (key === 'custom' && !showCustomProvider) return false
     if (!searchQuery) return true
@@ -3857,7 +4424,9 @@ function ModelSection({
   // Show the "去配置 Agent LLM 节点" affordance only when the
   // currently-viewed provider is enabled — the prompt is contextual
   // to the row the user is editing, not the global enabled set.
-  const selectedProviderEnabled = Boolean(providers[selectedProvider]?.enabled)
+  const selectedProviderEnabled = Boolean(
+    providers[selectedProvider]?.enabled && isAgentProviderKey(selectedProvider)
+  )
 
   if (loading) {
     return <div className="flex items-center justify-center py-20"><Loader2 size={20} className="animate-spin text-muted-foreground" /></div>
@@ -3880,14 +4449,17 @@ function ModelSection({
         </div>
 
         <div className="flex-1 overflow-y-auto px-1.5 pb-2">
+          {/* ── 对话模型 (text / LLM providers) ── */}
+          <SectionDivider label="对话模型" />
           {providerKeys.map((key) => {
-            const isActive = key === selectedProvider
+            const isActive = selectedKind === 'text' && key === selectedProvider
             const isEnabled = Boolean(providers[key]?.enabled)
 
             return (
               <button
                 key={key}
                 onClick={() => {
+                  setSelectedKind('text')
                   setSelectedProvider(key)
                   setShowApiKey(false)
                   setTestState('idle')
@@ -3922,6 +4494,68 @@ function ModelSection({
               </div>
             </div>
           )}
+
+          {/* ── 图片生成 (image providers) ── */}
+          <SectionDivider label="图片生成" />
+          {imageProviderKeys.map((key) => {
+            const isActive = selectedKind === 'image' && key === selectedExtraKey
+            return (
+              <button
+                key={`image:${key}`}
+                onClick={() => {
+                  setSelectedKind('image')
+                  setSelectedExtraKey(key)
+                }}
+                className={cn(
+                  'w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors mb-0.5',
+                  isActive ? 'bg-accent text-foreground' : 'text-foreground hover:bg-accent/50'
+                )}
+              >
+                <MediaProviderIcon
+                  providerKey={key}
+                  size={28}
+                  fallback={<Image size={28} className="text-muted-foreground" />}
+                />
+                <span className="min-w-0 flex-1 truncate text-sm font-medium">{mediaProviderDisplayName(key)}</span>
+              </button>
+            )
+          })}
+          {imageProviderKeys.length === 0 && (
+            <p className="px-2.5 py-2 text-xs text-muted-foreground">
+              在 config 里添加 imagegen provider 后显示
+            </p>
+          )}
+
+          {/* ── 视频生成 (video providers) ── */}
+          <SectionDivider label="视频生成" />
+          {videoProviderKeys.map((key) => {
+            const isActive = selectedKind === 'video' && key === selectedExtraKey
+            return (
+              <button
+                key={`video:${key}`}
+                onClick={() => {
+                  setSelectedKind('video')
+                  setSelectedExtraKey(key)
+                }}
+                className={cn(
+                  'w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors mb-0.5',
+                  isActive ? 'bg-accent text-foreground' : 'text-foreground hover:bg-accent/50'
+                )}
+              >
+                <MediaProviderIcon
+                  providerKey={key}
+                  size={28}
+                  fallback={<Film size={28} className="text-muted-foreground" />}
+                />
+                <span className="min-w-0 flex-1 truncate text-sm font-medium">{mediaProviderDisplayName(key)}</span>
+              </button>
+            )
+          })}
+          {videoProviderKeys.length === 0 && (
+            <p className="px-2.5 py-2 text-xs text-muted-foreground">
+              在 config 里添加 videogen provider 后显示
+            </p>
+          )}
         </div>
       </div>
 
@@ -3938,6 +4572,15 @@ function ModelSection({
             </div>
           )}
 
+          {selectedKind === 'image' && (
+            <ImageModelSection providerName={selectedExtraKey} />
+          )}
+
+          {selectedKind === 'video' && (
+            <VideoModelSection providerName={selectedExtraKey} />
+          )}
+
+          {selectedKind === 'text' && (
           <div className="rounded-2xl border border-border bg-card shadow-sm">
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-5 border-b border-border">
@@ -4130,8 +4773,7 @@ function ModelSection({
                       {apiBaseValid ? (
                         <p className="mt-2 text-xs text-muted-foreground">
                           {t('models.previewLabel')}
-                          {(selected.apiBase?.trim() || PROVIDER_DEFAULT_BASES[selectedProvider] || '').replace(/\/+$/, '')}
-                          {getApiPathSuffix(getEffectiveEngineType(selectedProvider, selected))}
+                          {selectedApiTargetUrl}
                         </p>
                       ) : (
                         <p className="mt-2 text-xs text-red-500">
@@ -4241,6 +4883,7 @@ function ModelSection({
                               {group.items.map((entry) => {
                                 const isEnabled = Boolean(entry.enabled)
                                 const label = entry.name?.trim() || entry.id
+                                const imageGenerationUrl = engineImageGenerationUrls[`${selectedProvider}:${entry.id}`] || ''
                                 return (
                                   <div
                                     key={entry.id}
@@ -4258,7 +4901,12 @@ function ModelSection({
                                         <div className="ml-2 flex items-center gap-1">
                                           {entry.tags
                                             .map((tagKey) => (
-                                              <ModelTagBadge key={tagKey} tagKey={tagKey} t={t} />
+                                              <ModelTagBadge
+                                                key={tagKey}
+                                                tagKey={tagKey}
+                                                t={t}
+                                                detail={tagKey === 'image_generation' ? imageGenerationUrl : undefined}
+                                              />
                                             ))}
                                         </div>
                                       )}
@@ -4351,8 +4999,9 @@ function ModelSection({
               </div>
             </div>
           </div>
+          )}
 
-          {selectedProviderEnabled && onNavigateToAgents && (
+          {selectedKind === 'text' && selectedProviderEnabled && onNavigateToAgents && (
             <div className="sticky bottom-0 left-0 right-0 z-20 mt-6 -mx-8 px-8 pb-6 pt-3 bg-gradient-to-t from-background via-background/95 to-background/0 pointer-events-none">
               <div className="flex justify-center pointer-events-auto">
                 <button
@@ -6727,6 +7376,504 @@ function SoftwareSection() {
           <Toggle checked={telemetryEnabled && telemetryLoaded} onChange={handleTelemetryToggle} />
         </SettingRow>
       </GroupCard>
+    </div>
+  )
+}
+
+// ─── Video generation models ────────────────────────────────────────────────
+
+const DOUBAO_DEFAULT_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3'
+
+// Built-in image/video provider keys always offered in the model page, even
+// when the active config hasn't declared them yet (OpenAI + 火山引擎/Ark). The
+// backend registers these names too, so a freshly-filled-in provider works
+// immediately after saving.
+const IMAGE_BUILTIN_PROVIDERS = ['openai', 'volcengine']
+const VIDEO_BUILTIN_PROVIDERS = ['volcengine']
+
+// Sensible prefills used when a built-in provider isn't in the active config
+// yet — so the user only has to enter the api_key.
+const IMAGE_PROVIDER_DEFAULTS: Record<
+  string,
+  { baseUrl: string; path: string; endpoints: { name: string; model: string }[] }
+> = {
+  openai: {
+    baseUrl: 'https://api.openai.com',
+    path: '/v1/images/generations',
+    endpoints: [{ name: 'gpt-image', model: 'gpt-image-1' }],
+  },
+  volcengine: {
+    baseUrl: DOUBAO_DEFAULT_BASE_URL,
+    path: '/images/generations',
+    endpoints: [{ name: 'seedream', model: 'doubao-seedream-3-0-t2i-250415' }],
+  },
+}
+const VIDEO_PROVIDER_DEFAULTS: Record<
+  string,
+  { baseUrl: string; endpoints: { name: string; model: string }[] }
+> = {
+  volcengine: {
+    baseUrl: DOUBAO_DEFAULT_BASE_URL,
+    endpoints: [{ name: 'seedance', model: 'doubao-seedance-1-0-lite-i2v-250428' }],
+  },
+}
+
+// Local editable shape for one endpoint row. We keep `name` in the row
+// (rather than as the map key) so the user can rename an endpoint freely
+// without React losing the row's input focus on every keystroke.
+interface VideoEndpointRow {
+  name: string
+  model: string
+}
+
+const IMAGE_DEFAULT_PATH = '/v1/images/generations'
+
+// 图片生成 provider 配置。GET /api/v1/imagegen → 渲染指定 provider 的
+// 凭证 + path + 每个 endpoint 的 model 绑定;编辑后 PATCH /api/v1/imagegen
+// 持久化。结构对齐 VideoModelSection,额外多一个「API 地址 path」字段
+// (videogen 没有 path,imagegen 有)。每个 provider 一个卡片,由
+// ModelSection 左栏选中的 providerName 决定渲染哪一个。
+function ImageModelSection({ providerName }: { providerName: string }) {
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [showApiKey, setShowApiKey] = useState(false)
+  const [toastNotice, setToastNotice] = useState<{ tone: 'error' | 'success'; message: string } | null>(null)
+
+  const [apiKey, setApiKey] = useState('')
+  // Unified「API 地址」= the full endpoint URL (base_url + path joined). The
+  // backend stores it as base_url with an empty path, so split-form configs
+  // (base_url + path) are joined here on load and flattened on save.
+  const [apiUrl, setApiUrl] = useState('')
+  const [endpoints, setEndpoints] = useState<VideoEndpointRow[]>([])
+
+  // Hydrate form state from a GET/PATCH response, scoped to providerName.
+  // Typed structurally rather than via the ambient `ImageGenListing` name
+  // (preload's interfaces aren't visible to the renderer tsconfig — same
+  // reason `ProviderInfo` is referenced structurally throughout this file).
+  const hydrate = useCallback(
+    (listing: {
+      providers?: Record<
+        string,
+        { api_key?: string; base_url?: string; path?: string; endpoints?: Record<string, { model?: string }> }
+      >
+    }) => {
+      const prov = listing.providers?.[providerName]
+      if (prov) {
+        setApiKey(prov.api_key ?? '')
+        setApiUrl((prov.base_url ?? '') + (prov.path ?? ''))
+        setEndpoints(
+          Object.entries(prov.endpoints ?? {}).map(([name, info]) => ({
+            name,
+            model: info?.model ?? '',
+          }))
+        )
+        return
+      }
+      // Not in the active config yet — prefill built-in defaults so the user
+      // only needs to enter the api_key (火山引擎/openai).
+      const d = IMAGE_PROVIDER_DEFAULTS[providerName]
+      setApiKey('')
+      setApiUrl(d ? d.baseUrl + d.path : '')
+      setEndpoints(d ? d.endpoints.map((e) => ({ ...e })) : [])
+    },
+    [providerName]
+  )
+
+  useEffect(() => {
+    setLoading(true)
+    void (async () => {
+      try {
+        const res = await window.agentApi.listImageProviders()
+        if (res.ok) {
+          hydrate(res.data)
+        } else {
+          setToastNotice({ tone: 'error', message: res.message || res.error })
+        }
+      } catch {
+        setToastNotice({ tone: 'error', message: '加载失败' })
+      } finally {
+        setLoading(false)
+      }
+    })()
+  }, [hydrate])
+
+  // Auto-dismiss toast — mirrors ModelSection's 2.6s budget.
+  useEffect(() => {
+    if (!toastNotice) return
+    const timer = window.setTimeout(() => setToastNotice(null), 2600)
+    return () => window.clearTimeout(timer)
+  }, [toastNotice])
+
+  const updateEndpoint = (index: number, patch: Partial<VideoEndpointRow>) => {
+    setEndpoints((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)))
+  }
+  const addEndpoint = () => setEndpoints((rows) => [...rows, { name: '', model: '' }])
+  const removeEndpoint = (index: number) =>
+    setEndpoints((rows) => rows.filter((_, i) => i !== index))
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      // Skip rows with a blank name; trim everything so stray whitespace
+      // doesn't leak into the yaml. Later duplicate names win (map insert).
+      const endpointsMap: Record<string, { model: string }> = {}
+      for (const row of endpoints) {
+        const name = row.name.trim()
+        if (!name) continue
+        endpointsMap[name] = { model: row.model.trim() }
+      }
+      const res = await window.agentApi.patchImageConfig({
+        providers: {
+          [providerName]: {
+            api_key: apiKey.trim(),
+            base_url: apiUrl.trim(), // full endpoint URL; path flattened in
+            path: '',
+            endpoints: endpointsMap,
+          },
+        },
+      })
+      if (res.ok) {
+        hydrate(res.data)
+        setToastNotice({ tone: 'success', message: '已保存' })
+      } else {
+        setToastNotice({ tone: 'error', message: res.message || res.error })
+      }
+    } catch {
+      setToastNotice({ tone: 'error', message: '保存失败' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) {
+    return <div className="flex items-center justify-center py-20"><Loader2 size={20} className="animate-spin text-muted-foreground" /></div>
+  }
+
+  return (
+    <div>
+      <GroupCard title={`${mediaProviderDisplayName(providerName)} 图片生成`}>
+        {/* API 密钥 */}
+        <div className="py-3.5 border-b border-border">
+          <p className="text-sm font-semibold text-foreground mb-2">API 密钥</p>
+          <div className="relative">
+            <input
+              type={showApiKey ? 'text' : 'password'}
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder={`输入 ${providerName} API Key`}
+              className="h-10 w-full rounded-md border border-border bg-background pl-3 pr-10 text-sm text-foreground outline-none transition-shadow placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+            />
+            <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+              <button
+                onClick={() => setShowApiKey(!showApiKey)}
+                className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+              >
+                {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* API 地址（完整接口 URL） */}
+        <div className="py-3.5 border-b border-border">
+          <p className="text-sm font-semibold text-foreground mb-2">API 地址</p>
+          <input
+            type="text"
+            value={apiUrl}
+            onChange={(e) => setApiUrl(e.target.value)}
+            placeholder={`https://api.openai.com${IMAGE_DEFAULT_PATH}`}
+            className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none transition-shadow placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+          />
+          <p className="mt-1.5 text-xs text-muted-foreground">完整的图片生成接口地址，例如 {`https://api.openai.com${IMAGE_DEFAULT_PATH}`}</p>
+        </div>
+
+        {/* Endpoints */}
+        <div className="py-3.5">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm font-semibold text-foreground">Endpoints</p>
+            <button
+              onClick={addEndpoint}
+              className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-card px-2 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+            >
+              <Plus size={13} /> 添加 endpoint
+            </button>
+          </div>
+          {endpoints.length === 0 ? (
+            <p className="py-2 text-xs text-muted-foreground">暂无 endpoint,点击“添加 endpoint”新增一行。</p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {endpoints.map((row, index) => (
+                <div key={index} className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={row.name}
+                    onChange={(e) => updateEndpoint(index, { name: e.target.value })}
+                    placeholder="endpoint 名称"
+                    className="h-9 flex-1 rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+                  />
+                  <input
+                    type="text"
+                    value={row.model}
+                    onChange={(e) => updateEndpoint(index, { model: e.target.value })}
+                    placeholder="模型 ID"
+                    className="h-9 flex-1 rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+                  />
+                  <button
+                    onClick={() => removeEndpoint(index)}
+                    className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-status-disconnected"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </GroupCard>
+
+      <div className="flex justify-end">
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="inline-flex h-9 items-center gap-1.5 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+        >
+          {saving && <Loader2 size={14} className="animate-spin" />}
+          {saving ? '保存中…' : '保存'}
+        </button>
+      </div>
+
+      {toastNotice && (
+        <NoticeToast
+          tone={toastNotice.tone}
+          message={toastNotice.message}
+          position="top"
+          anchor="viewport"
+        />
+      )}
+    </div>
+  )
+}
+
+// 视频生成 provider 配置。GET /api/v1/videogen → 渲染指定 provider 卡片;
+// 编辑后通过 PATCH /api/v1/videogen 持久化。结构刻意对齐 ModelSection:
+// loading spinner + NoticeToast 反馈 + 密码框 show/hide。providerName 由
+// ModelSection 左栏选中的视频 provider 决定。
+
+function VideoModelSection({ providerName }: { providerName: string }) {
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [showApiKey, setShowApiKey] = useState(false)
+  const [toastNotice, setToastNotice] = useState<{ tone: 'error' | 'success'; message: string } | null>(null)
+
+  const [apiKey, setApiKey] = useState('')
+  const [baseUrl, setBaseUrl] = useState('')
+  const [endpoints, setEndpoints] = useState<VideoEndpointRow[]>([])
+
+  // Hydrate form state from a GET/PATCH response, scoped to providerName.
+  // Typed structurally rather than via the ambient `VideoGenListing` name
+  // (preload's interfaces aren't visible to the renderer tsconfig — same
+  // reason `ProviderInfo` is referenced structurally throughout this file).
+  const hydrate = useCallback(
+    (listing: {
+      providers?: Record<
+        string,
+        { api_key?: string; base_url?: string; endpoints?: Record<string, { model?: string }> }
+      >
+    }) => {
+      const prov = listing.providers?.[providerName]
+      if (prov) {
+        setApiKey(prov.api_key ?? '')
+        setBaseUrl(prov.base_url ?? '')
+        setEndpoints(
+          Object.entries(prov.endpoints ?? {}).map(([name, info]) => ({
+            name,
+            model: info?.model ?? '',
+          }))
+        )
+        return
+      }
+      // Not in the active config yet — prefill built-in defaults (火山引擎).
+      const d = VIDEO_PROVIDER_DEFAULTS[providerName]
+      setApiKey('')
+      setBaseUrl(d?.baseUrl ?? '')
+      setEndpoints(d ? d.endpoints.map((e) => ({ ...e })) : [])
+    },
+    [providerName]
+  )
+
+  useEffect(() => {
+    setLoading(true)
+    void (async () => {
+      try {
+        const res = await window.agentApi.listVideoProviders()
+        if (res.ok) {
+          hydrate(res.data)
+        } else {
+          setToastNotice({ tone: 'error', message: res.message || res.error })
+        }
+      } catch {
+        setToastNotice({ tone: 'error', message: '加载失败' })
+      } finally {
+        setLoading(false)
+      }
+    })()
+  }, [hydrate])
+
+  // Auto-dismiss toast — mirrors ModelSection's 2.6s budget.
+  useEffect(() => {
+    if (!toastNotice) return
+    const timer = window.setTimeout(() => setToastNotice(null), 2600)
+    return () => window.clearTimeout(timer)
+  }, [toastNotice])
+
+  const updateEndpoint = (index: number, patch: Partial<VideoEndpointRow>) => {
+    setEndpoints((rows) => rows.map((row, i) => (i === index ? { ...row, ...patch } : row)))
+  }
+  const addEndpoint = () => setEndpoints((rows) => [...rows, { name: '', model: '' }])
+  const removeEndpoint = (index: number) =>
+    setEndpoints((rows) => rows.filter((_, i) => i !== index))
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      // Skip rows with a blank name; trim everything so stray whitespace
+      // doesn't leak into the yaml. Later duplicate names win (map insert).
+      const endpointsMap: Record<string, { model: string }> = {}
+      for (const row of endpoints) {
+        const name = row.name.trim()
+        if (!name) continue
+        endpointsMap[name] = { model: row.model.trim() }
+      }
+      // Patch shape matches the ambient `VideoGenPatchPayload`; passed
+      // inline so it's structurally checked at the call site without
+      // naming the (renderer-invisible) type.
+      const res = await window.agentApi.patchVideoConfig({
+        providers: {
+          [providerName]: {
+            api_key: apiKey.trim(),
+            base_url: baseUrl.trim(),
+            endpoints: endpointsMap,
+          },
+        },
+      })
+      if (res.ok) {
+        hydrate(res.data)
+        setToastNotice({ tone: 'success', message: '已保存' })
+      } else {
+        setToastNotice({ tone: 'error', message: res.message || res.error })
+      }
+    } catch {
+      setToastNotice({ tone: 'error', message: '保存失败' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) {
+    return <div className="flex items-center justify-center py-20"><Loader2 size={20} className="animate-spin text-muted-foreground" /></div>
+  }
+
+  return (
+    <div>
+      <GroupCard title={`${mediaProviderDisplayName(providerName)} 视频生成`}>
+        {/* API 密钥 */}
+        <div className="py-3.5 border-b border-border">
+          <p className="text-sm font-semibold text-foreground mb-2">API 密钥</p>
+          <div className="relative">
+            <input
+              type={showApiKey ? 'text' : 'password'}
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder={`输入 ${providerName} API Key`}
+              className="h-10 w-full rounded-md border border-border bg-background pl-3 pr-10 text-sm text-foreground outline-none transition-shadow placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+            />
+            <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+              <button
+                onClick={() => setShowApiKey(!showApiKey)}
+                className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+              >
+                {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* API 地址 */}
+        <div className="py-3.5 border-b border-border">
+          <p className="text-sm font-semibold text-foreground mb-2">API 地址</p>
+          <input
+            type="text"
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+            placeholder={DOUBAO_DEFAULT_BASE_URL}
+            className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none transition-shadow placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+          />
+          <p className="mt-1.5 text-xs text-muted-foreground">留空则使用默认地址 {DOUBAO_DEFAULT_BASE_URL}</p>
+        </div>
+
+        {/* Endpoints */}
+        <div className="py-3.5">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm font-semibold text-foreground">Endpoints</p>
+            <button
+              onClick={addEndpoint}
+              className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-card px-2 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+            >
+              <Plus size={13} /> 添加 endpoint
+            </button>
+          </div>
+          {endpoints.length === 0 ? (
+            <p className="py-2 text-xs text-muted-foreground">暂无 endpoint,点击“添加 endpoint”新增一行。</p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {endpoints.map((row, index) => (
+                <div key={index} className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={row.name}
+                    onChange={(e) => updateEndpoint(index, { name: e.target.value })}
+                    placeholder="endpoint 名称"
+                    className="h-9 flex-1 rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+                  />
+                  <input
+                    type="text"
+                    value={row.model}
+                    onChange={(e) => updateEndpoint(index, { model: e.target.value })}
+                    placeholder="模型 ID"
+                    className="h-9 flex-1 rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
+                  />
+                  <button
+                    onClick={() => removeEndpoint(index)}
+                    className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-status-disconnected"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </GroupCard>
+
+      <div className="flex justify-end">
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="inline-flex h-9 items-center gap-1.5 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+        >
+          {saving && <Loader2 size={14} className="animate-spin" />}
+          {saving ? '保存中…' : '保存'}
+        </button>
+      </div>
+
+      {toastNotice && (
+        <NoticeToast
+          tone={toastNotice.tone}
+          message={toastNotice.message}
+          position="top"
+          anchor="viewport"
+        />
+      )}
     </div>
   )
 }
