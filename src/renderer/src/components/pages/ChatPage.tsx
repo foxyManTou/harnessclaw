@@ -9154,9 +9154,21 @@ function ToolCallCard({
             )}
 
             {generatedImages.length > 0 && (
-              <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+              // items-start：每张图按各自宽高比保留高度，避免 grid 默认的
+              // align-items: stretch 把矮图卡片拉到同行最高那张高度。
+              <div className="mt-2 grid grid-cols-2 items-start gap-2 sm:grid-cols-3">
                 {generatedImages.map((image, idx) => {
                   const subtitle = [image.model, image.size].filter(Boolean).join(' · ')
+                  // 解析 metadata 里携带的尺寸字符串成 CSS aspect-ratio：
+                  //   "1024x576" / "1024×576" → "1024 / 576"
+                  //   "16:9"                  → "16 / 9"
+                  // 解析失败（"auto"、未知格式、缺失）就回退到 1:1，保证早期
+                  // 占位高度不至于太怪；图片加载后浏览器会以容器宽度为基准按
+                  // aspect-ratio 排版，object-contain 兜底极端不匹配时不裁切。
+                  const sizeMatch =
+                    image.size?.match(/^(\d+)\s*[x×]\s*(\d+)$/i) ??
+                    image.size?.match(/^(\d+)\s*:\s*(\d+)$/)
+                  const aspectRatio = sizeMatch ? `${sizeMatch[1]} / ${sizeMatch[2]}` : '1 / 1'
                   return (
                     <button
                       key={`${image.path}-${idx}`}
@@ -9171,11 +9183,14 @@ function ToolCallCard({
                       className="group overflow-hidden rounded-xl border border-border bg-accent/45 text-left transition-colors hover:border-primary/60 hover:bg-accent"
                       title={image.prompt || image.fileName}
                     >
-                      <div className="aspect-square w-full overflow-hidden bg-muted">
+                      <div
+                        className="w-full overflow-hidden bg-muted"
+                        style={{ aspectRatio }}
+                      >
                         <img
                           src={localFileUrl(image.path)}
                           alt={image.prompt || image.fileName}
-                          className="h-full w-full object-cover transition-transform group-hover:scale-[1.02]"
+                          className="h-full w-full object-contain transition-transform group-hover:scale-[1.02]"
                           loading="lazy"
                         />
                       </div>
