@@ -50,7 +50,7 @@
     --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
 
     /* 背景色 - 冷调浅灰，科技感 */
-    --background: #F3F5F8;
+    --background: #F7F7F7;
 
     /* 侧边栏/卡片 */
     --card: #FFFFFF;
@@ -145,10 +145,22 @@
   body {
     background-color: var(--background);
     color: var(--foreground);
-    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'PingFang SC', 'Helvetica Neue', sans-serif;
+    font-family: 'Source Han Sans CN', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'PingFang SC', 'Helvetica Neue', sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
+}
+
+/* 对话详情页正文/标题颜色对齐设计稿（#000000 88%）。
+   仅作用于聊天消息正文，不动全局 --foreground。
+   暗色模式回退到 --foreground，避免黑字黑底。 */
+.chat-message-body,
+.chat-message-body :where(p, li, strong, h1, h2, h3, h4, h5, h6) {
+  color: rgba(0, 0, 0, 0.88);
+}
+.dark .chat-message-body,
+.dark .chat-message-body :where(p, li, strong, h1, h2, h3, h4, h5, h6) {
+  color: var(--foreground);
 }
 
 /* 自定义滚动条 */

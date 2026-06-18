@@ -242,6 +242,13 @@ const workspaceAPI = {
       | { ok: true; path: string }
       | { ok: false; error: string; path?: string }
     >,
+  // Reveals a single file in the OS file manager with it selected.
+  // Used by the artifact card's「打开文件所在位置」action.
+  revealFile: (filePath: string) =>
+    ipcRenderer.invoke('workspace:revealFile', filePath) as Promise<
+      | { ok: true; path: string }
+      | { ok: false; error: string; path?: string }
+    >,
 }
 
 // Video Generation Management API types. Mirrors the providers/agent
@@ -476,6 +483,18 @@ const launcherAPI = {
   },
 }
 
+const windowControlsAPI = {
+  minimize: () => ipcRenderer.invoke('window:minimize'),
+  toggleMaximize: () => ipcRenderer.invoke('window:toggleMaximize'),
+  close: () => ipcRenderer.invoke('window:close'),
+  isMaximized: (): Promise<boolean> => ipcRenderer.invoke('window:isMaximized'),
+  onMaximizedChanged: (callback: (maximized: boolean) => void) => {
+    const handler = (_: Electron.IpcRendererEvent, maximized: boolean): void => callback(maximized)
+    ipcRenderer.on('window:maximized-changed', handler)
+    return () => ipcRenderer.removeListener('window:maximized-changed', handler)
+  },
+}
+
 if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('electron', electronAPI)
@@ -495,6 +514,7 @@ if (process.contextIsolated) {
     contextBridge.exposeInMainWorld('workspace', workspaceAPI)
     contextBridge.exposeInMainWorld('agentApi', agentAPI)
     contextBridge.exposeInMainWorld('launcherApi', launcherAPI)
+    contextBridge.exposeInMainWorld('windowControls', windowControlsAPI)
   } catch (error) {
     console.error(error)
   }
@@ -533,4 +553,6 @@ if (process.contextIsolated) {
   window.agentApi = agentAPI
   // @ts-ignore (define in dts)
   window.launcherApi = launcherAPI
+  // @ts-ignore (define in dts)
+  window.windowControls = windowControlsAPI
 }

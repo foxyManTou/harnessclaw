@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
-  Send, Plus, Copy, Check, Trash2,
+  Plus, Copy, Check, Trash2,
   Loader2, Wrench, Brain, AlertCircle, RefreshCw, ChevronDown, ChevronUp,
   FileText, File, Folder, X, ArrowDown, AtSign, GitBranch, ListTodo, Users, MessagesSquare, ChevronLeft, ChevronRight, Search, HelpCircle, FolderOpen, Download,
   Globe, ExternalLink, Pencil, FolderPlus, FolderMinus,
@@ -32,10 +32,13 @@ import { PlanStatusButton } from '../common/PlanStatusButton'
 import { SessionStatsButton } from '../common/SessionStatsButton'
 import { AvatarLightbox } from '../common/AvatarLightbox'
 import { ConfirmDeleteSessionDialog } from '../common/ConfirmDeleteSessionDialog'
-import { ConversationSidePanel } from '../common/ConversationSidePanel'
+import { ConversationSidePanel, type AgentLogEntry, type MessageGroupedLog } from '../common/ConversationSidePanel'
+import { isKnownArtifactExt } from '../../assets/artifact-icons'
 import { SystemNoticeModal, type SystemNotice } from '../common/SystemNoticeModal'
 import emmaAvatar from '../../assets/emma-avatar.svg'
 import emmaText from '../../assets/emma-text.svg'
+import iconAttachFile from '../../assets/icon-attach-file.svg'
+import iconTitleMenu from '../../assets/icon-title-menu.svg'
 import analystAvatar from '../../assets/team/analyst.png'
 import developerAvatar from '../../assets/team/developer.png'
 import lifestyleAvatar from '../../assets/team/lifestyle.png'
@@ -822,9 +825,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
     <div
       ref={messagesViewportRef}
       onScroll={onScroll}
-      className="flex-1 overflow-x-hidden overflow-y-auto px-4 py-5"
+      className="flex-1 overflow-x-hidden overflow-y-auto pl-[70px] pr-[70px] py-5"
     >
-      <div className="mx-auto flex w-full max-w-4xl min-w-0 flex-col gap-5">
+      <div className="flex w-full min-w-0 flex-col gap-5">
         <CollaborationOverview collaboration={collaboration} />
 
         {displayMessages.map((message) => (
@@ -3723,7 +3726,7 @@ function SessionTitleMenu({
               setIsRenaming(false)
             }
           }}
-          className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-0.5 text-lg font-semibold tracking-tight text-foreground outline-none focus:border-primary"
+          className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-0.5 text-[12px] font-medium leading-5 text-[rgba(0,0,0,0.88)] outline-none focus:border-primary"
           aria-label={t('sessions.actions.rename')}
         />
         <AssignProjectDialog
@@ -3744,16 +3747,9 @@ function SessionTitleMenu({
         aria-expanded={open}
         aria-haspopup="menu"
         title={title}
-        className="inline-flex min-w-0 max-w-full items-center gap-3 rounded-md px-1 py-0.5 text-left text-foreground transition-colors hover:bg-muted/60"
+        className="inline-flex min-w-0 max-w-full items-center rounded-md px-1 py-0.5 text-left text-foreground transition-colors hover:bg-muted/60"
       >
-        <h1 className="truncate text-lg font-semibold tracking-tight">{title}</h1>
-        <ChevronDown
-          size={14}
-          className={cn(
-            'flex-shrink-0 text-muted-foreground transition-transform',
-            open && 'rotate-180'
-          )}
-        />
+        <h1 className="truncate text-[12px] font-medium leading-5 text-[rgba(0,0,0,0.88)]">{title}</h1>
       </button>
 
       {open && (
@@ -3823,6 +3819,148 @@ function SessionTitleMenu({
           setConfirmDelete(false)
           onDelete()
         }}
+      />
+    </div>
+  )
+}
+
+/**
+ * Session menu button (three dots) — placed at the top-right of the title bar.
+ * Opens the same dropdown menu as SessionTitleMenu (rename / assign project / delete).
+ */
+function SessionMenuButton({
+  sessionId,
+  title,
+  currentProjectId,
+  onDelete,
+}: {
+  sessionId: string
+  title: string
+  currentProjectId: string | null
+  onDelete: () => void
+}) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const [assignOpen, setAssignOpen] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!containerRef.current) return
+      if (!containerRef.current.contains(event.target as Node)) setOpen(false)
+    }
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleKey)
+    }
+  }, [open])
+
+  useEffect(() => {
+    setAssignOpen(false)
+    setConfirmDelete(false)
+    setOpen(false)
+  }, [sessionId])
+
+  const handleDetachProject = async () => {
+    setOpen(false)
+    await window.db.updateSessionProject(sessionId, null)
+  }
+
+  return (
+    <div ref={containerRef} className="relative flex-shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-label={t('chat.header.sessionMenu')}
+        className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted"
+      >
+        <img
+          src={iconTitleMenu}
+          alt=""
+          className="h-[18px] w-[18px]"
+          aria-hidden="true"
+        />
+      </button>
+
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-[calc(100%+6px)] z-50 w-48 overflow-hidden rounded-xl border border-border bg-card py-1 shadow-lg"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false)
+            }}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
+            disabled
+          >
+            <Pencil size={14} />
+            <span>{t('sessions.actions.rename')}</span>
+          </button>
+          {currentProjectId ? (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => void handleDetachProject()}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
+            >
+              <FolderMinus size={14} />
+              <span>{t('sessions.actions.exitProject')}</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false)
+                setAssignOpen(true)
+              }}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
+            >
+              <FolderPlus size={14} />
+              <span>{t('sessions.actions.joinProject')}</span>
+            </button>
+          )}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false)
+              setConfirmDelete(true)
+            }}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-600 transition-colors hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30"
+          >
+            <Trash2 size={14} />
+            <span>{t('sessions.actions.delete')}</span>
+          </button>
+        </div>
+      )}
+
+      <AssignProjectDialog
+        open={assignOpen}
+        sessionId={sessionId}
+        currentProjectId={currentProjectId}
+        onClose={() => setAssignOpen(false)}
+      />
+      <ConfirmDeleteSessionDialog
+        open={confirmDelete}
+        sessionTitle={title}
+        onConfirm={() => {
+          setConfirmDelete(false)
+          onDelete()
+        }}
+        onClose={() => setConfirmDelete(false)}
       />
     </div>
   )
@@ -3978,6 +4116,28 @@ export function ChatPage() {
       })
     }
   }, [])
+  // 产物 tab（侧边面板）点击工作区文件 → 右侧 FilePreviewDrawer 预览。
+  // 复用 window.files.read 管线，和消息气泡里的 openFilePathPreview 行为一致。
+  const openWorkspaceFilePreview = useCallback(async (path: string, fileName: string) => {
+    try {
+      const result = await window.files.read(path)
+      const resolvedPath = result?.path || path
+      setFilePreview({
+        path: resolvedPath,
+        fileName: fileName || resolvedPath.split(/[\\/]/).pop() || resolvedPath,
+        operation: 'read_file',
+        content: result?.ok && typeof result.content === 'string' ? result.content : '',
+        isBinary: result?.ok ? Boolean(result.isBinary) : false,
+        previewKind:
+          result?.ok && (result.previewKind === 'html' || result.previewKind === 'text')
+            ? result.previewKind
+            : undefined,
+      })
+    } catch (err) {
+      console.error('Failed to preview workspace file:', err)
+      setFilePreview({ path, fileName: fileName || path, operation: 'read_file', content: '' })
+    }
+  }, [])
   const [webPreview, setWebPreview] = useState<WebPreviewData | null>(null)
   const openWebPreview = useCallback((data: WebPreviewData) => {
     if (!data?.url || !/^https?:\/\//i.test(data.url)) return
@@ -4061,14 +4221,12 @@ export function ChatPage() {
   const [showJumpToBottom, setShowJumpToBottom] = useState(false)
   const [harnessclawStatus, setHarnessclawStatus] = useState<HarnessclawStatus>('disconnected')
   const [sessions, setSessions] = useState<SessionItem[]>([])
-  const [sendBurstActive, setSendBurstActive] = useState(false)
   const [dropBurstActive, setDropBurstActive] = useState(false)
   const pasted = usePastedBlocks()
   const messagesViewportRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null)
   const isNearBottomRef = useRef(true)
-  const sendBurstTimerRef = useRef<number | null>(null)
   const dropBurstTimerRef = useRef<number | null>(null)
   const pendingInitialTurn = useRef<{ content: string; attachments: AttachmentItem[]; coordinatorMode?: 'react' | 'plan'; planConfirmation?: 'required' } | null>(
     initialMessage || initialAttachments.length > 0
@@ -4390,6 +4548,172 @@ export function ChatPage() {
       }
     }
     return refs
+  }, [activeSession.messages])
+
+  // 通用模式产物兜底（第二步A）：简单任务（freelancer 等不走 L2 plan 的任务）
+  // 只把产出写进 tasks/<taskId>/meta.json 的 outputs，不会发 ArtifactWrite/promote
+  // 事件，因此抓不到 sessionArtifacts。这里扫工作区所有 meta.json 的 outputs，
+  // 按类型识别成产物卡片，排除 .py 脚本等过程文件，作为通用模式的补充数据源。
+  //
+  // 产物 id 用 `local:` 前缀 + 绝对路径标记，点击时 ChatPage 据此走
+  // openWorkspaceFilePreview（window.files.read 按路径）而非 console fetch。
+  const [workspaceOutputs, setWorkspaceOutputs] = useState<ArtifactRef[]>([])
+  useEffect(() => {
+    let cancelled = false
+    const sid = activeSessionId
+    if (!sid || !window.workspace?.listSession) {
+      setWorkspaceOutputs([])
+      return
+    }
+    // 遍历整个工作区文件树，按已知产物类型扩展名白名单（isKnownArtifactExt，
+    // 与图标映射同源）筛出可展示的产物。白名单天然排除 .py/.sh 脚本、
+    // meta.json/plan.json 等过程文件，无需再单独黑名单。这样不论是最终交付
+    // 产物还是过程中产生的中间产物（freelancer 简单任务直接落盘、不走 promote），
+    // 只要落在工作区且类型在 13 类内，都能在通用模式出现。
+    const collectArtifacts = (nodes: WorkspaceFileNode[], acc: ArtifactRef[], seen: Set<string>) => {
+      for (const node of nodes) {
+        if (node.type === 'dir') {
+          if (node.children) collectArtifacts(node.children, acc, seen)
+          continue
+        }
+        if (!isKnownArtifactExt(node.name)) continue
+        if (seen.has(node.path)) continue
+        seen.add(node.path)
+        acc.push({
+          artifact_id: 'local:' + node.path,
+          name: node.name,
+          size_bytes: typeof node.size === 'number' ? node.size : undefined,
+          uri: node.path,
+        })
+      }
+    }
+    const run = async () => {
+      try {
+        const res = await window.workspace.listSession(sid)
+        if (!res.ok || !res.exists) {
+          if (!cancelled) setWorkspaceOutputs([])
+          return
+        }
+        const refs: ArtifactRef[] = []
+        collectArtifacts(res.tree, refs, new Set<string>())
+        if (!cancelled) setWorkspaceOutputs(refs)
+      } catch (err) {
+        console.error('scan workspace artifacts failed:', err)
+        if (!cancelled) setWorkspaceOutputs([])
+      }
+    }
+    void run()
+    return () => {
+      cancelled = true
+    }
+  }, [activeSessionId, activeSession.messages.length])
+
+  // 通用模式最终产物列表：声明产物（sessionArtifacts）优先，meta.json outputs
+  // 兜底补充。按文件名去重，声明产物已覆盖的同名文件不再重复加入。
+  const generalArtifacts = useMemo<ArtifactRef[]>(() => {
+    const declaredNames = new Set(
+      sessionArtifacts.map((a) => (a.name || a.artifact_id).toLowerCase()),
+    )
+    const extras = workspaceOutputs.filter(
+      (a) => !declaredNames.has((a.name || a.artifact_id).toLowerCase()),
+    )
+    return [...sessionArtifacts, ...extras]
+  }, [sessionArtifacts, workspaceOutputs])
+
+
+  // 遍历所有 message.tools，按 callId 把 call / result 配对成 AgentLogEntry。
+  // v3: 改为按消息分组的结构，展示完整的工具调用树。
+  const sessionMessageGroupedLogs = useMemo<MessageGroupedLog[]>(() => {
+    const groups: MessageGroupedLog[] = []
+
+    for (const message of activeSession.messages) {
+      if (message.role !== 'user' && message.role !== 'assistant') continue
+
+      const byCallId = new Map<string, AgentLogEntry>()
+      const order: string[] = []
+      let seq = 0
+
+      for (const tool of message.tools || []) {
+        if (tool.type !== 'call' && tool.type !== 'result') continue
+        const key = tool.callId || `__noid_${seq++}`
+        if (tool.type === 'call') {
+          if (byCallId.has(key)) continue
+          // description：intent 优先 → 从 content 取文件路径 → content 截断
+          let description = tool.intent || ''
+          if (!description && tool.content) {
+            try {
+              const parsed = JSON.parse(tool.content)
+              const path = parsed?.file_path || parsed?.path || parsed?.command || parsed?.query
+              description = typeof path === 'string' ? path : tool.content.slice(0, 80)
+            } catch {
+              description = tool.content.slice(0, 80)
+            }
+          }
+          byCallId.set(key, {
+            id: key,
+            callId: tool.callId,
+            timestamp: tool.ts,
+            type: 'tool',
+            toolName: tool.name,
+            toolStatus: 'running',
+            description,
+            subagentName: tool.subagent?.label,
+            toolInput: tool.content || undefined,
+          })
+          order.push(key)
+        } else {
+          // result：补全已有 entry；若没配到 call 也建一条
+          const existing = byCallId.get(key)
+          const failed = tool.isError === true || tool.status === 'failed'
+          const cancelled = tool.status === 'cancelled' || tool.status === 'skipped'
+          const toolStatus: AgentLogEntry['toolStatus'] = failed
+            ? 'failed'
+            : cancelled
+              ? 'cancelled'
+              : 'success'
+          if (existing) {
+            existing.toolStatus = toolStatus
+            existing.durationMs = tool.durationMs ?? existing.durationMs
+            existing.errorType = tool.errorType ?? existing.errorType
+            existing.errorMessage = tool.devMessage ?? existing.errorMessage
+            existing.toolOutput = tool.content || existing.toolOutput
+            if (!existing.toolName) existing.toolName = tool.name
+            if (!existing.subagentName) existing.subagentName = tool.subagent?.label
+          } else {
+            byCallId.set(key, {
+              id: key,
+              callId: tool.callId,
+              timestamp: tool.ts,
+              type: 'tool',
+              toolName: tool.name,
+              toolStatus,
+              description: '',
+              durationMs: tool.durationMs,
+              errorType: tool.errorType,
+              errorMessage: tool.devMessage,
+              subagentName: tool.subagent?.label,
+              toolOutput: tool.content || undefined,
+            })
+            order.push(key)
+          }
+        }
+      }
+
+      const entries = order.map((k) => byCallId.get(k)!).sort((a, b) => a.timestamp - b.timestamp)
+
+      // 只添加有工具调用的消息
+      if (entries.length > 0) {
+        groups.push({
+          messageId: message.id,
+          timestamp: message.timestamp,
+          role: message.role as 'user' | 'assistant',
+          contentPreview: message.content.slice(0, 50),
+          entries,
+        })
+      }
+    }
+
+    return groups
   }, [activeSession.messages])
 
   // Display sessions from sessionMap only (user-created or DB-loaded), enriched with server info
@@ -6752,14 +7076,6 @@ export function ChatPage() {
         currentThinking: '',
       }))
     })
-    if (sendBurstTimerRef.current != null) {
-      window.clearTimeout(sendBurstTimerRef.current)
-    }
-    setSendBurstActive(true)
-    sendBurstTimerRef.current = window.setTimeout(() => {
-      setSendBurstActive(false)
-      sendBurstTimerRef.current = null
-    }, 820)
     setInput('')
     setSelectedSkills([])
     setAttachments([])
@@ -6889,9 +7205,6 @@ export function ChatPage() {
 
   useEffect(() => {
     return () => {
-      if (sendBurstTimerRef.current != null) {
-        window.clearTimeout(sendBurstTimerRef.current)
-      }
       if (dropBurstTimerRef.current != null) {
         window.clearTimeout(dropBurstTimerRef.current)
       }
@@ -6905,11 +7218,10 @@ export function ChatPage() {
       {/* Main chat area */}
       <div className="relative flex-1 flex min-w-0 flex-col overflow-hidden">
         {/* Top bar */}
-        <div className="titlebar-drag border-b border-border/70 px-4 py-4 sm:px-6">
-          <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="titlebar-drag pl-[70px] pr-[70px] pt-6 pb-4">
+          <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-foreground">
-                <MessagesSquare size={16} className="flex-shrink-0 text-muted-foreground" />
                 {activeSessionId ? (
                   <SessionTitleMenu
                     sessionId={activeSessionId}
@@ -6918,7 +7230,7 @@ export function ChatPage() {
                     onDelete={handleClearHistory}
                   />
                 ) : (
-                  <h1 className="truncate text-lg font-semibold tracking-tight">{t('chat.newChat')}</h1>
+                  <h1 className="truncate text-[12px] font-medium leading-5 text-[rgba(0,0,0,0.88)]">{t('chat.newChat')}</h1>
                 )}
               </div>
               {activeProjectContext ? (
@@ -6930,19 +7242,18 @@ export function ChatPage() {
 
             {activeSessionId && (
               <div className="flex flex-wrap items-center justify-start gap-2 sm:justify-end">
-                {/* Files button — lists the session's working directory
-                    (`~/.harnessclaw/workspace/session/<sid>`) as a file
-                    tree, with an inline preview pane next to it. Both
-                    panes are visible by default so users land directly
-                    on the workspace view without an extra click. */}
+                <SessionMenuButton
+                  sessionId={activeSessionId}
+                  title={activeSessionPrompt || t('chat.newChat')}
+                  currentProjectId={activeProjectContext?.projectId || null}
+                  onDelete={handleClearHistory}
+                />
+                {/* Files button — hidden per design requirements
                 <SessionWorkspaceFilesButton sessionId={activeSessionId} />
-                {/* Session-level stats popover (context window utilization,
-                    cost, tokens, latency, per sub-agent breakdown).
-                    Polls `/api/v1/sessions/{id}/metrics` on the Console
-                    port every 5s while the popover is open; cost is
-                    computed client-side from a static pricing table
-                    (see Session Metrics API doc §"客户端使用指南"). */}
+                */}
+                {/* Session-level stats popover — hidden per design requirements
                 <SessionStatsButton sessionId={activeSessionId} />
+                */}
               </div>
             )}
           </div>
@@ -7061,8 +7372,8 @@ export function ChatPage() {
             )}
 
             {/* Input area */}
-            <div className="bg-card/45 px-4 py-2.5 backdrop-blur-sm">
-              <div className="mx-auto w-full max-w-4xl">
+            <div className="bg-card/45 pl-[70px] pr-[70px] pt-2.5 backdrop-blur-sm">
+              <div className="w-full">
                 {pendingStepDecision && (
                   <div className="mb-3 rounded-2xl border border-orange-300 bg-orange-50 px-3.5 py-3 dark:border-orange-700/50 dark:bg-orange-950/30">
                     <div className="flex items-start gap-2">
@@ -7243,11 +7554,7 @@ export function ChatPage() {
                       onKeyDown={handleKeyDown}
                       onPaste={pasted.handlePaste}
                       disabled={activeSession.isProcessing}
-                      placeholder={
-                        harnessclawStatus === 'connected'
-                          ? t('chat.composer.placeholderConnected')
-                          : t('chat.composer.placeholderDisconnected')
-                      }
+                      placeholder={t('home.inputPlaceholder')}
                       maxLength={maxLength}
                       className=""
                       rows={1}
@@ -7290,11 +7597,12 @@ export function ChatPage() {
                         <button
                           onClick={handlePickFiles}
                           disabled={activeSession.isProcessing || harnessclawStatus !== 'connected'}
-                          className="inline-flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground transition-colors hover:border-primary hover:text-foreground disabled:opacity-50"
+                          className="inline-flex items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-foreground disabled:opacity-50"
                           title={t('chat.composer.addFilesAria')}
                           aria-label={t('chat.composer.addFilesAria')}
                         >
-                          <Plus size={16} />
+                          <img src={iconAttachFile} alt="" className="h-3 w-3" aria-hidden="true" />
+                          <span>{t('chat.composer.addFilesAria')}</span>
                         </button>
                         <BrowserSessionIndicatorButton
                           session={browserSessionIndicator.session}
@@ -7319,17 +7627,40 @@ export function ChatPage() {
                           <button
                             onClick={handleSend}
                             disabled={!canSend}
-                            className="chat-send-button inline-flex h-11 w-11 items-center justify-center rounded-full bg-foreground text-background transition-opacity hover:opacity-90 disabled:opacity-50 dark:bg-primary dark:text-primary-foreground"
+                            className={cn(
+                              'inline-flex h-7 w-7 items-center justify-center rounded-full transition-all active:scale-95 disabled:opacity-50',
+                              canSend ? 'bg-[#4E5969] hover:opacity-90' : 'bg-[#EEEEEE] hover:opacity-80'
+                            )}
                             aria-label={t('chat.composer.sendAria')}
-                            data-ready={canSend ? 'true' : 'false'}
-                            data-burst={sendBurstActive ? 'true' : undefined}
                           >
-                            <Send size={14} aria-hidden="true" />
+                            <img
+                              src={new URL(
+                                canSend
+                                  ? '../../assets/send-icon-active.svg'
+                                  : '../../assets/send-icon.svg',
+                                import.meta.url
+                              ).href}
+                              alt={t('chat.composer.sendAria')}
+                              className="w-full h-full"
+                            />
                           </button>
                         )}
                       </div>
                     </div>
                   </div>
+                </div>
+                <div className="flex h-6 items-center justify-center">
+                  <p
+                    className="text-center leading-none"
+                    style={{
+                      fontFamily: 'Source Han Sans CN',
+                      fontSize: '10px',
+                      fontWeight: 350,
+                      color: 'rgba(0, 0, 0, 0.45)',
+                    }}
+                  >
+                    {t('chat.composer.aiDisclaimer')}
+                  </p>
                 </div>
               </div>
             </div>
@@ -7339,10 +7670,42 @@ export function ChatPage() {
 
       {/* Right-side panel: logs (plan steps) + artifacts. Default collapsed. */}
       <ConversationSidePanel
-        steps={activeSession.planDraft?.steps || []}
-        artifacts={sessionArtifacts}
+        messageGroupedLogs={sessionMessageGroupedLogs}
+        artifacts={generalArtifacts}
         onSelectArtifact={(artifact) => {
-          void openArtifactPreview(artifact, activeSessionId)
+          // meta.json outputs 兜底产物用 `local:<path>` 标记，走本地文件预览；
+          // 声明产物（有真实 artifact_id）走 console fetch 预览。
+          if (artifact.artifact_id.startsWith('local:')) {
+            const path = artifact.uri || artifact.artifact_id.slice('local:'.length)
+            void openWorkspaceFilePreview(path, artifact.name || path)
+          } else {
+            void openArtifactPreview(artifact, activeSessionId)
+          }
+        }}
+        sessionId={activeSessionId || undefined}
+        onRevealArtifact={(artifact) => {
+          // 「打开」：在系统文件管理器中定位该产物文件。本地产物用
+          // uri/artifact_id 解析出的绝对磁盘路径；声明产物若 uri 是真实路径同样可定位。
+          const path = artifact.artifact_id.startsWith('local:')
+            ? artifact.uri || artifact.artifact_id.slice('local:'.length)
+            : artifact.uri
+          if (!path || path.startsWith('artifact://') || path.startsWith('http')) {
+            console.warn('[reveal] no local path for artifact:', artifact)
+            return
+          }
+          if (!window.workspace?.revealFile) {
+            console.error('[reveal] window.workspace.revealFile unavailable — 需完全重启 yarn dev 让 preload/main 生效')
+            return
+          }
+          void window.workspace
+            .revealFile(path)
+            .then((res) => {
+              if (!res.ok) console.error('[reveal] failed:', res.error, 'path:', path)
+            })
+            .catch((err) => console.error('[reveal] threw:', err, 'path:', path))
+        }}
+        onSelectWorkspaceFile={(path, fileName) => {
+          void openWorkspaceFilePreview(path, fileName)
         }}
       />
 
@@ -7695,6 +8058,7 @@ function MessageBubble({
   const { t, i18n } = useTranslation()
   const [copied, setCopied] = useState(false)
   const [rating, setRating] = useState<'up' | 'down' | null>(null)
+  const [toolsExpanded, setToolsExpanded] = useState(false)
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
   const openFilePathPreview = useCallback(async (path: string) => {
@@ -7919,6 +8283,11 @@ function MessageBubble({
   const shouldShowTimestamp = !message.isStreaming
   const hasRenderableAssistantBody = displaySegments.length > 0 || attachments.length > 0 || !!errorNotice
 
+  // Count tools for collapsing (only for assistant messages)
+  const toolCount = !isUser && !isSystem ? segments.filter((s) =>
+    s.kind === 'tool' || s.kind === 'permission' || s.kind === 'question' || s.kind === 'step_decision'
+  ).length : 0
+
   if (!isUser && !isSystem && !message.isStreaming && !hasRenderableAssistantBody) {
     return null
   }
@@ -7932,9 +8301,9 @@ function MessageBubble({
           : 'mb-1.5 rounded-2xl px-3.5 py-2.5 text-sm',
         'min-w-0 max-w-full overflow-hidden',
         !compact && isUser
-          ? 'rounded-br-sm bg-foreground text-background dark:bg-primary dark:text-primary-foreground'
+          ? 'rounded-br-sm bg-[rgba(218,159,103,0.1)] text-[rgba(0,0,0,0.88)]'
           : !compact
-            ? 'w-full rounded-bl-sm border border-border bg-card text-foreground shadow-sm'
+            ? 'w-full rounded-bl-sm border border-border bg-white text-[rgba(0,0,0,0.88)] shadow-sm'
             : 'text-foreground'
       )}
     >
@@ -8157,7 +8526,9 @@ function MessageBubble({
                   if (item.kind === 'hint') {
                     return renderHint(item.data.content, `hint-${i}-${itemIndex}`)
                   }
+                  // Hide tools unless expanded
                   if (item.kind === 'tool') {
+                    if (!isUser && toolCount > 0 && !toolsExpanded) return null
                     return (
                       <ToolCallCard
                         key={item.call.callId || `${i}-${itemIndex}`}
@@ -8168,6 +8539,7 @@ function MessageBubble({
                       />
                     )
                   }
+                  // Permission, question, step_decision always show (user interaction needed)
                   if (item.kind === 'permission') {
                     return (
                       <PermissionRequestCard
@@ -8327,7 +8699,9 @@ function MessageBubble({
                           if (item.kind === 'hint') {
                             return renderHint(item.data.content, `sub-hint-${i}-${agentIdx}-${itemIndex}`)
                           }
+                          // Hide tools unless expanded
                           if (item.kind === 'tool') {
+                            if (toolCount > 0 && !toolsExpanded) return null
                             return (
                               <ToolCallCard
                                 key={item.call.callId || `sub-tool-${i}-${agentIdx}-${itemIndex}`}
@@ -8338,6 +8712,7 @@ function MessageBubble({
                               />
                             )
                           }
+                          // Permission, question, step_decision always show
                           if (item.kind === 'permission') {
                             return (
                               <PermissionRequestCard
@@ -8403,6 +8778,20 @@ function MessageBubble({
 
         {/* 呼吸闪烁小点已移至会话尾部，与"鎏金"shimmer 文案同行渲染
             (ConversationTimeline 中的 streaming-breathing-dot + chat-thinking-shimmer)。 */}
+
+        {/* 工具调用折叠按钮 */}
+        {!isUser && !isSystem && !message.isStreaming && toolCount > 0 && (
+          <div className="mb-2">
+            <button
+              onClick={() => setToolsExpanded(!toolsExpanded)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-foreground"
+            >
+              <Wrench size={12} />
+              <span>使用了 {toolCount} 个工具</span>
+              {toolsExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+            </button>
+          </div>
+        )}
 
         {/* 点赞点踩 — AI 回复正文下方常显按钮(流式结束后才出现) */}
         {!isUser && !isSystem && !message.isStreaming && hasRenderableAssistantBody && (

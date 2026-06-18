@@ -73,10 +73,13 @@
   },
   "search": {
     "placeholder": "Search actions or recent chats...",
+    "searchConversations": "Search conversations",
     "quickActions": "Quick actions",
     "newSession": "New Session",
+    "newConversation": "New Conversation",
     "newSessionDesc": "Go to home and start a new task.",
     "recent": "Recent",
+    "recentConversations": "Recent Conversations",
     "noRecent": "No matching recent chats",
     "noMatchActions": "No matching actions",
     "close": "Close Search"
@@ -156,10 +159,29 @@
       "protocol": "Protocol Switch"
     },
     "validation": {
+      "apiKey": "API Key",
+      "apiBase": "API Base URL",
+      "models": "Model Selection",
       "missingKey": "{{name}} is missing API key",
       "missingBase": "{{name}} is missing API base URL",
       "noModels": "{{name}} needs at least one model added",
       "noneSelected": "{{name}} needs at least one model selected"
+    },
+    "protocol": {
+      "label": "Protocol Compatibility",
+      "desc": "The protocol format used when writing Custom providers to llm.providers",
+      "openai": "OpenAI Protocol",
+      "anthropic": "Anthropic Protocol"
+    },
+    "actions": {
+      "visitSite": "Visit Official Site",
+      "advanced": "Advanced Settings",
+      "refresh": "Refresh",
+      "delete": "Delete",
+      "edit": "Edit",
+      "add": "Add",
+      "enable": "Enable",
+      "disable": "Disable"
     },
     "persist": {
       "readFailed": "Failed to read model config",
@@ -613,6 +635,7 @@
       "subagentDetails": "Number of details output by current sub-agent",
       "detailContent": "Detailed Content",
       "organizingAnswer": "Agent is organizing the answer",
+      "thinking": "Thinking…",
       "executingPrefix": "Executing",
       "failedSuffix": "failed",
       "doneSuffix": "completed",
@@ -839,7 +862,8 @@
       "quickSwitch": "Quick Switch",
       "jumpToIndex": "Jump to chat {{n}}",
       "chatIndex": "Chat {{n}}",
-      "activeProject": "Project: {{name}}"
+      "activeProject": "Project: {{name}}",
+      "sessionMenu": "Session menu"
     },
     "composer": {
       "stopping": "Stopping current task",
@@ -865,6 +889,7 @@
       "browserCloseAllConfirm": "This will close all current browser windows. Continue?",
       "stopAria": "Stop current task",
       "sendAria": "Send message",
+      "aiDisclaimer": "Content is AI-generated and may be inaccurate",
       "dropToUpload": "Drop to upload files to this session",
       "dropDesc": "Attachments will be included in the current context."
     },
@@ -922,11 +947,45 @@
       "noLogs": "No run logs yet",
       "noLogsDesc": "Run progress will appear here",
       "noArtifacts": "No artifacts yet",
-      "noArtifactsDesc": "Files produced during the run will appear here"
+      "noArtifactsDesc": "Files produced during the run will appear here",
+      "artifactModeAria": "Artifact view mode",
+      "artifactModeGeneral": "General",
+      "artifactModeDev": "Developer",
+      "artifactOpen": "Open",
+      "artifactOpenExternal": "Open in browser",
+      "artifactPreview": "Preview",
+      "expand": "Expand",
+      "collapse": "Collapse",
+      "duration": "Duration:",
+      "error": "Error:",
+      "query": "Query:",
+      "resultCount": "Results:",
+      "links": "Links",
+      "linksTruncated": " ({{count}} total, showing first 5)",
+      "relativeTime": {
+        "justNow": "just now",
+        "secondsAgo": "{{count}}s ago",
+        "minutesAgo": "{{count}}m ago",
+        "hoursAgo": "{{count}}h ago",
+        "daysAgo": "{{count}}d ago"
+      },
+      "errorType": {
+        "invalid_input": "Invalid input",
+        "permission_denied": "Permission denied",
+        "tool_timeout": "Tool timeout",
+        "user_aborted": "User aborted",
+        "rate_limit": "Rate limited",
+        "overloaded": "Overloaded",
+        "model_error": "Model error",
+        "contract_fail": "Contract error",
+        "dependency_fail": "Dependency failed",
+        "internal": "Internal error"
+      }
     }
   },
   "settings": {
     "title": "Settings",
+    "back": "Back",
     "nav": {
       "settings": "Settings",
       "connection": "Connection",
@@ -1031,6 +1090,15 @@
       "primaryProvider": "Primary Provider",
       "imageGenerationProvider": "Image Generation Model",
       "imageGenerationProviderDesc": "Used by image_generate; separate from the primary answer model and fallback chain",
+      "mediaCard": {
+        "apiKey": "API Key",
+        "apiBase": "API Base URL",
+        "imageApiBaseHint": "Full image generation endpoint URL, e.g. {{url}}",
+        "videoApiBaseHint": "Leave empty to use the default URL {{url}}",
+        "endpoints": "Endpoints",
+        "addEndpoint": "Add endpoint",
+        "noEndpoints": "No endpoints yet. Click 'Add endpoint' to add one."
+      },
       "jumpToSettings": "Jump to Settings",
       "fallbackEnabled": "Provider Fallback",
       "fallbackEnabledDesc": "Automatic fallback chain when primary model is unavailable",
@@ -1122,6 +1190,7 @@
       "searchPlaceholder": "Search channels...",
       "sendProgress": "Send Progress",
       "sendToolHints": "Tool Hints",
+      "statusOn": "ON",
       "noChannels": "No channels found",
       "config": "Configuration",
       "names": {
@@ -1162,7 +1231,12 @@
         "allowFrom": "Allow From",
         "groupAllowFrom": "Group Allow From",
         "host": "Host",
-        "port": "Port"
+        "port": "Port",
+        "bridgeUrl": "Bridge URL",
+        "baseUrl": "Base URL",
+        "socketUrl": "Socket URL",
+        "socketPath": "Socket Path",
+        "webhookPath": "Webhook Path"
       },
       "hints": {
         "commaSeparated": "Multiple values separated by commas",
@@ -1427,7 +1501,9 @@
       },
       "viewModes": {
         "parsed": "Parsed",
-        "raw": "Raw"
+        "raw": "Raw",
+        "message": "Message",
+        "metadata": "Metadata"
       },
       "notices": {
         "openDirSuccess": "Opened log directory: {{path}}",
@@ -1469,6 +1545,7 @@
         "save": "Save"
       },
       "fields": {
+        "apiKey": "API Key",
         "apiKeyPlaceholder": "Enter API Key",
         "getKeyHere": "Click here to get a key",
         "iflyConsoleHint": "Visit the iFlytek Open Platform console",
@@ -1539,16 +1616,55 @@
     "intro": {
       "heading": "Hi, I'm Emma, your personal secretary. I can help you",
       "categories": {
-        "0": "Daily Office",
-        "1": "Coding",
-        "2": "Planning",
-        "3": "Document Management",
-        "4": "Computer Control"
-      },
-      "cards": [
-        { "title": "Turn this week's meeting notes into a to-do list", "description": "Done — I split the notes into 6 tasks ordered by due date. Want me to sync them to your calendar?" },
-        { "title": "Hey, what do these feature menus do?", "description": "I'm great with collaborative development and workflows. Tell me a goal and I'll break it into steps, call the right tools, and report progress as I go." }
-      ]
+        "0": {
+          "label": "Daily Office",
+          "cards": [
+            {
+              "title": "Help me come up with an engaging title for this blog post",
+              "description": [
+                "Got it, boss — let me take a look at the blog content first.",
+                "Wow, this is a great post! The take on super-team collaboration really resonates. How about \"The Super Team Playbook\" as the title?"
+              ]
+            }
+          ]
+        },
+        "1": {
+          "label": "Coding",
+          "cards": [
+            {
+              "title": "Help me write a Python web scraper",
+              "description": "Sure — I'll start by checking the target site's structure, then pick the right library for the job."
+            }
+          ]
+        },
+        "2": {
+          "label": "Planning",
+          "cards": [
+            {
+              "title": "Help me plan this week's work",
+              "description": "Sure — let me check your calendar and to-dos first, then prioritize accordingly."
+            }
+          ]
+        },
+        "3": {
+          "label": "Document Management",
+          "cards": [
+            {
+              "title": "Help me organize these documents",
+              "description": "Sure — I'll group them by type and date."
+            }
+          ]
+        },
+        "4": {
+          "label": "Computer Control",
+          "cards": [
+            {
+              "title": "Open VS Code for me",
+              "description": "Sure, opening VS Code now."
+            }
+          ]
+        }
+      }
     },
     "providerLabel": "Model",
     "providerPlaceholder": "Please select",
@@ -1605,13 +1721,65 @@
       "disconnectedDesc": "It's okay to write down your thoughts first; you can continue once the connection is complete."
     },
     "dropToFiles": "Drop to add files",
-    "inputPlaceholder": "Enter your question, goal or next step, I'll take it from here.",
+    "inputPlaceholder": "Enter a task and I'll get it done for you~",
     "addFiles": "Add Files",
     "planMode": "Plan Mode",
     "planModeEnabled": "Plan Mode enabled: this query will be executed in explicit steps",
     "planModeDisabled": "Click to enable Plan Mode (recommended for multi-step, complex tasks)",
     "shortcutHint": "Enter to send, Shift + Enter for new line",
-    "send": "Send"
+    "send": "Send",
+    "title": "Emma is super useful",
+    "welcomeHint": "Drop your questions, goals or files here, then start a new conversation right away.",
+    "categories": {
+      "recommend": "Recommended",
+      "办公提效": "Productivity",
+      "电脑设置": "PC Setup",
+      "学习助手": "Study Helper",
+      "日常生活": "Daily Life",
+      "休息娱乐": "Leisure"
+    },
+    "cases": {
+      "meeting-notes": {
+        "title": "📝 Meeting Notes Helper",
+        "content": "Auto-organize meeting recordings/transcripts into structured notes"
+      },
+      "project-overview": {
+        "title": "🔍 Quick Project Overview",
+        "content": "Quickly grasp a new project's architecture, modules and tech stack"
+      },
+      "competitor-research": {
+        "title": "📊 Competitor Research Report",
+        "content": "Auto-collect info on multiple products and generate a comparison"
+      },
+      "weekly-report": {
+        "title": "📅 Personal Weekly Report",
+        "content": "Auto-scan work records and generate a structured weekly report"
+      },
+      "doc-batch": {
+        "title": "📄 Email/Doc Batch Processing",
+        "content": "Batch-extract info from PDFs/contracts and summarize into tables"
+      },
+      "pc-checkup": {
+        "title": "🔧 PC Checkup & Optimization",
+        "content": "Diagnose system health and provide optimization suggestions"
+      },
+      "study-coach": {
+        "title": "📚 Study Material Coach",
+        "content": "Tailor a learning path for you and aggregate quality resources"
+      },
+      "travel-planner": {
+        "title": "✈️ Travel Planning Assistant",
+        "content": "From spot recommendations to itinerary, one-stop travel planning"
+      },
+      "ai-fortune": {
+        "title": "🔮 AI Fortune Teller",
+        "content": "Tarot/horoscope/I Ching, generate your personalized fortune reading"
+      },
+      "mini-game": {
+        "title": "🎮 Mini Game Generator",
+        "content": "Generate a playable web game from a single sentence"
+      }
+    }
   },
   "team": {
     "title": "Agent Team",

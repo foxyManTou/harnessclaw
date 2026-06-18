@@ -463,8 +463,8 @@ export function Sidebar() {
     'flex items-center rounded-lg transition-colors flex-shrink-0',
     expanded ? 'w-full gap-2.5 px-3 py-2.5' : 'w-11 h-11 justify-center',
     active
-      ? 'bg-accent text-foreground'
-      : 'text-foreground/78 hover:text-foreground hover:bg-accent'
+      ? 'bg-[rgba(226,226,226,0.46)] text-[#222529]'
+      : 'text-[#222529]/78 hover:text-[#222529] hover:bg-[rgba(226,226,226,0.20)]'
   )
 
   const bottomItemCls = cn(
@@ -576,7 +576,7 @@ export function Sidebar() {
     >
       <Search size={18} className="flex-shrink-0" aria-hidden="true" />
       {expanded && (
-        <span className="text-sm font-medium">{t('sidebar.search')}</span>
+        <span className="text-sm font-medium leading-5">{t('sidebar.search')}</span>
       )}
     </button>
   )
@@ -655,7 +655,7 @@ export function Sidebar() {
                         )
                       })()}
                       {expanded && (
-                        <span className="flex flex-1 items-center text-sm font-medium">
+                        <span className="flex flex-1 items-center text-sm font-medium leading-5 tracking-[0px]">
                           {item.label}
                           {item.path === '/x-lab' && (
                             <img src={betaBadge} alt="BETA" className="ml-auto h-4 object-contain" />
@@ -675,7 +675,8 @@ export function Sidebar() {
             <div className="mt-6 flex min-h-0 w-full flex-1 flex-col pb-3">
               <button
                 onClick={toggleRecentExpanded}
-                className="mb-2 flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+                className="mb-2 flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-normal text-[#767676] transition-colors hover:bg-accent/50 hover:text-[#767676]"
+                style={{ lineHeight: '24px' }}
                 aria-expanded={recentExpanded}
                 aria-label={recentExpanded ? t('sidebar.recentCollapseAria') : t('sidebar.recentExpandAria')}
               >
@@ -706,7 +707,7 @@ export function Sidebar() {
                   )}
                 >
                   {recentItems.length === 0 ? (
-                    <div className="px-3 py-2 text-xs leading-5 text-muted-foreground">
+                    <div className="px-3 py-2 text-xs leading-5 text-[#767676]">
                       {t('sidebar.noRecent')}
                     </div>
                   ) : (
@@ -716,8 +717,8 @@ export function Sidebar() {
                           className={cn(
                             'group rounded-xl px-1 py-0.5 transition-colors',
                           selectedRecentSessionId === item.id
-                            ? 'bg-accent text-foreground'
-                            : 'text-foreground hover:bg-accent'
+                            ? 'bg-accent text-[#222529]'
+                            : 'text-[#222529] hover:bg-accent'
                         )}
                       >
                         <div className="flex items-center gap-1">
@@ -744,7 +745,7 @@ export function Sidebar() {
                               onClick={() => handleOpenRecentSession(item.id)}
                               className="min-w-0 flex-1 rounded-lg px-2 py-1 text-left"
                             >
-                              <p className="truncate text-sm text-foreground">{item.label}</p>
+                              <p className="truncate text-xs text-[#222529]" style={{ fontWeight: 350, lineHeight: '24px' }}>{item.label}</p>
                             </button>
                           )}
 
@@ -794,7 +795,7 @@ export function Sidebar() {
               )}
             >
               <img src={iconSettings} alt="" className="h-[18px] w-[18px] flex-shrink-0" aria-hidden="true" />
-              <span className="text-sm font-medium">{t('sidebar.settings')}</span>
+              <span className="text-sm font-[350] leading-5 tracking-[0px] text-[#222529]">{t('sidebar.settings')}</span>
             </button>
 
             <button

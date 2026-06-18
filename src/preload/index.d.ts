@@ -830,6 +830,19 @@ export interface LauncherAPI {
   onReset: (callback: () => void) => () => void
 }
 
+// Custom window controls — frameless titlebar buttons (minimize /
+// maximize-restore / close) drawn by the renderer's <WindowControls>.
+// See `windowControlsAPI` in preload/index.ts.
+interface WindowControlsAPI {
+  minimize: () => Promise<void>
+  /** Toggle maximize/restore; resolves with the resulting maximized state. */
+  toggleMaximize: () => Promise<boolean>
+  close: () => Promise<void>
+  isMaximized: () => Promise<boolean>
+  /** Subscribe to maximize-state changes (incl. OS snap). Returns unsubscribe. */
+  onMaximizedChanged: (callback: (maximized: boolean) => void) => () => void
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -849,6 +862,7 @@ declare global {
     workspace: WorkspaceAPI
     agentApi: AgentApiInterface
     launcherApi: LauncherAPI
+    windowControls: WindowControlsAPI
   }
 }
 
@@ -870,6 +884,10 @@ interface WorkspaceAPI {
     | { ok: false; error: string }
   >
   openFolder: (sessionId: string) => Promise<
+    | { ok: true; path: string }
+    | { ok: false; error: string; path?: string }
+  >
+  revealFile: (filePath: string) => Promise<
     | { ok: true; path: string }
     | { ok: false; error: string; path?: string }
   >

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
+import { useTranslation } from 'react-i18next'
 import { FileText } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -25,6 +26,7 @@ export function FilePreviewModal({
   preview: FilePreviewData | null
   onClose: () => void
 }): JSX.Element | null {
+  const { t } = useTranslation()
   const dialogRef = useRef<HTMLDivElement>(null)
 
   // Esc 关闭。
@@ -51,7 +53,7 @@ export function FilePreviewModal({
       style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       role="dialog"
       aria-modal="true"
-      aria-label={preview.fileName || '文件预览'}
+      aria-label={preview.fileName || t('attachments.filePreviewAria')}
     >
       {/* 背景遮罩：点击关闭。 */}
       <div
@@ -90,11 +92,11 @@ export function FilePreviewModal({
                   <FileText size={18} className="text-primary" />
                 </div>
                 {preview.isBinary ? (
-                  <p className="text-sm font-medium text-foreground">二进制文件，无法直接预览</p>
+                  <p className="text-sm font-medium text-foreground">{t('attachments.binaryNoPreview')}</p>
                 ) : (
                   <>
-                    <p className="text-sm font-medium text-foreground">没有可展示的文件内容</p>
-                    <p className="mt-1 text-xs text-muted-foreground">这个文件没有可预览的文本。</p>
+                    <p className="text-sm font-medium text-foreground">{t('attachments.noContent')}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">{t('attachments.noContentHint')}</p>
                   </>
                 )}
               </div>
