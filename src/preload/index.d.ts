@@ -870,6 +870,10 @@ interface WorkspaceAPI {
     | { ok: true; path: string }
     | { ok: false; error: string; path?: string }
   >
+  statFile: (sessionId: string | null, path: string) => Promise<
+    | { ok: true; abs: string; size: number; kind: 'image' | 'other' }
+    | { ok: false; error: string; abs?: string }
+  >
 }
 
 // ArtifactsAPI bridges the renderer to artifacts:fetch (main process

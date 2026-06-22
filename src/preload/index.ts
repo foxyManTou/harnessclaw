@@ -242,6 +242,16 @@ const workspaceAPI = {
       | { ok: true; path: string }
       | { ok: false; error: string; path?: string }
     >,
+  // Existence + kind probe for a path mentioned in assistant text. The
+  // path may be absolute or relative to the session workspace root.
+  // Returns { ok: false } when the path is missing / outside the
+  // workspace / not a file, so the chat renderer can fall back to plain
+  // text without flashing a dead chip.
+  statFile: (sessionId: string | null, path: string) =>
+    ipcRenderer.invoke('workspace:statFile', sessionId, path) as Promise<
+      | { ok: true; abs: string; size: number; kind: 'image' | 'other' }
+      | { ok: false; error: string; abs?: string }
+    >,
 }
 
 // Video Generation Management API types. Mirrors the providers/agent

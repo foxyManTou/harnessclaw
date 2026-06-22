@@ -58,19 +58,49 @@ function resolveTeamAvatar(name?: string): string {
 
 // ─── File-path linkification ────────────────────────────────────────────────
 
-// Match absolute UNIX paths, tilde-prefixed paths and Windows drive paths.
+// Match absolute UNIX paths, tilde-prefixed paths, Windows drive paths, and a
+// short whitelist of well-known *relative* roots that assistants emit when
+// referring to artifacts inside the per-session workspace (most commonly
+// `deliverables/...`). Relative matches are resolved against the active
+// session's workspace root via `window.workspace.statFile`.
 //
-// The leading segment is constrained to a whitelist of well-known filesystem
-// roots so that arbitrary slash-separated labels like `/CRM/Jira/Figma`,
-// `/Marketing/Q3/Plan` or `/Sales/Pipeline` (which are category breadcrumbs,
-// NOT real paths) don't get rendered as clickable FilePathChips. Anything
-// that the OS would actually accept as the start of a path on macOS / Linux
-// (or any drive-prefixed Windows path) is still linkified normally.
+// The absolute-path leading segment is constrained to a whitelist of
+// well-known filesystem roots so that arbitrary slash-separated labels like
+// `/CRM/Jira/Figma`, `/Marketing/Q3/Plan` or `/Sales/Pipeline` (which are
+// category breadcrumbs, NOT real paths) don't get rendered as clickable
+// FilePathChips. Anything that the OS would actually accept as the start of
+// a path on macOS / Linux (or any drive-prefixed Windows path) is still
+// linkified normally.
 //
 // Each match must contain at least one separator segment after the root
-// anchor — bare `/Users` or `~` alone won't match.
-const FILE_PATH_REGEX = /(?:~|\/(?:Users|home|var|tmp|usr|opt|etc|private|Library|Applications|System|mnt|media|dev|proc|sys|srv|root|bin|sbin|run)|[A-Za-z]:[\\/])(?:[\\/][A-Za-z0-9._-]+)+/g
+// anchor — bare `/Users` or `~` alone won't match. Relative roots use a
+// preceding `\b` so `mydeliverables/foo` won't be matched.
+//
+// The segment character class uses Unicode property escapes (`\p{L}` /
+// `\p{N}`) under the `u` flag so non-ASCII file/folder names — Chinese
+// (e.g. `deliverables/AI赋能职场.txt`), Japanese, Arabic, accented Latin,
+// etc. — keep matching past the first non-ASCII byte instead of being
+// truncated mid-name and producing dead chips.
+const FILE_PATH_REGEX = /(?:~|\/(?:Users|home|var|tmp|usr|opt|etc|private|Library|Applications|System|mnt|media|dev|proc|sys|srv|root|bin|sbin|run)|[A-Za-z]:[\\/]|\bdeliverables)(?:[\\/][\p{L}\p{N}._-]+)+/gu
 const FILEPATH_HREF_PREFIX = 'filepath://'
+
+// React context for the active chat session id, used by FilePathChip to
+// resolve relative workspace paths (e.g. `deliverables/cover.png`) against
+// the right per-session directory under `~/.harnessclaw/workspace/session/`.
+// Defaults to `null` for callers that don't render inside a chat session —
+// in that case relative paths simply fall through to the plain-text branch.
+const SessionIdContext = createContext<string | null>(null)
+
+// Module-level cache so re-mounts of the same FilePathChip (e.g. during
+// streaming text updates) don't re-stat the same path. Entries are stable
+// for the app lifetime; if the underlying file is moved/deleted the user
+// typically re-runs the prompt anyway.
+type FilePathStat =
+  | { state: 'pending' }
+  | { state: 'image'; abs: string; size: number }
+  | { state: 'other'; abs: string; size: number }
+  | { state: 'missing' }
+const filePathStatCache = new Map<string, FilePathStat>()
 
 function remarkFilePaths() {
   return (tree: unknown) => {
@@ -100,18 +130,128 @@ function remarkFilePaths() {
       parent.children.splice(index, 1, ...replacements)
       return [SKIP, index + replacements.length]
     })
+
+    // Agents very often wrap a bare file path in backticks (eg.
+    // `` `deliverables/AI与职场.txt` ``). The text-visitor above skips
+    // inline code so shell snippets like `` `cd /tmp && ls` `` don't get
+    // polluted, but that also wipes out the common "path-in-backticks"
+    // pattern. Compromise: if an inlineCode node's *entire* contents are
+    // a single matchable path (no surrounding command / flags / spaces),
+    // replace the inlineCode with a link node so it becomes a real
+    // FilePathChip. Mixed contents stay untouched.
+    visit(tree as never, 'inlineCode', (node: { value: string }, index: number | null, parent: { type: string; children: unknown[] } | null) => {
+      if (!parent || index == null) return
+      const value = node.value.trim()
+      if (!value) return
+      // Reset lastIndex defensively (matchAll on a /g regex doesn't share
+      // state across calls but be explicit) by constructing one match.
+      const matches = [...value.matchAll(FILE_PATH_REGEX)]
+      if (matches.length !== 1) return
+      const match = matches[0]
+      if ((match.index ?? -1) !== 0 || match[0].length !== value.length) return
+      parent.children.splice(index, 1, {
+        type: 'link',
+        url: `${FILEPATH_HREF_PREFIX}${value}`,
+        children: [{ type: 'text', value }],
+      })
+      return [SKIP, index + 1]
+    })
   }
 }
 
 function FilePathChip({ path, onOpen }: { path: string; onOpen: (path: string) => void }) {
+  const sessionId = useContext(SessionIdContext)
+  const cacheKey = `${sessionId || ''}|${path}`
+  const [stat, setStat] = useState<FilePathStat>(
+    () => filePathStatCache.get(cacheKey) || { state: 'pending' },
+  )
+
+  useEffect(() => {
+    const cached = filePathStatCache.get(cacheKey)
+    if (cached && cached.state !== 'pending') {
+      setStat(cached)
+      return
+    }
+    // Preload may not be wired during HMR / first mount — fall back to
+    // "other" so the chip still renders something clickable.
+    if (typeof window === 'undefined' || !window.workspace?.statFile) {
+      const fallback: FilePathStat = { state: 'other', abs: path, size: 0 }
+      filePathStatCache.set(cacheKey, fallback)
+      setStat(fallback)
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await window.workspace.statFile(sessionId, path)
+        if (cancelled) return
+        const next: FilePathStat = res.ok
+          ? res.kind === 'image'
+            ? { state: 'image', abs: res.abs, size: res.size }
+            : { state: 'other', abs: res.abs, size: res.size }
+          : { state: 'missing' }
+        filePathStatCache.set(cacheKey, next)
+        setStat(next)
+      } catch {
+        if (cancelled) return
+        // Network/IPC failure: keep showing the path as text, don't
+        // wedge a permanent dead chip.
+        const next: FilePathStat = { state: 'missing' }
+        filePathStatCache.set(cacheKey, next)
+        setStat(next)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [sessionId, path, cacheKey])
+
   const fileName = path.split(/[\\/]/).pop() || path
+
+  // Path resolved to a real image → embed inline. Wrapped in a button so the
+  // user can still click through to the full preview drawer. `inline-block`
+  // + max-h keeps the image flowing inside its containing paragraph
+  // (instead of forcibly breaking the line) while staying readable.
+  if (stat.state === 'image') {
+    return (
+      <button
+        type="button"
+        onClick={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          onOpen(stat.abs)
+        }}
+        title={path}
+        className="not-prose mx-1 my-1 inline-block max-w-full overflow-hidden rounded-lg border border-border bg-card p-0 align-middle transition-colors hover:border-primary/60"
+      >
+        <img
+          src={localFileUrl(stat.abs)}
+          alt={fileName}
+          loading="lazy"
+          className="block max-h-56 max-w-full rounded-md object-contain"
+        />
+      </button>
+    )
+  }
+
+  // Path probed and confirmed missing (or path-traversal rejection): fall
+  // back to plain text so we don't show a dead chip the user can't open.
+  if (stat.state === 'missing') {
+    return <span className="not-prose font-mono text-[13px] text-foreground">{path}</span>
+  }
+
+  // `pending` or `other`: render the existing clickable chip. On click,
+  // prefer the resolved absolute path (so a relative `deliverables/foo`
+  // still opens via window.files.read in the drawer), falling back to the
+  // raw matched text while the stat probe is in flight.
+  const openTarget = stat.state === 'other' ? stat.abs : path
   return (
     <button
       type="button"
       onClick={(event) => {
         event.preventDefault()
         event.stopPropagation()
-        onOpen(path)
+        onOpen(openTarget)
       }}
       title={path}
       // Force a solid white background + dark text so the chip stays readable
@@ -7062,33 +7202,38 @@ export function ChatPage() {
                   />
                 </div>
               )}
-              <ConversationTimeline
-                collaboration={displayCollaboration}
-                displayMessages={displayMessages}
-                isProcessing={activeSession.isProcessing}
-                isPaused={activeSession.isPaused}
-                isStopping={activeSession.isStopping}
-                currentThinking={activeSession.currentThinking}
-                currentIntent={activeSession.currentIntent}
-                pendingAssistantMessage={pendingAssistantMessage}
-                planDraft={activeSession.planDraft}
-                messagesViewportRef={messagesViewportRef}
-                messagesEndRef={messagesEndRef}
-                onScroll={updateScrollState}
-                onOpenFilePreview={setFilePreview}
-                onPreviewUserImage={openUserImagePreview}
-                onOpenArtifact={(artifactId) => {
-                  const artifact = sessionArtifacts.find((a) => a.artifact_id === artifactId)
-                  if (!artifact) return
-                  void openArtifactPreview(artifact, activeSessionId)
-                }}
-                onRespondPermission={respondPermission}
-                onRespondAskQuestion={respondAskQuestion}
-                onRespondStepDecision={respondStepDecision}
-                onRespondPlan={(planId, approved, options) => {
-                  void respondPlan(activeSessionId, planId, approved, options)
-                }}
-              />
+              {/* SessionIdContext lets FilePathChip resolve relative
+                  workspace paths (`deliverables/...`) against the right
+                  per-session bucket under ~/.harnessclaw/workspace/. */}
+              <SessionIdContext.Provider value={activeSessionId || null}>
+                <ConversationTimeline
+                  collaboration={displayCollaboration}
+                  displayMessages={displayMessages}
+                  isProcessing={activeSession.isProcessing}
+                  isPaused={activeSession.isPaused}
+                  isStopping={activeSession.isStopping}
+                  currentThinking={activeSession.currentThinking}
+                  currentIntent={activeSession.currentIntent}
+                  pendingAssistantMessage={pendingAssistantMessage}
+                  planDraft={activeSession.planDraft}
+                  messagesViewportRef={messagesViewportRef}
+                  messagesEndRef={messagesEndRef}
+                  onScroll={updateScrollState}
+                  onOpenFilePreview={setFilePreview}
+                  onPreviewUserImage={openUserImagePreview}
+                  onOpenArtifact={(artifactId) => {
+                    const artifact = sessionArtifacts.find((a) => a.artifact_id === artifactId)
+                    if (!artifact) return
+                    void openArtifactPreview(artifact, activeSessionId)
+                  }}
+                  onRespondPermission={respondPermission}
+                  onRespondAskQuestion={respondAskQuestion}
+                  onRespondStepDecision={respondStepDecision}
+                  onRespondPlan={(planId, approved, options) => {
+                    void respondPlan(activeSessionId, planId, approved, options)
+                  }}
+                />
+              </SessionIdContext.Provider>
               <ConversationQuickNav
                 displayMessages={displayMessages}
                 messagesViewportRef={messagesViewportRef}
@@ -8019,7 +8164,24 @@ function MessageBubble({
             components={{
               a: ({ href, children, ...props }) => {
                 if (typeof href === 'string' && href.startsWith(FILEPATH_HREF_PREFIX)) {
-                  const path = href.slice(FILEPATH_HREF_PREFIX.length)
+                  // `mdast-util-to-hast` runs `normalizeUri()` on every link
+                  // url before it reaches us, which percent-encodes any
+                  // non-ASCII byte (eg. `AI与职场.txt` →
+                  // `AI%E4%B8%8E%E8%81%8C%E5%9C%BA.txt`). Decode back to the
+                  // raw path so the chip text, the `workspace:statFile` IPC
+                  // and the `window.files.read` open path all see real
+                  // filenames instead of `%XX` strings. `decodeURI` is the
+                  // exact inverse of `normalizeUri` (which uses
+                  // `encodeURIComponent` per non-ASCII byte) for the
+                  // path-portion characters we produce here.
+                  const rawPath = href.slice(FILEPATH_HREF_PREFIX.length)
+                  let path = rawPath
+                  try {
+                    path = decodeURI(rawPath)
+                  } catch {
+                    // Malformed percent-encoding — keep the raw form so the
+                    // chip still renders something instead of throwing.
+                  }
                   return <FilePathChip path={path} onOpen={openFilePathPreview} />
                 }
                 // `artifact://art_xxx` links produced by agents must not be

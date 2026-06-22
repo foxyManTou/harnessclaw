@@ -1,5 +1,5 @@
 import { app, shell, BrowserWindow, ipcMain, dialog, nativeImage, screen, globalShortcut, protocol, net } from 'electron'
-import { basename, dirname, extname, isAbsolute, join } from 'path'
+import { basename, dirname, extname, isAbsolute, join, resolve as resolvePath, sep as pathSep } from 'path'
 import { homedir } from 'os'
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, copyFileSync } from 'fs'
 import { spawn, execFileSync, ChildProcess } from 'child_process'
@@ -2748,6 +2748,78 @@ app.whenReady().then(() => {
         return { ok: false, error: result, path: root }
       }
       return { ok: true, path: root }
+    } catch (error) {
+      return { ok: false, error: String((error as Error)?.message || error) }
+    }
+  })
+
+  // workspace:statFile — light-weight existence + kind probe for a path
+  // mentioned inside an assistant reply. Used by the chat markdown
+  // renderer to decide whether a `deliverables/<file>` (or absolute)
+  // path should be embedded as an inline image / linked file chip /
+  // plain text fallback.
+  //
+  // `pathInput` may be:
+  //   - absolute: `/Users/...`, `~/...`, `C:\...` → used as-is after
+  //     tilde-expansion
+  //   - relative: anything else, resolved against the per-session
+  //     workspace root `~/.harnessclaw/workspace/session/<sid>`. Any
+  //     `..` segments that would escape the root are rejected.
+  //
+  // Returns `{ ok: false }` for missing files / directories / traversal
+  // attempts so the renderer can fall through to plain text without a
+  // dead chip.
+  ipcMain.handle('workspace:statFile', async (_, rawSessionId: unknown, rawPath: unknown) => {
+    try {
+      if (typeof rawPath !== 'string' || !rawPath.trim()) {
+        return { ok: false, error: 'invalid_path' }
+      }
+      const inputPath = rawPath.trim()
+
+      // Resolve to an absolute disk path.
+      let abs: string
+      if (inputPath.startsWith('~')) {
+        abs = join(homedir(), inputPath.replace(/^~(?=\/|\\|$)/, '').replace(/^~/, ''))
+      } else if (isAbsolute(inputPath)) {
+        abs = inputPath
+      } else {
+        // Relative path → needs a session bucket.
+        if (typeof rawSessionId !== 'string' || !rawSessionId.trim()) {
+          return { ok: false, error: 'invalid_session_id' }
+        }
+        const sid = rawSessionId.trim().replace(/^(?:harnessclaw[:_])?session[:_]?/i, '')
+        const safeSid = sid.replace(/[\\/:*?"<>|]/g, '_')
+        if (!safeSid) {
+          return { ok: false, error: 'invalid_session_id' }
+        }
+        const root = join(homedir(), '.harnessclaw', 'workspace', 'session', safeSid)
+        const joined = resolvePath(root, inputPath)
+        // Anti-traversal: the resolved path must sit inside the session
+        // workspace root. `path.resolve` collapses `..`, so checking
+        // prefix is sufficient. Add the platform separator so `/foo`
+        // doesn't accept `/foobar`.
+        if (joined !== root && !joined.startsWith(root + pathSep)) {
+          return { ok: false, error: 'path_escapes_workspace' }
+        }
+        abs = joined
+      }
+
+      if (!existsSync(abs)) {
+        return { ok: false, error: 'not_found', abs }
+      }
+      const stat = statSync(abs)
+      if (!stat.isFile()) {
+        return { ok: false, error: 'not_a_file', abs }
+      }
+
+      // Coarse kind for the renderer — only `image` triggers inline
+      // embedding today; everything else falls back to the existing
+      // chip + drawer flow.
+      const ext = extname(abs).toLowerCase()
+      const kind: 'image' | 'other' = /^\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/.test(ext)
+        ? 'image'
+        : 'other'
+      return { ok: true, abs, size: stat.size, kind }
     } catch (error) {
       return { ok: false, error: String((error as Error)?.message || error) }
     }
