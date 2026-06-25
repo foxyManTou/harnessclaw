@@ -589,7 +589,7 @@ export function WelcomeModal() {
               <FormField
                 label="Model ID"
                 value={draft.modelId}
-                placeholder="model-id，例：gpt-4o-mini 或 claude-sonnet-4"
+                placeholder={t('welcome.modelIdPlaceholder')}
                 required
                 onChange={(v) => setDraft((d) => ({ ...d, modelId: v }))}
               />

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
-  Send, Plus, Copy, Check, Trash2,
+  Plus, Copy, Check, Trash2,
   Loader2, Wrench, Brain, AlertCircle, RefreshCw, ChevronDown, ChevronUp,
   FileText, File, Folder, X, ArrowDown, AtSign, GitBranch, ListTodo, Users, MessagesSquare, ChevronLeft, ChevronRight, Search, HelpCircle, FolderOpen, Download,
   Globe, ExternalLink, Pencil, FolderPlus, FolderMinus,
@@ -31,29 +31,57 @@ import { PlanDraftCard, type PlanDraftStep } from '../common/PlanDraftCard'
 import { PlanStatusButton } from '../common/PlanStatusButton'
 import { SessionStatsButton } from '../common/SessionStatsButton'
 import { AvatarLightbox } from '../common/AvatarLightbox'
+import { HtmlArtifactView } from '../common/HtmlArtifactView'
 import { ConfirmDeleteSessionDialog } from '../common/ConfirmDeleteSessionDialog'
-import { ConversationSidePanel } from '../common/ConversationSidePanel'
+import { ConversationSidePanel, type AgentLogEntry, type MessageGroupedLog, type AgentTreeNode } from '../common/ConversationSidePanel'
+import { isKnownArtifactExt } from '../../assets/artifact-icons'
 import { SystemNoticeModal, type SystemNotice } from '../common/SystemNoticeModal'
 import emmaAvatar from '../../assets/emma-avatar.svg'
+import alexAvatar from '../../assets/alex-avatar.svg'
+import agentAvatar from '../../assets/agent-avatar.svg'
 import emmaText from '../../assets/emma-text.svg'
+import lilyAvatar from '../../assets/lily-avatar.svg'
+import maryAvatar from '../../assets/mary-avatar.svg'
+import iconAttachFile from '../../assets/icon-attach-file.svg'
+import iconTitleMenu from '../../assets/icon-title-menu.svg'
 import analystAvatar from '../../assets/team/analyst.png'
 import developerAvatar from '../../assets/team/developer.png'
 import lifestyleAvatar from '../../assets/team/lifestyle.png'
 import researcherAvatar from '../../assets/team/researcher.png'
 import writerAvatar from '../../assets/team/writer.png'
+import { getSecretaryForType } from '../../utils/secretaryAssignment'
 
 const TEAM_AVATARS = [analystAvatar, developerAvatar, lifestyleAvatar, researcherAvatar, writerAvatar]
 
+// ─── 从 label/name 推断 agent type ─────────────────────────────────────────
+function inferAgentType(labelOrName?: string): string | undefined {
+  if (!labelOrName) return undefined
+  const lower = labelOrName.toLowerCase()
+
+  if (lower.includes('emma') || lower.includes('leader')) return 'leader'
+  if (lower.includes('freelancer') || lower.includes('alex')) return 'freelancer'
+  if (lower.includes('browser')) return 'browser'
+  if (lower.includes('research')) return 'research'
+  if (lower.includes('file')) return 'file'
+  if (lower.includes('app')) return 'app'
+  if (lower.includes('coding') || lower.includes('code')) return 'coding'
+
+  return undefined
+}
+
 function resolveTeamAvatar(name?: string): string {
   const key = (name || '').toLowerCase()
-  if (/analy|analyst|data|分析|数据/.test(key)) return analystAvatar
-  if (/dev|develop|engineer|coder|code|程序|开发|工程/.test(key)) return developerAvatar
-  if (/life|lifestyle|生活|日常/.test(key)) return lifestyleAvatar
-  if (/research|search|explore|调研|研究|搜索/.test(key)) return researcherAvatar
-  if (/writ|writer|copy|edit|文案|写作|编辑/.test(key)) return writerAvatar
-  let hash = 0
-  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) | 0
-  return TEAM_AVATARS[Math.abs(hash) % TEAM_AVATARS.length]
+  // Emma
+  if (key === 'emma' || key === 'leader') return emmaAvatar
+  // Alex / Freelancer
+  if (key === 'freelancer') return alexAvatar
+  // 其他专业 agent：随机使用 Lily 或 Mary（同一 type 保持一致）
+  if (key) {
+    const secretary = getSecretaryForType(key)
+    return secretary === 'lily' ? lilyAvatar : maryAvatar
+  }
+  // 兜底：通用头像
+  return agentAvatar
 }
 
 // ─── File-path linkification ────────────────────────────────────────────────
@@ -639,6 +667,12 @@ interface SessionState {
    * server's card_id, which is session-deduped upstream).
    */
   systemNotices?: SystemNotice[]
+  /**
+   * v4 (2026-06-22) — Agent 树状日志数据,用于右侧日志面板渲染子秘书层级结构。
+   * 根节点是 Emma(Leader),子节点是各个专业 agent(Browser/Research/File...)。
+   * 由 WebSocket 事件处理器(subagent_start/end, tool_start/end)实时构建。
+   */
+  agentTreeLogs?: import('../common/ConversationSidePanel').AgentTreeNode[]
 }
 
 interface CollaborationCapabilities {
@@ -962,9 +996,9 @@ const ConversationTimeline = memo(function ConversationTimeline({
     <div
       ref={messagesViewportRef}
       onScroll={onScroll}
-      className="flex-1 overflow-x-hidden overflow-y-auto px-4 py-5"
+      className="flex-1 overflow-x-hidden overflow-y-auto pl-[70px] pr-[70px] py-5"
     >
-      <div className="mx-auto flex w-full max-w-4xl min-w-0 flex-col gap-5">
+      <div className="flex w-full min-w-0 flex-col gap-5">
         <CollaborationOverview collaboration={collaboration} />
 
         {displayMessages.map((message) => (
@@ -3735,9 +3769,10 @@ function WorkspaceInlinePreview({ file }: { file: { path: string; name: string }
   const isImage = /^(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/.test(ext)
   const isAudio = /^(mp3|wav|m4a|aac|flac|ogg)$/.test(ext)
   const isVideo = /^(mp4|mov|avi|mkv|webm)$/.test(ext)
-  // HTML 文件改走 <iframe>，让 Chromium 像浏览器一样解析整份文档（含 <head>、
-  // 内联 CSS、<script>、同目录下的相对资源），而不是落到下面的纯文本兜底。
-  const isHtml = ext === 'html' || ext === 'htm'
+  // .html/.htm 产物：源码即完整 HTML 文档（previewKind 为空，非二进制），
+  // 走双视图组件（渲染 / 源码）。docx 等转出的 previewKind==='html' 是
+  // 语义片段，不在此列。
+  const isHtmlArtifact = (ext === 'html' || ext === 'htm') && !isBinary && previewKind === undefined
   const mediaUrl = isImage || isAudio || isVideo ? localFileUrl(file.path) : null
 
   return (
@@ -3770,18 +3805,8 @@ function WorkspaceInlinePreview({ file }: { file: { path: string; name: string }
           <div className="flex h-full items-center justify-center p-4">
             <video src={mediaUrl} controls className="max-h-full max-w-full rounded-md border border-border" />
           </div>
-        ) : isHtml ? (
-          // .html / .htm：用 <iframe> 直接渲染 file:// URL，相对路径下的 CSS /
-          // JS / 图片都能像在普通浏览器里一样解析。sandbox 限制顶层导航与第
-          // 三方表单提交，allow-scripts + allow-same-origin 让本地脚本与同
-          // 目录资源照常工作。
-          <iframe
-            src={localFileUrl(file.path)}
-            title={file.name}
-            sandbox="allow-scripts allow-same-origin"
-            referrerPolicy="no-referrer"
-            className="h-full w-full border-0 bg-background"
-          />
+        ) : isHtmlArtifact ? (
+          <HtmlArtifactView content={content} />
         ) : previewKind === 'html' ? (
           <div
             className="prose prose-sm max-w-none px-4 py-3 text-foreground dark:prose-invert"
@@ -3906,7 +3931,7 @@ function SessionTitleMenu({
               setIsRenaming(false)
             }
           }}
-          className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-0.5 text-lg font-semibold tracking-tight text-foreground outline-none focus:border-primary"
+          className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-0.5 text-[12px] font-medium leading-5 text-[rgba(0,0,0,0.88)] outline-none focus:border-primary"
           aria-label={t('sessions.actions.rename')}
         />
         <AssignProjectDialog
@@ -3927,16 +3952,9 @@ function SessionTitleMenu({
         aria-expanded={open}
         aria-haspopup="menu"
         title={title}
-        className="inline-flex min-w-0 max-w-full items-center gap-3 rounded-md px-1 py-0.5 text-left text-foreground transition-colors hover:bg-muted/60"
+        className="inline-flex min-w-0 max-w-full items-center rounded-md px-1 py-0.5 text-left text-foreground transition-colors hover:bg-muted/60"
       >
-        <h1 className="truncate text-lg font-semibold tracking-tight">{title}</h1>
-        <ChevronDown
-          size={14}
-          className={cn(
-            'flex-shrink-0 text-muted-foreground transition-transform',
-            open && 'rotate-180'
-          )}
-        />
+        <h1 className="truncate text-[12px] font-medium leading-5 text-[rgba(0,0,0,0.88)]">{title}</h1>
       </button>
 
       {open && (
@@ -4006,6 +4024,148 @@ function SessionTitleMenu({
           setConfirmDelete(false)
           onDelete()
         }}
+      />
+    </div>
+  )
+}
+
+/**
+ * Session menu button (three dots) — placed at the top-right of the title bar.
+ * Opens the same dropdown menu as SessionTitleMenu (rename / assign project / delete).
+ */
+function SessionMenuButton({
+  sessionId,
+  title,
+  currentProjectId,
+  onDelete,
+}: {
+  sessionId: string
+  title: string
+  currentProjectId: string | null
+  onDelete: () => void
+}) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const [assignOpen, setAssignOpen] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!containerRef.current) return
+      if (!containerRef.current.contains(event.target as Node)) setOpen(false)
+    }
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleKey)
+    }
+  }, [open])
+
+  useEffect(() => {
+    setAssignOpen(false)
+    setConfirmDelete(false)
+    setOpen(false)
+  }, [sessionId])
+
+  const handleDetachProject = async () => {
+    setOpen(false)
+    await window.db.updateSessionProject(sessionId, null)
+  }
+
+  return (
+    <div ref={containerRef} className="relative flex-shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-label={t('chat.header.sessionMenu')}
+        className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted"
+      >
+        <img
+          src={iconTitleMenu}
+          alt=""
+          className="h-[18px] w-[18px]"
+          aria-hidden="true"
+        />
+      </button>
+
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-[calc(100%+6px)] z-50 w-48 overflow-hidden rounded-xl border border-border bg-card py-1 shadow-lg"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false)
+            }}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
+            disabled
+          >
+            <Pencil size={14} />
+            <span>{t('sessions.actions.rename')}</span>
+          </button>
+          {currentProjectId ? (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => void handleDetachProject()}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
+            >
+              <FolderMinus size={14} />
+              <span>{t('sessions.actions.exitProject')}</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false)
+                setAssignOpen(true)
+              }}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
+            >
+              <FolderPlus size={14} />
+              <span>{t('sessions.actions.joinProject')}</span>
+            </button>
+          )}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false)
+              setConfirmDelete(true)
+            }}
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-600 transition-colors hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30"
+          >
+            <Trash2 size={14} />
+            <span>{t('sessions.actions.delete')}</span>
+          </button>
+        </div>
+      )}
+
+      <AssignProjectDialog
+        open={assignOpen}
+        sessionId={sessionId}
+        currentProjectId={currentProjectId}
+        onClose={() => setAssignOpen(false)}
+      />
+      <ConfirmDeleteSessionDialog
+        open={confirmDelete}
+        sessionTitle={title}
+        onConfirm={() => {
+          setConfirmDelete(false)
+          onDelete()
+        }}
+        onClose={() => setConfirmDelete(false)}
       />
     </div>
   )
@@ -4161,6 +4321,28 @@ export function ChatPage() {
       })
     }
   }, [])
+  // 产物 tab（侧边面板）点击工作区文件 → 右侧 FilePreviewDrawer 预览。
+  // 复用 window.files.read 管线，和消息气泡里的 openFilePathPreview 行为一致。
+  const openWorkspaceFilePreview = useCallback(async (path: string, fileName: string) => {
+    try {
+      const result = await window.files.read(path)
+      const resolvedPath = result?.path || path
+      setFilePreview({
+        path: resolvedPath,
+        fileName: fileName || resolvedPath.split(/[\\/]/).pop() || resolvedPath,
+        operation: 'read_file',
+        content: result?.ok && typeof result.content === 'string' ? result.content : '',
+        isBinary: result?.ok ? Boolean(result.isBinary) : false,
+        previewKind:
+          result?.ok && (result.previewKind === 'html' || result.previewKind === 'text')
+            ? result.previewKind
+            : undefined,
+      })
+    } catch (err) {
+      console.error('Failed to preview workspace file:', err)
+      setFilePreview({ path, fileName: fileName || path, operation: 'read_file', content: '' })
+    }
+  }, [])
   const [webPreview, setWebPreview] = useState<WebPreviewData | null>(null)
   const openWebPreview = useCallback((data: WebPreviewData) => {
     if (!data?.url || !/^https?:\/\//i.test(data.url)) return
@@ -4244,14 +4426,12 @@ export function ChatPage() {
   const [showJumpToBottom, setShowJumpToBottom] = useState(false)
   const [harnessclawStatus, setHarnessclawStatus] = useState<HarnessclawStatus>('disconnected')
   const [sessions, setSessions] = useState<SessionItem[]>([])
-  const [sendBurstActive, setSendBurstActive] = useState(false)
   const [dropBurstActive, setDropBurstActive] = useState(false)
   const pasted = usePastedBlocks()
   const messagesViewportRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null)
   const isNearBottomRef = useRef(true)
-  const sendBurstTimerRef = useRef<number | null>(null)
   const dropBurstTimerRef = useRef<number | null>(null)
   const pendingInitialTurn = useRef<{ content: string; attachments: AttachmentItem[]; coordinatorMode?: 'react' | 'plan'; planConfirmation?: 'required' } | null>(
     initialMessage || initialAttachments.length > 0
@@ -4575,6 +4755,374 @@ export function ChatPage() {
     return refs
   }, [activeSession.messages])
 
+  // 通用模式产物兜底（第二步A）：简单任务（freelancer 等不走 L2 plan 的任务）
+  // 只把产出写进 tasks/<taskId>/meta.json 的 outputs，不会发 ArtifactWrite/promote
+  // 事件，因此抓不到 sessionArtifacts。这里扫工作区所有 meta.json 的 outputs，
+  // 按类型识别成产物卡片，排除 .py 脚本等过程文件，作为通用模式的补充数据源。
+  //
+  // 产物 id 用 `local:` 前缀 + 绝对路径标记，点击时 ChatPage 据此走
+  // openWorkspaceFilePreview（window.files.read 按路径）而非 console fetch。
+  const [workspaceOutputs, setWorkspaceOutputs] = useState<ArtifactRef[]>([])
+  const [lastWorkspaceScanTime, setLastWorkspaceScanTime] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    const sid = activeSessionId
+    if (!sid || !window.workspace?.listSession) {
+      setWorkspaceOutputs([])
+      return
+    }
+    // 遍历整个工作区文件树，按已知产物类型扩展名白名单（isKnownArtifactExt，
+    // 与图标映射同源）筛出可展示的产物。白名单天然排除 .py/.sh 脚本、
+    // meta.json/plan.json 等过程文件，无需再单独黑名单。这样不论是最终交付
+    // 产物还是过程中产生的中间产物（freelancer 简单任务直接落盘、不走 promote），
+    // 只要落在工作区且类型在 13 类内，都能在通用模式出现。
+    const collectArtifacts = (nodes: WorkspaceFileNode[], acc: ArtifactRef[], seen: Set<string>) => {
+      for (const node of nodes) {
+        if (node.type === 'dir') {
+          if (node.children) collectArtifacts(node.children, acc, seen)
+          continue
+        }
+        if (!isKnownArtifactExt(node.name)) continue
+        if (seen.has(node.path)) continue
+        seen.add(node.path)
+        acc.push({
+          artifact_id: 'local:' + node.path,
+          name: node.name,
+          size_bytes: typeof node.size === 'number' ? node.size : undefined,
+          uri: node.path,
+        })
+      }
+    }
+    const run = async () => {
+      try {
+        const res = await window.workspace.listSession(sid)
+        if (!res.ok || !res.exists) {
+          if (!cancelled) setWorkspaceOutputs([])
+          return
+        }
+        const refs: ArtifactRef[] = []
+        collectArtifacts(res.tree, refs, new Set<string>())
+        console.log('[ChatPage] workspace scan:', { sessionId: sid, fileCount: res.fileCount, artifactsFound: refs.length, refs })
+        if (!cancelled) {
+          setWorkspaceOutputs(refs)
+          setLastWorkspaceScanTime(Date.now())
+        }
+      } catch (err) {
+        console.error('scan workspace artifacts failed:', err)
+        if (!cancelled) setWorkspaceOutputs([])
+      }
+    }
+    void run()
+    return () => {
+      cancelled = true
+    }
+  }, [activeSessionId, activeSession.messages.length, activeSession.isProcessing])
+
+  // 额外的定时刷新：当会话正在处理时，每 3 秒重新扫描一次工作区，
+  // 确保新产生的产物能及时出现在通用模式中
+  useEffect(() => {
+    const sid = activeSessionId
+    if (!sid || !activeSession.isProcessing || !window.workspace?.listSession) {
+      return
+    }
+
+    const intervalId = setInterval(() => {
+      void (async () => {
+        try {
+          const res = await window.workspace.listSession(sid)
+          if (!res.ok || !res.exists) {
+            setWorkspaceOutputs([])
+            return
+          }
+          const refs: ArtifactRef[] = []
+          const collectArtifacts = (nodes: WorkspaceFileNode[], acc: ArtifactRef[], seen: Set<string>) => {
+            for (const node of nodes) {
+              if (node.type === 'dir') {
+                if (node.children) collectArtifacts(node.children, acc, seen)
+                continue
+              }
+              if (!isKnownArtifactExt(node.name)) continue
+              if (seen.has(node.path)) continue
+              seen.add(node.path)
+              acc.push({
+                artifact_id: 'local:' + node.path,
+                name: node.name,
+                size_bytes: typeof node.size === 'number' ? node.size : undefined,
+                uri: node.path,
+              })
+            }
+          }
+          collectArtifacts(res.tree, refs, new Set<string>())
+          setWorkspaceOutputs(refs)
+          setLastWorkspaceScanTime(Date.now())
+        } catch (err) {
+          console.error('periodic workspace scan failed:', err)
+        }
+      })()
+    }, 3000) // 每 3 秒扫描一次
+
+    return () => clearInterval(intervalId)
+  }, [activeSessionId, activeSession.isProcessing])
+
+  // 通用模式最终产物列表：声明产物（sessionArtifacts）优先，工作区扫描兜底补充。
+  // 按完整路径去重（uri），避免同名但不同路径的文件被误过滤。
+  const generalArtifacts = useMemo<ArtifactRef[]>(() => {
+    // 使用 artifact_id 或 uri 作为唯一标识（而不是文件名）
+    const declaredIds = new Set(
+      sessionArtifacts.map((a) => (a.uri || a.artifact_id).toLowerCase()),
+    )
+    const extras = workspaceOutputs.filter(
+      (a) => {
+        const id = (a.uri || a.artifact_id).toLowerCase()
+        return !declaredIds.has(id)
+      }
+    )
+    const result = [...sessionArtifacts, ...extras]
+    console.log('[ChatPage] generalArtifacts:', {
+      declared: sessionArtifacts.length,
+      workspace: workspaceOutputs.length,
+      extras: extras.length,
+      total: result.length,
+      lastScanTime: lastWorkspaceScanTime,
+      declaredList: sessionArtifacts.map(a => a.name),
+      workspaceList: workspaceOutputs.map(a => a.name),
+    })
+    return result
+  }, [sessionArtifacts, workspaceOutputs, lastWorkspaceScanTime])
+
+
+  // 遍历所有 message.tools，按 callId 把 call / result 配对成 AgentLogEntry。
+  // v3: 改为按消息分组的结构，展示完整的工具调用树。
+  const sessionMessageGroupedLogs = useMemo<MessageGroupedLog[]>(() => {
+    const groups: MessageGroupedLog[] = []
+
+    for (const message of activeSession.messages) {
+      if (message.role !== 'user' && message.role !== 'assistant') continue
+
+      const byCallId = new Map<string, AgentLogEntry>()
+      const order: string[] = []
+      let seq = 0
+
+      for (const tool of message.tools || []) {
+        if (tool.type !== 'call' && tool.type !== 'result') continue
+        const key = tool.callId || `__noid_${seq++}`
+        if (tool.type === 'call') {
+          if (byCallId.has(key)) continue
+          // description：intent 优先 → 从 content 取文件路径 → content 截断
+          let description = tool.intent || ''
+          if (!description && tool.content) {
+            try {
+              const parsed = JSON.parse(tool.content)
+              const path = parsed?.file_path || parsed?.path || parsed?.command || parsed?.query
+              description = typeof path === 'string' ? path : tool.content.slice(0, 80)
+            } catch {
+              description = tool.content.slice(0, 80)
+            }
+          }
+          byCallId.set(key, {
+            id: key,
+            callId: tool.callId,
+            timestamp: tool.ts,
+            type: 'tool',
+            toolName: tool.name,
+            toolStatus: 'running',
+            description,
+            subagentName: tool.subagent?.label,
+            toolInput: tool.content || undefined,
+          })
+          order.push(key)
+        } else {
+          // result：补全已有 entry；若没配到 call 也建一条
+          const existing = byCallId.get(key)
+          const failed = tool.isError === true || tool.status === 'failed'
+          const cancelled = tool.status === 'cancelled' || tool.status === 'skipped'
+          const toolStatus: AgentLogEntry['toolStatus'] = failed
+            ? 'failed'
+            : cancelled
+              ? 'cancelled'
+              : 'success'
+          if (existing) {
+            existing.toolStatus = toolStatus
+            existing.durationMs = tool.durationMs ?? existing.durationMs
+            existing.errorType = tool.errorType ?? existing.errorType
+            existing.errorMessage = tool.devMessage ?? existing.errorMessage
+            existing.toolOutput = tool.content || existing.toolOutput
+            if (!existing.toolName) existing.toolName = tool.name
+            if (!existing.subagentName) existing.subagentName = tool.subagent?.label
+          } else {
+            byCallId.set(key, {
+              id: key,
+              callId: tool.callId,
+              timestamp: tool.ts,
+              type: 'tool',
+              toolName: tool.name,
+              toolStatus,
+              description: '',
+              durationMs: tool.durationMs,
+              errorType: tool.errorType,
+              errorMessage: tool.devMessage,
+              subagentName: tool.subagent?.label,
+              toolOutput: tool.content || undefined,
+            })
+            order.push(key)
+          }
+        }
+      }
+
+      const entries = order.map((k) => byCallId.get(k)!).sort((a, b) => a.timestamp - b.timestamp)
+
+      // 只添加有工具调用的消息
+      if (entries.length > 0) {
+        groups.push({
+          messageId: message.id,
+          timestamp: message.timestamp,
+          role: message.role as 'user' | 'assistant',
+          contentPreview: message.content.slice(0, 50),
+          entries,
+        })
+      }
+    }
+
+    return groups
+  }, [activeSession.messages])
+
+  // v4: 从 message.tools 重建 Agent 树(用于历史会话,没有实时 agentTreeLogs 时)
+  const rebuildAgentTreeFromMessages = useMemo((): AgentTreeNode[] => {
+    // 如果当前 session 有实时构建的 agentTreeLogs,直接用,不重建
+    if (activeSession.agentTreeLogs && activeSession.agentTreeLogs.length > 0) {
+      console.log('[rebuildAgentTreeFromMessages] Using real-time agentTreeLogs:', activeSession.agentTreeLogs)
+      // 会话进行中：原样返回
+      if (activeSession.isProcessing) {
+        return activeSession.agentTreeLogs
+      }
+      // 会话已结束：把所有还卡在 running 的节点强制改为 completed，
+      // 并追加 Emma 收尾节点（Emma 节点没有 end 事件，不会自动变 completed）
+      const finalizeNode = (node: AgentTreeNode): AgentTreeNode => ({
+        ...node,
+        status: node.status === 'running' ? 'completed' : node.status,
+        children: node.children.map(finalizeNode),
+      })
+      const finalized = activeSession.agentTreeLogs.map(finalizeNode)
+      const emmaEndNode: AgentTreeNode = {
+        id: 'main-end',
+        name: 'Emma',
+        type: 'leader',
+        status: 'completed',
+        description: '',
+        startTime: Date.now(),
+        tools: [],
+        children: [],
+      }
+      return [...finalized, emmaEndNode]
+    }
+
+    // Emma 根节点
+    const emmaNode: AgentTreeNode = {
+      id: 'main',
+      name: 'Emma',
+      type: 'leader',
+      status: activeSession.isProcessing ? 'running' : 'completed', // 根据会话状态判断
+      description: activeSession.isProcessing ? '任务规划中' : '主协调者',
+      startTime: activeSession.messages[0]?.timestamp || Date.now(),
+      tools: [],
+      children: [],
+    }
+
+    // 子 Agent 节点 Map (taskId → AgentTreeNode)
+    const subagentMap = new Map<string, AgentTreeNode>()
+
+    // 遍历所有 message.tools,分配到对应节点
+    for (const message of activeSession.messages) {
+      for (const tool of message.tools || []) {
+        // 跳过非工具类型(permission/question 等)
+        if (tool.type !== 'call' && tool.type !== 'result') continue
+
+        const subagent = tool.subagent
+        const callId = tool.callId || `${tool.ts}`
+
+        // 主层工具(没有 subagent)归到 Emma
+        if (!subagent || !subagent.taskId) {
+          // 避免重复(call + result 配对)
+          if (!emmaNode.tools.find((t) => t.callId === callId)) {
+            emmaNode.tools.push({
+              id: callId,
+              callId,
+              timestamp: tool.ts,
+              type: 'tool',
+              toolName: tool.name,
+              toolStatus: tool.type === 'result' ? (tool.isError ? 'failed' : 'success') : 'running',
+              description: tool.intent || tool.content?.slice(0, 50) || tool.name || '',
+              toolInput: tool.type === 'call' ? tool.content : undefined,
+              toolOutput: tool.type === 'result' ? tool.content : undefined,
+              durationMs: tool.durationMs,
+              errorMessage: tool.devMessage,
+            })
+          }
+          continue
+        }
+
+        // 子 Agent 的工具
+        const agentId = subagent.taskId
+        let agentNode = subagentMap.get(agentId)
+
+        if (!agentNode) {
+          // 首次遇到这个 subagent,创建节点
+          const inferredType = inferAgentType(subagent.label)
+          agentNode = {
+            id: agentId,
+            name: subagent.label || 'Agent',
+            type: inferredType, // 从 label 推断 type
+            status: 'completed', // 历史工具都已完成
+            startTime: tool.ts,
+            tools: [],
+            children: [],
+            // 不设置 avatarSrc，让 ConversationSidePanel 根据 type 自己推断
+          }
+          subagentMap.set(agentId, agentNode)
+        }
+
+        // 添加工具到子 Agent
+        if (!agentNode.tools.find((t) => t.callId === callId)) {
+          agentNode.tools.push({
+            id: callId,
+            callId,
+            timestamp: tool.ts,
+            type: 'tool',
+            toolName: tool.name,
+            toolStatus: tool.type === 'result' ? (tool.isError ? 'failed' : 'success') : 'running',
+            description: tool.intent || tool.content?.slice(0, 50) || tool.name || '',
+            subagentName: subagent.label,
+            toolInput: tool.type === 'call' ? tool.content : undefined,
+            toolOutput: tool.type === 'result' ? tool.content : undefined,
+            durationMs: tool.durationMs,
+            errorMessage: tool.devMessage,
+          })
+        }
+      }
+    }
+
+    // 把所有子 Agent 挂到 Emma 下
+    emmaNode.children = Array.from(subagentMap.values())
+
+    // 如果会话已结束，添加 Emma 收尾节点（无论有没有子 Agent）
+    if (!activeSession.isProcessing) {
+      const emmaEndNode: AgentTreeNode = {
+        id: 'main-end',
+        name: 'Emma',
+        type: 'leader',
+        status: 'completed',
+        description: '',
+        startTime: Date.now(),
+        tools: [],
+        children: [],
+      }
+      return [emmaNode, emmaEndNode]
+    }
+
+    return [emmaNode]
+  }, [activeSession.messages, activeSession.agentTreeLogs, activeSession.isProcessing])
+
   // Display sessions from sessionMap only (user-created or DB-loaded), enriched with server info
   const displayedSessions = useMemo(() => {
     const localKeys = Object.keys(sessionMap)
@@ -4735,6 +5283,19 @@ export function ChatPage() {
     }
     return false
   }, [activeSession.planDraft, pendingAssistantMessage])
+
+  // 监听 isAwaitingPromptResponse 变化，通知主进程设置 attention 状态
+  // 用 ref 防止相同值重复调用
+  const prevAttentionRef = useRef<boolean | null>(null)
+  useEffect(() => {
+    if (prevAttentionRef.current === isAwaitingPromptResponse) return
+    prevAttentionRef.current = isAwaitingPromptResponse
+
+    if (activeSession.sessionId && window.chatApi) {
+      window.chatApi.setSessionAttention(activeSession.sessionId, isAwaitingPromptResponse)
+        .catch((err) => console.error('[ChatPage] setSessionAttention failed:', err))
+    }
+  }, [activeSession.sessionId, isAwaitingPromptResponse])
 
   const updateScrollState = useCallback(() => {
     const viewport = messagesViewportRef.current
@@ -5024,12 +5585,7 @@ export function ChatPage() {
       normalizedType === 'agent_intent'
     ) {
       // eslint-disable-next-line no-console
-      console.log('[harnessclaw subagent debug]', normalizedType, {
-        agent_id: event.agent_id,
-        agent_name: event.agent_name,
-        session_id: event.session_id,
-        payload_event_type: isRecord(event.payload) ? event.payload.event_type : undefined,
-      })
+      console.log('[harnessclaw subagent debug]', normalizedType, event)
     }
 
     const ensureAssistantMessage = (sid: string, now: number): string => {
@@ -5238,6 +5794,89 @@ export function ChatPage() {
             },
           },
         }))
+
+        // v4: 构建 Agent 树状日志
+        updateSession(sid, (prev) => {
+          const agentName = typeof event.agent_name === 'string' ? event.agent_name : 'subagent'
+          const subagentType = typeof event.subagent_type === 'string' ? event.subagent_type : undefined
+          const description = typeof event.description === 'string' ? event.description : undefined
+          const rawParentAgentId = typeof event.parent_agent_id === 'string' ? event.parent_agent_id : 'main'
+          // 引擎把顶层 sub-agent 的 parent_agent_id 设为 session_id（而非 'main'）。
+          // 这里归一化：parent 为 session_id 或缺省时，统一挂到 Emma 根节点 'main' 下。
+          const parentAgentId = (rawParentAgentId === sid || rawParentAgentId === eventSessionId)
+            ? 'main'
+            : rawParentAgentId
+
+          console.log('[subagent_start] Creating node:', {
+            agentId,
+            agentName,
+            subagentType,
+            'event.subagent_type': event.subagent_type,
+            'typeof event.subagent_type': typeof event.subagent_type,
+          })
+
+          const newNode: AgentTreeNode = {
+            id: agentId,
+            name: agentName,
+            type: subagentType,
+            status: 'running',
+            description,
+            startTime: updatedAt,
+            tools: [],
+            children: [],
+            parentId: parentAgentId,
+            // 不设置 avatarSrc，让 ConversationSidePanel 根据 type 推断
+          }
+
+          console.log('[subagent_start] newNode created:', newNode)
+
+          let currentTree = prev.agentTreeLogs || []
+
+          // 确保 Emma 根节点存在
+          let emmaNode = currentTree.find((n) => n.id === 'main')
+          if (!emmaNode) {
+            emmaNode = {
+              id: 'main',
+              name: 'Emma',
+              type: 'leader',
+              status: 'running',
+              description: '任务规划中',
+              startTime: updatedAt,
+              tools: [],
+              children: [],
+            }
+            currentTree = [emmaNode]
+          }
+
+          // 如果 parent 是 'main',挂到 Emma 的 children 下
+          if (parentAgentId === 'main') {
+            const updatedTree = currentTree.map((node) =>
+              node.id === 'main'
+                ? { ...node, children: [...node.children, newNode] }
+                : node
+            )
+            console.log('[subagent_start] Updated agentTreeLogs:', updatedTree)
+            return { ...prev, agentTreeLogs: updatedTree }
+          }
+
+          // 否则递归找到 parent 节点,挂到它的 children 下
+          const insertIntoTree = (nodes: AgentTreeNode[]): AgentTreeNode[] => {
+            return nodes.map((node) => {
+              if (node.id === parentAgentId) {
+                return { ...node, children: [...node.children, newNode] }
+              }
+              if (node.children.length > 0) {
+                return { ...node, children: insertIntoTree(node.children) }
+              }
+              return node
+            })
+          }
+
+          const finalTree = insertIntoTree(currentTree)
+          console.log('[subagent_start] Updated agentTreeLogs (nested):', finalTree)
+          return { ...prev, agentTreeLogs: finalTree }
+        })
+
         break
       }
 
@@ -5392,6 +6031,101 @@ export function ChatPage() {
         // back to true — that was the cause of the renderer getting stuck
         // in the "thinking" state after the turn had actually finished.
         appendPassiveAssistantActivity(sid, activity)
+
+        // v4: 把工具调用加到 Agent 树对应节点的 tools 数组
+        if (eventType === 'tool_start' || eventType === 'tool_end') {
+          updateSession(sid, (prev) => {
+            // 转换 ToolActivity 到 AgentLogEntry
+            const toolEntry: AgentLogEntry = {
+              id: activity.callId || `${agentId}-${now}`,
+              timestamp: activity.ts,
+              type: 'tool',
+              toolName: activity.name,
+              toolStatus: eventType === 'tool_start' ? 'running' :
+                         activity.isError ? 'failed' :
+                         activity.status === 'cancelled' ? 'cancelled' : 'success',
+              description: activity.intent || activity.content?.slice(0, 50) || activity.name || '',
+              durationMs: activity.durationMs,
+              errorType: activity.errorType,
+              errorMessage: activity.devMessage,
+              subagentName: agentName,
+              callId: activity.callId,
+              toolInput: eventType === 'tool_start' ? activity.content : undefined,
+              toolOutput: eventType === 'tool_end' ? activity.content : undefined,
+            }
+
+            // 兜底：如果引擎漏发 subagent_start，这里自动创建子 Agent 节点
+            let currentTree = prev.agentTreeLogs || []
+
+            // 检查子 Agent 是否存在（递归查找）
+            const findAgentNode = (nodes: AgentTreeNode[], id: string): boolean => {
+              return nodes.some(n => n.id === id || findAgentNode(n.children, id))
+            }
+
+            const agentExists = findAgentNode(currentTree, agentId)
+
+            if (!agentExists && agentId !== 'main') {
+              // 子 Agent 不存在且不是 main（Emma）-> 自动创建
+              const emmaNode = currentTree.find(n => n.id === 'main')
+              if (emmaNode) {
+                const inferredType = inferAgentType(agentName)
+                const newSubagentNode: AgentTreeNode = {
+                  id: agentId,
+                  name: agentName,
+                  type: inferredType, // 从 name 推断 type
+                  status: 'running',
+                  startTime: now,
+                  tools: [],
+                  children: [],
+                  parentId: 'main',
+                  // 不设置 avatarSrc，让 ConversationSidePanel 根据 type 推断
+                }
+                currentTree = currentTree.map(node =>
+                  node.id === 'main'
+                    ? { ...node, children: [...node.children, newSubagentNode] }
+                    : node
+                )
+              }
+            }
+
+            const addOrUpdateTool = (nodes: AgentTreeNode[]): AgentTreeNode[] => {
+              return nodes.map((node) => {
+                if (node.id === agentId) {
+                  // 找到对应 agent,更新或添加工具
+                  if (eventType === 'tool_start') {
+                    // tool_start: 添加新工具
+                    return { ...node, tools: [...node.tools, toolEntry] }
+                  } else {
+                    // tool_end: 更新已存在的工具
+                    const existingIndex = node.tools.findIndex((t) => t.callId === activity.callId)
+                    if (existingIndex >= 0) {
+                      const updatedTools = [...node.tools]
+                      updatedTools[existingIndex] = {
+                        ...updatedTools[existingIndex],
+                        // 只更新 tool_end 相关字段,不覆盖 toolInput
+                        toolStatus: activity.isError ? 'failed' : activity.status === 'cancelled' ? 'cancelled' : 'success',
+                        durationMs: activity.durationMs,
+                        errorType: activity.errorType,
+                        errorMessage: activity.devMessage,
+                        toolOutput: activity.content,
+                      }
+                      return { ...node, tools: updatedTools }
+                    }
+                    // 如果没找到(事件乱序?),直接加
+                    return { ...node, tools: [...node.tools, toolEntry] }
+                  }
+                }
+                if (node.children.length > 0) {
+                  return { ...node, children: addOrUpdateTool(node.children) }
+                }
+                return node
+              })
+            }
+
+            return { ...prev, agentTreeLogs: addOrUpdateTool(currentTree) }
+          })
+        }
+
         break
       }
 
@@ -5446,6 +6180,46 @@ export function ChatPage() {
           ts: updatedAt,
           subagent: finalSubagentInfo,
         }
+
+        // v4: 更新 Agent 树节点状态
+        updateSession(sid, (prev) => {
+          const durationMs = typeof event.duration_ms === 'number' ? event.duration_ms : undefined
+
+          // 收集元数据 JSON (subagent_end 的完整字段)
+          const metadata: Record<string, unknown> = {
+            agent_id: agentId,
+            status,
+            duration_ms: durationMs,
+            num_turns: typeof event.num_turns === 'number' ? event.num_turns : undefined,
+            input_tokens: typeof event.input_tokens === 'number' ? event.input_tokens : undefined,
+            output_tokens: typeof event.output_tokens === 'number' ? event.output_tokens : undefined,
+            coordinator_mode: typeof event.coordinator_mode === 'string' ? event.coordinator_mode : undefined,
+            terminal_reason: typeof event.terminal_reason === 'string' ? event.terminal_reason : undefined,
+            session_id: typeof event.session_id === 'string' ? event.session_id : undefined,
+            denied_tools: asStringArray(event.denied_tools),
+          }
+
+          const updateNodeStatus = (nodes: AgentTreeNode[]): AgentTreeNode[] => {
+            return nodes.map((node) => {
+              if (node.id === agentId) {
+                return {
+                  ...node,
+                  status,
+                  endTime: updatedAt,
+                  durationMs,
+                  metadata,
+                }
+              }
+              if (node.children.length > 0) {
+                return { ...node, children: updateNodeStatus(node.children) }
+              }
+              return node
+            })
+          }
+
+          return { ...prev, agentTreeLogs: prev.agentTreeLogs ? updateNodeStatus(prev.agentTreeLogs) : undefined }
+        })
+
         // Use the passive append helper so a `subagent_end` arriving after
         // `response_end` does not spawn a brand-new empty assistant message
         // and flip `isProcessing` back on (which left the renderer stuck in
@@ -5940,6 +6714,50 @@ export function ChatPage() {
           pauseReason: undefined,
           messages: prev.messages.map((m) => m.id === aid ? { ...m, tools: [...(m.tools || []), activity] } : m),
         }))
+
+        // v4: 主层工具归到 Emma 根节点
+        updateSession(sid, (prev) => {
+          // 确保 Emma 根节点存在
+          let currentTree = prev.agentTreeLogs || []
+          let emmaNode = currentTree.find((n) => n.id === 'main')
+
+          if (!emmaNode) {
+            // 创建 Emma 根节点
+            emmaNode = {
+              id: 'main',
+              name: 'Emma',
+              type: 'leader',
+              status: 'running',
+              description: '任务规划中',
+              startTime: Date.now(),
+              tools: [],
+              children: [],
+            }
+            currentTree = [emmaNode]
+          }
+
+          // 转换 ToolActivity 到 AgentLogEntry
+          const toolEntry: AgentLogEntry = {
+            id: activity.callId || `main-${Date.now()}`,
+            timestamp: activity.ts,
+            type: 'tool',
+            toolName: activity.name,
+            toolStatus: 'running',
+            description: activity.intent || activity.content?.slice(0, 50) || activity.name || '',
+            callId: activity.callId,
+            toolInput: activity.content,
+          }
+
+          // 更新 Emma 节点,添加工具
+          const updatedTree = currentTree.map((node) =>
+            node.id === 'main'
+              ? { ...node, tools: [...node.tools, toolEntry] }
+              : node
+          )
+
+          return { ...prev, agentTreeLogs: updatedTree }
+        })
+
         break
       }
 
@@ -6006,6 +6824,37 @@ export function ChatPage() {
           ...prev,
           messages: prev.messages.map((m) => m.id === aid ? { ...m, tools: [...(m.tools || []), activity] } : m),
         }))
+
+        // v4: 主层工具 tool_end,更新 Emma 节点下的工具状态
+        updateSession(sid, (prev) => {
+          const callId = activity.callId
+          if (!callId) return prev
+
+          const updateEmmaTools = (nodes: AgentTreeNode[]): AgentTreeNode[] => {
+            return nodes.map((node) => {
+              if (node.id === 'main') {
+                // 找到对应工具,更新状态
+                const updatedTools = node.tools.map((tool) =>
+                  tool.callId === callId
+                    ? {
+                        ...tool,
+                        toolStatus: activity.isError ? 'failed' : activity.status === 'cancelled' ? 'cancelled' : 'success',
+                        durationMs: activity.durationMs,
+                        errorType: activity.errorType,
+                        errorMessage: activity.devMessage,
+                        toolOutput: activity.content,
+                      }
+                    : tool
+                )
+                return { ...node, tools: updatedTools }
+              }
+              return node
+            })
+          }
+
+          return { ...prev, agentTreeLogs: prev.agentTreeLogs ? updateEmmaTools(prev.agentTreeLogs) : undefined }
+        })
+
         break
       }
 
@@ -6935,14 +7784,6 @@ export function ChatPage() {
         currentThinking: '',
       }))
     })
-    if (sendBurstTimerRef.current != null) {
-      window.clearTimeout(sendBurstTimerRef.current)
-    }
-    setSendBurstActive(true)
-    sendBurstTimerRef.current = window.setTimeout(() => {
-      setSendBurstActive(false)
-      sendBurstTimerRef.current = null
-    }, 820)
     setInput('')
     setSelectedSkills([])
     setAttachments([])
@@ -7072,9 +7913,6 @@ export function ChatPage() {
 
   useEffect(() => {
     return () => {
-      if (sendBurstTimerRef.current != null) {
-        window.clearTimeout(sendBurstTimerRef.current)
-      }
       if (dropBurstTimerRef.current != null) {
         window.clearTimeout(dropBurstTimerRef.current)
       }
@@ -7088,11 +7926,10 @@ export function ChatPage() {
       {/* Main chat area */}
       <div className="relative flex-1 flex min-w-0 flex-col overflow-hidden">
         {/* Top bar */}
-        <div className="titlebar-drag border-b border-border/70 px-4 py-4 sm:px-6">
-          <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="titlebar-drag pl-[70px] pr-[70px] pt-6 pb-4">
+          <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-foreground">
-                <MessagesSquare size={16} className="flex-shrink-0 text-muted-foreground" />
                 {activeSessionId ? (
                   <SessionTitleMenu
                     sessionId={activeSessionId}
@@ -7101,7 +7938,7 @@ export function ChatPage() {
                     onDelete={handleClearHistory}
                   />
                 ) : (
-                  <h1 className="truncate text-lg font-semibold tracking-tight">{t('chat.newChat')}</h1>
+                  <h1 className="truncate text-[12px] font-medium leading-5 text-[rgba(0,0,0,0.88)]">{t('chat.newChat')}</h1>
                 )}
               </div>
               {activeProjectContext ? (
@@ -7113,22 +7950,18 @@ export function ChatPage() {
 
             {activeSessionId && (
               <div className="flex flex-wrap items-center justify-start gap-2 sm:justify-end">
-                {/* Files button — lists the session's working directory
-                    (`~/.harnessclaw/workspace/session/<sid>`) as a file
-                    tree, with an inline preview pane next to it. Both
-                    panes are visible by default so users land directly
-                    on the workspace view without an extra click. */}
-                <SessionWorkspaceFilesButton
+                <SessionMenuButton
                   sessionId={activeSessionId}
-                  isProcessing={activeSession.isProcessing}
+                  title={activeSessionPrompt || t('chat.newChat')}
+                  currentProjectId={activeProjectContext?.projectId || null}
+                  onDelete={handleClearHistory}
                 />
-                {/* Session-level stats popover (context window utilization,
-                    cost, tokens, latency, per sub-agent breakdown).
-                    Polls `/api/v1/sessions/{id}/metrics` on the Console
-                    port every 5s while the popover is open; cost is
-                    computed client-side from a static pricing table
-                    (see Session Metrics API doc §"客户端使用指南"). */}
+                {/* Files button — hidden per design requirements
+                <SessionWorkspaceFilesButton sessionId={activeSessionId} />
+                */}
+                {/* Session-level stats popover — hidden per design requirements
                 <SessionStatsButton sessionId={activeSessionId} />
+                */}
               </div>
             )}
           </div>
@@ -7252,8 +8085,8 @@ export function ChatPage() {
             )}
 
             {/* Input area */}
-            <div className="bg-card/45 px-4 py-2.5 backdrop-blur-sm">
-              <div className="mx-auto w-full max-w-4xl">
+            <div className="bg-card/45 pl-[70px] pr-[70px] pt-2.5 backdrop-blur-sm">
+              <div className="w-full">
                 {pendingStepDecision && (
                   <div className="mb-3 rounded-2xl border border-orange-300 bg-orange-50 px-3.5 py-3 dark:border-orange-700/50 dark:bg-orange-950/30">
                     <div className="flex items-start gap-2">
@@ -7398,7 +8231,7 @@ export function ChatPage() {
                     'chat-composer-shell relative overflow-hidden rounded-[28px] border bg-card shadow-[0_12px_36px_rgba(15,23,42,0.04)] transition-[border-color,box-shadow]',
                     isDragOver
                       ? 'border-primary shadow-[0_18px_50px_rgba(37,99,235,0.14)]'
-                      : 'border-border focus-within:border-primary'
+                      : 'border-border'
                   )}
                   data-dropped={dropBurstActive ? 'true' : undefined}
                   onDragOver={handleDragOver}
@@ -7434,11 +8267,7 @@ export function ChatPage() {
                       onKeyDown={handleKeyDown}
                       onPaste={pasted.handlePaste}
                       disabled={activeSession.isProcessing}
-                      placeholder={
-                        harnessclawStatus === 'connected'
-                          ? t('chat.composer.placeholderConnected')
-                          : t('chat.composer.placeholderDisconnected')
-                      }
+                      placeholder={t('home.inputPlaceholder')}
                       maxLength={maxLength}
                       className=""
                       rows={1}
@@ -7481,11 +8310,12 @@ export function ChatPage() {
                         <button
                           onClick={handlePickFiles}
                           disabled={activeSession.isProcessing || harnessclawStatus !== 'connected'}
-                          className="inline-flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground transition-colors hover:border-primary hover:text-foreground disabled:opacity-50"
+                          className="inline-flex items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-foreground disabled:opacity-50"
                           title={t('chat.composer.addFilesAria')}
                           aria-label={t('chat.composer.addFilesAria')}
                         >
-                          <Plus size={16} />
+                          <img src={iconAttachFile} alt="" className="h-3 w-3" aria-hidden="true" />
+                          <span>{t('chat.composer.addFilesAria')}</span>
                         </button>
                         <BrowserSessionIndicatorButton
                           session={browserSessionIndicator.session}
@@ -7510,17 +8340,40 @@ export function ChatPage() {
                           <button
                             onClick={handleSend}
                             disabled={!canSend}
-                            className="chat-send-button inline-flex h-11 w-11 items-center justify-center rounded-full bg-foreground text-background transition-opacity hover:opacity-90 disabled:opacity-50 dark:bg-primary dark:text-primary-foreground"
+                            className={cn(
+                              'inline-flex h-7 w-7 items-center justify-center rounded-full transition-all active:scale-95 disabled:opacity-50',
+                              canSend ? 'bg-[#4E5969] hover:opacity-90' : 'bg-[#EEEEEE] hover:opacity-80'
+                            )}
                             aria-label={t('chat.composer.sendAria')}
-                            data-ready={canSend ? 'true' : 'false'}
-                            data-burst={sendBurstActive ? 'true' : undefined}
                           >
-                            <Send size={14} aria-hidden="true" />
+                            <img
+                              src={new URL(
+                                canSend
+                                  ? '../../assets/send-icon-active.svg'
+                                  : '../../assets/send-icon.svg',
+                                import.meta.url
+                              ).href}
+                              alt={t('chat.composer.sendAria')}
+                              className="w-full h-full"
+                            />
                           </button>
                         )}
                       </div>
                     </div>
                   </div>
+                </div>
+                <div className="flex h-6 items-center justify-center">
+                  <p
+                    className="text-center leading-none"
+                    style={{
+                      fontFamily: 'Source Han Sans CN',
+                      fontSize: '10px',
+                      fontWeight: 350,
+                      color: 'rgba(0, 0, 0, 0.45)',
+                    }}
+                  >
+                    {t('chat.composer.aiDisclaimer')}
+                  </p>
                 </div>
               </div>
             </div>
@@ -7530,10 +8383,43 @@ export function ChatPage() {
 
       {/* Right-side panel: logs (plan steps) + artifacts. Default collapsed. */}
       <ConversationSidePanel
-        steps={activeSession.planDraft?.steps || []}
-        artifacts={sessionArtifacts}
+        agentTreeLogs={rebuildAgentTreeFromMessages}
+        messageGroupedLogs={sessionMessageGroupedLogs}
+        artifacts={generalArtifacts}
         onSelectArtifact={(artifact) => {
-          void openArtifactPreview(artifact, activeSessionId)
+          // meta.json outputs 兜底产物用 `local:<path>` 标记，走本地文件预览；
+          // 声明产物（有真实 artifact_id）走 console fetch 预览。
+          if (artifact.artifact_id.startsWith('local:')) {
+            const path = artifact.uri || artifact.artifact_id.slice('local:'.length)
+            void openWorkspaceFilePreview(path, artifact.name || path)
+          } else {
+            void openArtifactPreview(artifact, activeSessionId)
+          }
+        }}
+        sessionId={activeSessionId || undefined}
+        onRevealArtifact={(artifact) => {
+          // 「打开」：在系统文件管理器中定位该产物文件。本地产物用
+          // uri/artifact_id 解析出的绝对磁盘路径；声明产物若 uri 是真实路径同样可定位。
+          const path = artifact.artifact_id.startsWith('local:')
+            ? artifact.uri || artifact.artifact_id.slice('local:'.length)
+            : artifact.uri
+          if (!path || path.startsWith('artifact://') || path.startsWith('http')) {
+            console.warn('[reveal] no local path for artifact:', artifact)
+            return
+          }
+          if (!window.workspace?.revealFile) {
+            console.error('[reveal] window.workspace.revealFile unavailable — 需完全重启 yarn dev 让 preload/main 生效')
+            return
+          }
+          void window.workspace
+            .revealFile(path)
+            .then((res) => {
+              if (!res.ok) console.error('[reveal] failed:', res.error, 'path:', path)
+            })
+            .catch((err) => console.error('[reveal] threw:', err, 'path:', path))
+        }}
+        onSelectWorkspaceFile={(path, fileName) => {
+          void openWorkspaceFilePreview(path, fileName)
         }}
       />
 
@@ -7886,6 +8772,7 @@ function MessageBubble({
   const { t, i18n } = useTranslation()
   const [copied, setCopied] = useState(false)
   const [rating, setRating] = useState<'up' | 'down' | null>(null)
+  const [toolsExpanded, setToolsExpanded] = useState(false)
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
   const openFilePathPreview = useCallback(async (path: string) => {
@@ -8016,14 +8903,23 @@ function MessageBubble({
   const stepDecisionResults = tools.filter((a) => a.type === 'step_decision_result')
 
   for (const t of tools) {
+    // v4 (2026-06-22): 主对话区瘦身 — 砍掉展示型卡片(status/hint/call/result),
+    // 只保留交互型卡片(permission/question/step_decision),因为用户需要点按钮。
+    // 展示型卡片的内容已全部移到右侧日志面板的 Agent 树里。
     if (t.type === 'status') {
-      segments.push({ kind: 'status', data: t, ts: t.ts, subagent: t.subagent })
+      // segments.push({ kind: 'status', data: t, ts: t.ts, subagent: t.subagent })
+      continue // 砍掉 status 卡片
     } else if (t.type === 'hint') {
-      segments.push({ kind: 'hint', data: t, ts: t.ts, subagent: t.subagent })
+      // segments.push({ kind: 'hint', data: t, ts: t.ts, subagent: t.subagent })
+      continue // 砍掉 hint 卡片
     } else if (t.type === 'call') {
-      const result = toolResults.find((r) => r.callId === t.callId)
-      const isRunning = !!message.isStreaming && !result
-      segments.push({ kind: 'tool', call: t, result, isRunning, ts: t.ts, subagent: t.subagent || result?.subagent })
+      // const result = toolResults.find((r) => r.callId === t.callId)
+      // const isRunning = !!message.isStreaming && !result
+      // segments.push({ kind: 'tool', call: t, result, isRunning, ts: t.ts, subagent: t.subagent || result?.subagent })
+      continue // 砍掉工具调用卡片
+    } else if (t.type === 'result') {
+      // result 已经在 call 分支配对,这里不单独处理
+      continue
     } else if (t.type === 'permission') {
       const result = permissionResults.find((r) => r.callId === t.callId)
       segments.push({ kind: 'permission', request: t, result, ts: t.ts, subagent: t.subagent || result?.subagent })
@@ -8110,6 +9006,11 @@ function MessageBubble({
   const shouldShowTimestamp = !message.isStreaming
   const hasRenderableAssistantBody = displaySegments.length > 0 || attachments.length > 0 || !!errorNotice
 
+  // Count tools for collapsing (only for assistant messages)
+  const toolCount = !isUser && !isSystem ? segments.filter((s) =>
+    s.kind === 'tool' || s.kind === 'permission' || s.kind === 'question' || s.kind === 'step_decision'
+  ).length : 0
+
   if (!isUser && !isSystem && !message.isStreaming && !hasRenderableAssistantBody) {
     return null
   }
@@ -8123,9 +9024,9 @@ function MessageBubble({
           : 'mb-1.5 rounded-2xl px-3.5 py-2.5 text-sm',
         'min-w-0 max-w-full overflow-hidden',
         !compact && isUser
-          ? 'rounded-br-sm bg-foreground text-background dark:bg-primary dark:text-primary-foreground'
+          ? 'rounded-br-sm bg-[rgba(218,159,103,0.1)] text-[rgba(0,0,0,0.88)]'
           : !compact
-            ? 'w-full rounded-bl-sm border border-border bg-card text-foreground shadow-sm'
+            ? 'w-full rounded-bl-sm border border-border bg-white text-[rgba(0,0,0,0.88)] shadow-sm'
             : 'text-foreground'
       )}
     >
@@ -8368,7 +9269,9 @@ function MessageBubble({
                   if (item.kind === 'hint') {
                     return renderHint(item.data.content, `hint-${i}-${itemIndex}`)
                   }
+                  // Hide tools unless expanded
                   if (item.kind === 'tool') {
+                    if (!isUser && toolCount > 0 && !toolsExpanded) return null
                     return (
                       <ToolCallCard
                         key={item.call.callId || `${i}-${itemIndex}`}
@@ -8379,6 +9282,7 @@ function MessageBubble({
                       />
                     )
                   }
+                  // Permission, question, step_decision always show (user interaction needed)
                   if (item.kind === 'permission') {
                     return (
                       <PermissionRequestCard
@@ -8538,7 +9442,9 @@ function MessageBubble({
                           if (item.kind === 'hint') {
                             return renderHint(item.data.content, `sub-hint-${i}-${agentIdx}-${itemIndex}`)
                           }
+                          // Hide tools unless expanded
                           if (item.kind === 'tool') {
+                            if (toolCount > 0 && !toolsExpanded) return null
                             return (
                               <ToolCallCard
                                 key={item.call.callId || `sub-tool-${i}-${agentIdx}-${itemIndex}`}
@@ -8549,6 +9455,7 @@ function MessageBubble({
                               />
                             )
                           }
+                          // Permission, question, step_decision always show
                           if (item.kind === 'permission') {
                             return (
                               <PermissionRequestCard
@@ -8614,6 +9521,20 @@ function MessageBubble({
 
         {/* 呼吸闪烁小点已移至会话尾部，与"鎏金"shimmer 文案同行渲染
             (ConversationTimeline 中的 streaming-breathing-dot + chat-thinking-shimmer)。 */}
+
+        {/* 工具调用折叠按钮 */}
+        {!isUser && !isSystem && !message.isStreaming && toolCount > 0 && (
+          <div className="mb-2">
+            <button
+              onClick={() => setToolsExpanded(!toolsExpanded)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-foreground"
+            >
+              <Wrench size={12} />
+              <span>使用了 {toolCount} 个工具</span>
+              {toolsExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+            </button>
+          </div>
+        )}
 
         {/* 点赞点踩 — AI 回复正文下方常显按钮(流式结束后才出现) */}
         {!isUser && !isSystem && !message.isStreaming && hasRenderableAssistantBody && (
@@ -9731,7 +10652,9 @@ function AskUserQuestionCard({
   const allowCustom = requestData?.allowCustom !== false
   const multi = requestData?.multi === true
   const options = requestData?.options || []
-  const hasOptions = options.length > 0
+  // UI 设计稿：原则上最多 4 个选项 + 一个"其他"输入。超出的静默截断。
+  const visibleOptions = options.slice(0, 4)
+  const hasOptions = visibleOptions.length > 0
 
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [customText, setCustomText] = useState('')
@@ -9808,8 +10731,8 @@ function AskUserQuestionCard({
     }
   }
 
-  const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
       void handleSubmit()
     }
@@ -9823,128 +10746,122 @@ function AskUserQuestionCard({
 
   return (
     <div className="mb-1.5">
-      <div className="overflow-hidden rounded-xl border border-blue-200/80 bg-blue-50/70 shadow-sm dark:border-blue-900/40 dark:bg-blue-950/20">
-        <div className="flex items-start gap-2 px-3 py-2">
-          <HelpCircle
-            size={14}
-            className={cn(
-              'mt-0.5 flex-shrink-0',
-              isResolved
-                ? resultData?.status === 'success'
-                  ? 'text-green-600'
-                  : 'text-muted-foreground'
-                : 'text-blue-600'
-            )}
-          />
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <span className="flex-1 truncate text-xs font-medium text-foreground">{t('chat.ask.title')}</span>
-              <span className={cn(
-                'flex-shrink-0 text-[10px]',
-                isResolved
-                  ? resultData?.status === 'success' ? 'text-green-600' : 'text-muted-foreground'
-                  : 'text-blue-700 dark:text-blue-300'
-              )}>
-                {statusLabel}
-              </span>
-            </div>
+      {/* 外层白卡片 */}
+      <div className="overflow-hidden rounded-2xl bg-white shadow-sm">
+        {/* 浅灰面板 */}
+        <div className="m-2 rounded-lg bg-[#F7F7F7] px-4 py-3">
+          {/* 标题 + 问题文本 */}
+          <p className="text-[13px] font-medium text-black/88">
+            {t('chat.ask.choosePrompt')}
+          </p>
+          <p className="mt-1.5 whitespace-pre-wrap break-words text-[12px] leading-5 text-black/45">
+            {requestData?.question || t('chat.ask.defaultQuestion')}
+          </p>
 
-            <p className="mt-1 whitespace-pre-wrap break-words text-[12px] leading-5 text-foreground/90">
-              {requestData?.question || t('chat.ask.defaultQuestion')}
-            </p>
-
-            {!isResolved && (
-              <>
-                {hasOptions && (
-                  <div className="mt-2 flex flex-col gap-2">
-                    {options.map((option) => {
-                      const isSelected = selected.has(option.label)
-                      const optionDisabled = submitting || hasCustomText
-                      return (
+          {!isResolved && (
+            <>
+              {/* 选项列表 */}
+              {hasOptions && (
+                <div className="mt-3 space-y-0">
+                  {visibleOptions.map((option, index) => {
+                    const isSelected = selected.has(option.label)
+                    const optionDisabled = submitting || hasCustomText
+                    return (
+                      <div key={option.label}>
+                        {index > 0 && (
+                          <div className="h-px bg-[#E2E8FF]/20" />
+                        )}
                         <button
-                          key={option.label}
                           type="button"
                           onClick={() => toggleOption(option.label)}
                           disabled={optionDisabled}
-                          title={option.description}
-                          aria-pressed={isSelected}
-                          className={cn(
-                            'min-h-9 w-full rounded-lg border px-2.5 py-1 text-left text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60',
-                            isSelected
-                              ? 'border-blue-600 bg-blue-600 text-white hover:bg-blue-700'
-                              : 'border-border bg-background hover:bg-muted'
-                          )}
+                          className="flex w-full items-center justify-between py-2.5 text-left transition-opacity disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                          <span className="block">{option.label}</span>
-                          {option.description && (
-                            <span className={cn(
-                              'mt-0.5 block text-[10px]',
-                              isSelected ? 'text-blue-100' : 'text-muted-foreground'
-                            )}>
-                              {option.description}
-                            </span>
-                          )}
+                          <span className="text-[12px] text-black/45">
+                            {option.label}
+                          </span>
+                          {/* 右侧选中标记 */}
+                          <div className="relative h-5 w-5 flex-shrink-0">
+                            {isSelected ? (
+                              // 橙色对勾圈
+                              <div className="flex h-full w-full items-center justify-center rounded-full bg-[#FF8F1F]">
+                                <Check size={12} strokeWidth={3} className="text-white" />
+                              </div>
+                            ) : (
+                              // 浅灰空心圈
+                              <div className="flex h-full w-full items-center justify-center rounded-full bg-black/[0.06]">
+                                <div className="h-3 w-3 rounded-full bg-transparent" />
+                              </div>
+                            )}
+                          </div>
                         </button>
-                      )
-                    })}
-                  </div>
-                )}
-
-                {allowCustom && (
-                  <div className="mt-2">
-                    <textarea
-                      value={customText}
-                      onChange={(event) => handleCustomChange(event.target.value)}
-                      onKeyDown={handleKeyDown}
-                      disabled={submitting || selected.size > 0}
-                      rows={2}
-                      placeholder={hasOptions ? t('chat.ask.customPlaceholder') : t('chat.ask.placeholder')}
-                      className="w-full resize-none rounded-lg border border-border bg-background px-2.5 py-1.5 text-[11px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:cursor-not-allowed disabled:opacity-60"
-                    />
-                  </div>
-                )}
-
-                <div className="mt-2 grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void handleCancel()}
-                    disabled={submitting}
-                    className="min-h-9 w-full rounded-lg border border-border bg-background px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {t('chat.ask.cancel')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleSubmit()}
-                    disabled={!canSubmit}
-                    className="min-h-9 w-full rounded-lg bg-blue-600 px-3 py-1 text-[11px] font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {submitting ? t('chat.ask.sending') : t('chat.ask.send')}
-                  </button>
+                      </div>
+                    )
+                  })}
                 </div>
+              )}
 
-                {submitError && (
-                  <div className="mt-2 rounded-lg border border-red-300 bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300">
-                    {submitError}
-                  </div>
-                )}
-              </>
-            )}
+              {/* "其他"输入框 */}
+              {allowCustom && (
+                <div className={hasOptions ? 'mt-2' : 'mt-3'}>
+                  {hasOptions && <div className="h-px bg-[#E2E8FF]/20" />}
+                  <input
+                    type="text"
+                    value={customText}
+                    onChange={(event) => handleCustomChange(event.target.value)}
+                    onKeyDown={handleKeyDown}
+                    disabled={submitting || selected.size > 0}
+                    placeholder={t('chat.ask.otherPlaceholder')}
+                    className="mt-2 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-[12px] text-black/88 placeholder:text-black/15 focus:outline-none focus:ring-2 focus:ring-[#FF8F1F]/40 disabled:cursor-not-allowed disabled:opacity-50"
+                  />
+                </div>
+              )}
 
-            {isResolved && resultData?.status === 'success' && resultData.output && (
-              <div className="mt-2 rounded-lg border border-blue-200/70 bg-white/70 px-2.5 py-1.5 dark:border-blue-900/30 dark:bg-background/80">
-                <p className="text-[10px] text-muted-foreground">{t('chat.ask.yourReply')}</p>
-                <p className="mt-0.5 whitespace-pre-wrap break-words text-[12px] text-foreground/90">
-                  {resultData.output}
-                </p>
-              </div>
-            )}
+              {/* 错误提示 */}
+              {submitError && (
+                <div className="mt-2 rounded-lg border border-red-300 bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700">
+                  {submitError}
+                </div>
+              )}
+            </>
+          )}
 
-            {isResolved && resultData?.status === 'cancelled' && (
-              <p className="mt-2 text-[11px] text-muted-foreground">{t('chat.ask.cancelled')}</p>
-            )}
-          </div>
+          {/* 已回答状态 */}
+          {isResolved && resultData?.status === 'success' && resultData.output && (
+            <div className="mt-3 rounded-lg border border-gray-200 bg-white px-3 py-2">
+              <p className="text-[10px] text-black/45">{t('chat.ask.yourReply')}</p>
+              <p className="mt-0.5 whitespace-pre-wrap break-words text-[12px] text-black/88">
+                {resultData.output}
+              </p>
+            </div>
+          )}
+
+          {isResolved && resultData?.status === 'cancelled' && (
+            <p className="mt-2 text-[11px] text-black/45">{t('chat.ask.cancelled')}</p>
+          )}
         </div>
+
+        {/* 底部按钮 - 胶囊形状右对齐 */}
+        {!isResolved && (
+          <div className="flex items-center justify-end gap-2 px-4 pb-3">
+            <button
+              type="button"
+              onClick={() => void handleCancel()}
+              disabled={submitting}
+              className="rounded-full border border-[#DADEE4] bg-white px-4 py-1.5 text-[12px] font-medium text-[#4E5969] transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {t('chat.ask.skip')}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleSubmit()}
+              disabled={!canSubmit}
+              className="rounded-full bg-[#4E5969] px-4 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-[#4E5969]/90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {submitting ? t('chat.ask.sending') : t('chat.ask.confirm')}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -10278,6 +11195,10 @@ export function FilePreviewDrawer({
   // mammoth/SheetJS 抽出的 docx/xlsx/pptx 片段，不是完整 HTML 文档。
   const isHtml = ext === 'html' || ext === 'htm'
   const isMarkdown = ext === 'md' || ext === 'mdx'
+  // .html/.htm 产物：完整 HTML 文档，双视图（渲染 / 源码）。docx 等转出的
+  // previewKind==='html' 是语义片段，仍走下方 prose 分支。
+  const isHtmlArtifact =
+    (ext === 'html' || ext === 'htm') && !preview.isBinary && preview.previewKind === undefined
 
   return createPortal(
     <div className="fixed inset-0 z-[200] flex" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
@@ -10582,6 +11503,10 @@ export function FilePreviewDrawer({
                   </>
                 )}
               </div>
+            </div>
+          ) : isHtmlArtifact ? (
+            <div className="h-full overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+              <HtmlArtifactView content={preview.content} />
             </div>
           ) : preview.previewKind === 'html' ? (
             // 主进程已把 docx / xlsx / pptx 等转成语义化 HTML（mammoth /

@@ -112,6 +112,23 @@ const harnessclawAPI = {
   },
 }
 
+const chatAPI = {
+  setSessionAttention: (sessionId: string, needsAttention: boolean) =>
+    ipcRenderer.invoke('chat:set-session-attention', sessionId, needsAttention),
+  getAttentionSessions: () => ipcRenderer.invoke('chat:get-attention-sessions'),
+  onAttentionChanged: (callback: (sessionId: string, needsAttention: boolean) => void) => {
+    const handler = (_: Electron.IpcRendererEvent, sessionId: string, needsAttention: boolean) =>
+      callback(sessionId, needsAttention)
+    ipcRenderer.on('chat:attention-changed', handler)
+    return () => ipcRenderer.removeListener('chat:attention-changed', handler)
+  },
+  onNavigateToSession: (callback: (sessionId: string) => void) => {
+    const handler = (_: Electron.IpcRendererEvent, sessionId: string) => callback(sessionId)
+    ipcRenderer.on('chat:navigate-to-session', handler)
+    return () => ipcRenderer.removeListener('chat:navigate-to-session', handler)
+  },
+}
+
 const browserAgentAPI = {
   listSessions: () => ipcRenderer.invoke('browser-agent:listSessions'),
   setVisibility: (sessionId: string, visible: boolean) =>
@@ -251,6 +268,13 @@ const workspaceAPI = {
     ipcRenderer.invoke('workspace:statFile', sessionId, path) as Promise<
       | { ok: true; abs: string; size: number; kind: 'image' | 'other' }
       | { ok: false; error: string; abs?: string }
+    >,
+  // Reveals a single file in the OS file manager with it selected.
+  // Used by the artifact card's「打开文件所在位置」action.
+  revealFile: (filePath: string) =>
+    ipcRenderer.invoke('workspace:revealFile', filePath) as Promise<
+      | { ok: true; path: string }
+      | { ok: false; error: string; path?: string }
     >,
 }
 
@@ -486,6 +510,18 @@ const launcherAPI = {
   },
 }
 
+const windowControlsAPI = {
+  minimize: () => ipcRenderer.invoke('window:minimize'),
+  toggleMaximize: () => ipcRenderer.invoke('window:toggleMaximize'),
+  close: () => ipcRenderer.invoke('window:close'),
+  isMaximized: (): Promise<boolean> => ipcRenderer.invoke('window:isMaximized'),
+  onMaximizedChanged: (callback: (maximized: boolean) => void) => {
+    const handler = (_: Electron.IpcRendererEvent, maximized: boolean): void => callback(maximized)
+    ipcRenderer.on('window:maximized-changed', handler)
+    return () => ipcRenderer.removeListener('window:maximized-changed', handler)
+  },
+}
+
 if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('electron', electronAPI)
@@ -497,6 +533,7 @@ if (process.contextIsolated) {
     contextBridge.exposeInMainWorld('appConfig', appConfigAPI)
     contextBridge.exposeInMainWorld('appRuntime', appRuntimeAPI)
     contextBridge.exposeInMainWorld('harnessclaw', harnessclawAPI)
+    contextBridge.exposeInMainWorld('chatApi', chatAPI)
     contextBridge.exposeInMainWorld('browserAgent', browserAgentAPI)
     contextBridge.exposeInMainWorld('skills', skillsAPI)
     contextBridge.exposeInMainWorld('db', dbAPI)
@@ -505,6 +542,7 @@ if (process.contextIsolated) {
     contextBridge.exposeInMainWorld('workspace', workspaceAPI)
     contextBridge.exposeInMainWorld('agentApi', agentAPI)
     contextBridge.exposeInMainWorld('launcherApi', launcherAPI)
+    contextBridge.exposeInMainWorld('windowControls', windowControlsAPI)
   } catch (error) {
     console.error(error)
   }
@@ -528,6 +566,8 @@ if (process.contextIsolated) {
   // @ts-ignore (define in dts)
   window.harnessclaw = harnessclawAPI
   // @ts-ignore (define in dts)
+  window.chatApi = chatAPI
+  // @ts-ignore (define in dts)
   window.browserAgent = browserAgentAPI
   // @ts-ignore (define in dts)
   window.skills = skillsAPI
@@ -543,4 +583,6 @@ if (process.contextIsolated) {
   window.agentApi = agentAPI
   // @ts-ignore (define in dts)
   window.launcherApi = launcherAPI
+  // @ts-ignore (define in dts)
+  window.windowControls = windowControlsAPI
 }

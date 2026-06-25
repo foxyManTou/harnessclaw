@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import sidebarLogo from '../../assets/sidebar-logo.png'
 
 /**
@@ -18,6 +19,7 @@ import sidebarLogo from '../../assets/sidebar-logo.png'
  *   • Window shown  → input auto-focuses + clears (via `onReset`)
  */
 export function LauncherPage(): JSX.Element {
+  const { t } = useTranslation()
   const [value, setValue] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -95,7 +97,7 @@ export function LauncherPage(): JSX.Element {
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="问点什么…  按 Enter 进入对话"
+          placeholder={t('launcher.inputPlaceholder')}
           spellCheck={false}
           autoCorrect="off"
           autoCapitalize="off"

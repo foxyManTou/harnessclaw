@@ -70,6 +70,28 @@ function LauncherBridge() {
   return null
 }
 
+/**
+ * Bridges system notification clicks with navigation. When the user
+ * clicks a notification for a pending question, main sends
+ * `chat:navigate-to-session` to this renderer; we navigate to /chat
+ * with the target sessionId.
+ */
+function ChatNavigationBridge() {
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    const unsubscribe = window.chatApi?.onNavigateToSession?.((sessionId: string) => {
+      if (!sessionId) return
+      navigate('/chat', { state: { sessionId } })
+    })
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe()
+    }
+  }, [navigate])
+
+  return null
+}
+
 function GlobalShortcuts() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -158,6 +180,7 @@ function App() {
       <RouteLogger />
       <GlobalShortcuts />
       <LauncherBridge />
+      <ChatNavigationBridge />
       <AppLayout>
         <RoutedContent />
       </AppLayout>

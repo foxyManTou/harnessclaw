@@ -1,5 +1,5 @@
-import { app, shell, BrowserWindow, ipcMain, dialog, nativeImage, screen, globalShortcut, protocol, net } from 'electron'
-import { basename, dirname, extname, isAbsolute, join, resolve as resolvePath, sep as pathSep } from 'path'
+import { app, shell, BrowserWindow, ipcMain, dialog, nativeImage, screen, globalShortcut, protocol, net, Notification, type BrowserWindowConstructorOptions } from 'electron'
+import { basename, dirname, extname, isAbsolute, join, resolve, resolve as resolvePath, sep, sep as pathSep } from 'path'
 import { homedir } from 'os'
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, copyFileSync } from 'fs'
 import { spawn, execFileSync, ChildProcess } from 'child_process'
@@ -136,10 +136,10 @@ const ERROR_ATTACH_WINDOW_MS = 30_000
 const PROJECT_CONTEXT_BLOCK_START = '[HARNESSCLAW_PROJECT_CONTEXT]'
 const PROJECT_CONTEXT_BLOCK_END = '[/HARNESSCLAW_PROJECT_CONTEXT]'
 const WINDOW_STATE_PATH = join(HARNESSCLAW_DIR, 'window-state.json')
-const DEFAULT_WINDOW_WIDTH = 1200
-const DEFAULT_WINDOW_HEIGHT = 800
-const MIN_WINDOW_WIDTH = 1024
-const MIN_WINDOW_HEIGHT = 768
+const DEFAULT_WINDOW_WIDTH = 960
+const DEFAULT_WINDOW_HEIGHT = 650
+const MIN_WINDOW_WIDTH = 960
+const MIN_WINDOW_HEIGHT = 650
 
 type WindowState = {
   width: number
@@ -1121,20 +1121,15 @@ function createWindow(): BrowserWindow {
     minHeight: MIN_WINDOW_HEIGHT,
     show: false,
     autoHideMenuBar: true,
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
-    // Center the macOS traffic lights within the 78px collapsed sidebar rail
-    // so the left/right gaps match ((78 - ~52px cluster) / 2 ≈ 13).
+    // 两个平台都用无边框标题栏,右上角的最小化/最大化/关闭按钮由渲染层
+    // 的自定义 <WindowControls> 绘制(macOS 的原生交通灯在窗口创建后通过
+    // setWindowButtonVisibility(false) 隐藏)。
+    titleBarStyle: 'hidden',
     trafficLightPosition: { x: 13, y: 16 },
     backgroundColor: '#F5F5F7',
     ...(process.platform === 'darwin'
       ? {}
       : {
-          // Windows/Linux: 隐藏左侧图标+标题文字,保留右上角的最小化/最大化/关闭按钮
-          titleBarOverlay: {
-            color: '#F5F5F7',
-            symbolColor: '#1A1A1A',
-            height: 32,
-          },
           ...(devIconPath ? { icon: devIconPath } : {}),
         }),
     webPreferences: {
@@ -1150,11 +1145,22 @@ function createWindow(): BrowserWindow {
   })
 
   mainWindow.on('ready-to-show', () => {
+    // macOS: 隐藏原生交通灯,改用渲染层自定义的窗口控制按钮。
+    if (process.platform === 'darwin') {
+      mainWindow.setWindowButtonVisibility(false)
+    }
     mainWindow.show()
     if (windowState.isMaximized) {
       mainWindow.maximize()
     }
   })
+
+  // 把最大化状态变化推给渲染层,让自定义按钮在「最大化 ⇄ 还原」间切换图标。
+  const pushMaximizeState = () => {
+    if (!mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window:maximized-changed', mainWindow.isMaximized())
+    }
+  }
 
   let persistTimer: NodeJS.Timeout | null = null
   const persistWindowState = () => {
@@ -1168,8 +1174,14 @@ function createWindow(): BrowserWindow {
   }
 
   mainWindow.on('resize', persistWindowState)
-  mainWindow.on('maximize', persistWindowState)
-  mainWindow.on('unmaximize', persistWindowState)
+  mainWindow.on('maximize', () => {
+    persistWindowState()
+    pushMaximizeState()
+  })
+  mainWindow.on('unmaximize', () => {
+    persistWindowState()
+    pushMaximizeState()
+  })
   mainWindow.on('close', () => {
     if (persistTimer) {
       clearTimeout(persistTimer)
@@ -1621,6 +1633,27 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
+  // 自定义窗口控制(无边框标题栏 → 渲染层 <WindowControls> 调用这些 IPC)
+  ipcMain.handle('window:minimize', (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.minimize()
+  })
+  ipcMain.handle('window:toggleMaximize', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win) return false
+    if (win.isMaximized()) {
+      win.unmaximize()
+    } else {
+      win.maximize()
+    }
+    return win.isMaximized()
+  })
+  ipcMain.handle('window:close', (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.close()
+  })
+  ipcMain.handle('window:isMaximized', (event) => {
+    return BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false
+  })
+
   // First-launch detection
   ipcMain.handle('app:isFirstLaunch', () => {
     return !existsSync(HARNESSCLAW_LAUNCHED_FLAG)
@@ -2036,6 +2069,72 @@ app.whenReady().then(() => {
       console.error('[DB] listProjectSessions error:', err)
       return []
     }
+  })
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // Chat attention (问答节点待操作提醒)
+  // ────────────────────────────────────────────────────────────────────────────
+  const sessionAttentionMap = new Map<string, boolean>()
+
+  ipcMain.handle('chat:set-session-attention', (event, sessionId: string, needsAttention: boolean) => {
+    const previous = sessionAttentionMap.get(sessionId) || false
+
+    // 更新状态：需要注意时设置，不需要时删除（避免 Map 无限增长）
+    if (needsAttention) {
+      sessionAttentionMap.set(sessionId, true)
+    } else {
+      sessionAttentionMap.delete(sessionId)
+    }
+
+    // 广播给所有窗口
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send('chat:attention-changed', sessionId, needsAttention)
+    }
+
+    // 如果从 false → true，且窗口最小化/失焦，弹系统通知
+    if (!previous && needsAttention && mainWindowRef) {
+      const isHidden = mainWindowRef.isMinimized() || !mainWindowRef.isFocused()
+      if (isHidden) {
+        const notification = new Notification({
+          title: '需要你的操作',
+          body: 'Emma 正在等待你的回复',
+          silent: false,
+        })
+        notification.on('click', () => {
+          if (mainWindowRef) {
+            if (mainWindowRef.isMinimized()) mainWindowRef.restore()
+            mainWindowRef.show()
+            mainWindowRef.focus()
+            // 跳转到对应会话（通过 IPC 通知渲染进程）
+            mainWindowRef.webContents.send('chat:navigate-to-session', sessionId)
+          }
+        })
+        notification.show()
+
+        // Windows 任务栏闪烁
+        if (process.platform === 'win32') {
+          mainWindowRef.flashFrame(true)
+          mainWindowRef.once('focus', () => {
+            mainWindowRef?.flashFrame(false)
+          })
+        }
+
+        // macOS Dock 弹跳
+        if (process.platform === 'darwin') {
+          app.dock.bounce('critical')
+        }
+      }
+    }
+
+    return { ok: true }
+  })
+
+  ipcMain.handle('chat:get-attention-sessions', () => {
+    const sessions: string[] = []
+    for (const [sessionId, needs] of sessionAttentionMap.entries()) {
+      if (needs) sessions.push(sessionId)
+    }
+    return sessions
   })
 
   ipcMain.handle('console:listAgents', async (_, params?: { agent_type?: string; source?: string; limit?: number; offset?: number }) => {
@@ -2820,6 +2919,44 @@ app.whenReady().then(() => {
         ? 'image'
         : 'other'
       return { ok: true, abs, size: stat.size, kind }
+    } catch (error) {
+      return { ok: false, error: String((error as Error)?.message || error) }
+    }
+  })
+
+  // workspace:revealFile — reveal a single file in the OS file manager
+  // (Explorer / Finder / xdg) with it selected. Used by the artifact
+  // card's「打开文件所在位置」action. Accepts an absolute path under the
+  // user's home dir; rejects anything outside ~ to avoid arbitrary reveal.
+  ipcMain.handle('workspace:revealFile', async (_, rawPath: unknown) => {
+    try {
+      if (typeof rawPath !== 'string' || !rawPath.trim()) {
+        return { ok: false, error: 'invalid_path' }
+      }
+      const expand = (input: string): string => {
+        if (input === '~') return homedir()
+        if (input.startsWith('~/') || input.startsWith('~\\')) return join(homedir(), input.slice(2))
+        return input
+      }
+      const expanded = expand(rawPath.trim())
+      const absolute = isAbsolute(expanded) ? expanded : join(homedir(), expanded)
+      // 仅允许定位用户家目录内的文件，避免越权 reveal 任意路径。
+      const home = homedir()
+      const normalized = resolve(absolute)
+      if (normalized !== home && !normalized.startsWith(home + sep)) {
+        return { ok: false, error: 'path_out_of_scope' }
+      }
+      if (existsSync(normalized) && statSync(normalized).isFile()) {
+        shell.showItemInFolder(normalized)
+        return { ok: true, path: normalized }
+      }
+      // 文件不存在时退回到打开其父目录。
+      const parent = dirname(normalized)
+      if (!existsSync(parent)) {
+        return { ok: false, error: `路径不存在：${normalized}` }
+      }
+      const error = await shell.openPath(parent)
+      return { ok: !error, path: parent, error: error || undefined }
     } catch (error) {
       return { ok: false, error: String((error as Error)?.message || error) }
     }

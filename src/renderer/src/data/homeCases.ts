@@ -1,6 +1,9 @@
+// 首页推荐卡片数据。
+// title / content 是界面文案，走 i18n（home.cases.<id>.title / .content）；
+// prompt 是点击卡片后填入输入框、发给 Agent 的提示词，按产品要求保持中文，
+// 直接内联在这里，不进 locale。id 为稳定标识，同时作为 i18n key。
 export interface HomeCase {
-  title: string
-  content: string
+  id: string
   prompt: string
   featured: boolean
 }
@@ -18,8 +21,7 @@ export const HOME_CATEGORIES = [
 export const HOME_CASES: HomeCasesByCategory = {
   '办公提效': [
     {
-      title: '📝会议纪要助手',
-      content: '自动整理会议录音/文稿，生成结构化纪要',
+      id: 'meeting-notes',
       prompt: `帮我整理最近一周的会议内容。请扫描我 Downloads 文件夹下最近 7天的音频文件（mp3/m4a/wav）和文档（docx/txt/md），识别哪些是会议录音或转写记录，然后为每场会议生成一份中文纪要。
 纪要需包含：
   1. 会议基本信息：时间、参会人、议题
@@ -31,8 +33,7 @@ export const HOME_CASES: HomeCasesByCategory = {
       featured: true,
     },
     {
-      title: '🔍项目快速理解',
-      content: '快速掌握新项目的架构、模块和技术栈',
+      id: 'project-overview',
       prompt: `我刚打开了这个项目，帮我快速理解它的核心结构。
 请分析：
 1. 项目概况：根据 README/package.json/go.mod 等文件，说明项目用途、技术栈、依赖关系
@@ -44,8 +45,7 @@ export const HOME_CASES: HomeCasesByCategory = {
       featured: false,
     },
     {
-      title: '📊竞品调研报告',
-      content: '自动抓取多个产品信息，生成对比分析',
+      id: 'competitor-research',
       prompt: `帮我做一份竞品调研。我想了解 Notion、Coda、飞书多维表格 这三款产品的情况。
 请调研以下内容：
   1. 核心功能：主打特性、差异化能力
@@ -57,8 +57,7 @@ export const HOME_CASES: HomeCasesByCategory = {
       featured: true,
     },
     {
-      title: '📅个人周报生成',
-      content: '自动扫描工作记录，生成结构化周报',
+      id: 'weekly-report',
       prompt: `帮我生成本周（6月10-14日）的工作周报。
 请扫描：
   1. Git 提交记录：我 ~/projects 目录下所有项目的 git commits，按项目分组，说明本周做了什么改动
@@ -73,8 +72,7 @@ export const HOME_CASES: HomeCasesByCategory = {
       featured: false,
     },
     {
-      title: '📄邮件/文档批量处理',
-      content: '批量提取 PDF/合同信息，汇总成表格',
+      id: 'doc-batch',
       prompt: `我 Downloads 文件夹里有一堆合同 PDF，帮我批量处理。
 请：
   1. 扫描所有 PDF 文件（最近 30 天内的）
@@ -96,8 +94,7 @@ export const HOME_CASES: HomeCasesByCategory = {
 
   '电脑设置': [
     {
-      title: '🔧电脑体检优化',
-      content: '诊断系统健康状况，给出优化建议',
+      id: 'pc-checkup',
       prompt: `帮我给电脑做个全面体检，诊断潜在问题并给出优化建议。
 请检查：
   1. 磁盘占用：找出占用空间最大的 Top 10 文件/目录
@@ -117,8 +114,7 @@ export const HOME_CASES: HomeCasesByCategory = {
 
   '学习助手': [
     {
-      title: '📚学习资料教练',
-      content: '为你定制学习路径，聚合优质资源',
+      id: 'study-coach',
       prompt: `我想系统学习 Rust 编程语言，帮我制定一份学习计划。
 请帮我：
   1. 找资源：从网上搜索 Rust 的教程、文档、论文、视频、博客文章
@@ -139,8 +135,7 @@ export const HOME_CASES: HomeCasesByCategory = {
 
   '日常生活': [
     {
-      title: '✈️旅行规划助手',
-      content: '从景点推荐到行程安排，一站式旅行规划',
+      id: 'travel-planner',
       prompt: `我计划 6月15-17日 去成都玩 3 天，帮我做一份详细的旅行规划。
 请完成：
   1. 景点推荐：根据成都的经典景点、小众玩法，推荐 8-10 个值得去的地方，说明特色和游玩时长
@@ -158,8 +153,7 @@ export const HOME_CASES: HomeCasesByCategory = {
 
   '休息娱乐': [
     {
-      title: '🔮AI占卜师',
-      content: '塔罗/星座/周易，生成你的专属运势解读',
+      id: 'ai-fortune',
       prompt: `我想体验一次 AI 占卜。
 请帮我完成一次完整的塔罗牌占卜：
 1. 先问我想占卜什么方向（事业/感情/财运/综合运势）
@@ -176,8 +170,7 @@ export const HOME_CASES: HomeCasesByCategory = {
       featured: false,
     },
     {
-      title: '🎮小游戏生成器',
-      content: '一句话生成可玩的网页游戏',
+      id: 'mini-game',
       prompt: `帮我生成一个网页版 2048 游戏。
 要求：
 1. 完整可玩：支持键盘方向键操作，数字合并逻辑正确

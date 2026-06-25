@@ -827,6 +827,26 @@ export interface LauncherAPI {
   onReset: (callback: () => void) => () => void
 }
 
+// Custom window controls — frameless titlebar buttons (minimize /
+// maximize-restore / close) drawn by the renderer's <WindowControls>.
+// See `windowControlsAPI` in preload/index.ts.
+interface WindowControlsAPI {
+  minimize: () => Promise<void>
+  /** Toggle maximize/restore; resolves with the resulting maximized state. */
+  toggleMaximize: () => Promise<boolean>
+  close: () => Promise<void>
+  isMaximized: () => Promise<boolean>
+  /** Subscribe to maximize-state changes (incl. OS snap). Returns unsubscribe. */
+  onMaximizedChanged: (callback: (maximized: boolean) => void) => () => void
+}
+
+interface ChatAPI {
+  setSessionAttention: (sessionId: string, needsAttention: boolean) => Promise<{ ok: boolean }>
+  getAttentionSessions: () => Promise<string[]>
+  onAttentionChanged: (callback: (sessionId: string, needsAttention: boolean) => void) => () => void
+  onNavigateToSession: (callback: (sessionId: string) => void) => () => void
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -838,6 +858,7 @@ declare global {
     appConfig: ConfigAPI
     appRuntime: AppRuntimeAPI
     harnessclaw: HarnessclawAPI
+    chatApi: ChatAPI
     browserAgent: BrowserAgentAPI
     skills: SkillsAPI
     db: DbAPI
@@ -846,6 +867,7 @@ declare global {
     workspace: WorkspaceAPI
     agentApi: AgentApiInterface
     launcherApi: LauncherAPI
+    windowControls: WindowControlsAPI
   }
 }
 
@@ -873,6 +895,10 @@ interface WorkspaceAPI {
   statFile: (sessionId: string | null, path: string) => Promise<
     | { ok: true; abs: string; size: number; kind: 'image' | 'other' }
     | { ok: false; error: string; abs?: string }
+  >
+  revealFile: (filePath: string) => Promise<
+    | { ok: true; path: string }
+    | { ok: false; error: string; path?: string }
   >
 }
 

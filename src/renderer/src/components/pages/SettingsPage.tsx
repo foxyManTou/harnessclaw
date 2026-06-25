@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { ProviderLogo } from '../common/ProviderLogo'
 import {
   Wifi, Shield, Palette, HardDrive,
@@ -13,6 +13,7 @@ import {
   ChevronDown, ChevronRight, ExternalLink,
   SlidersHorizontal, RefreshCw, Settings2,
   Globe, Image, Film, Sun, GripVertical, Plus,
+  ArrowLeft,
   // Keyboard = typing hint icon shown inside the hotkey-capture input
   // while we're waiting for the user to press a combination.
   Keyboard,
@@ -7434,6 +7435,7 @@ const IMAGE_DEFAULT_PATH = '/v1/images/generations'
 // (videogen 没有 path,imagegen 有)。每个 provider 一个卡片,由
 // ModelSection 左栏选中的 providerName 决定渲染哪一个。
 function ImageModelSection({ providerName }: { providerName: string }) {
+  const { t } = useTranslation()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [showApiKey, setShowApiKey] = useState(false)
@@ -7554,7 +7556,7 @@ function ImageModelSection({ providerName }: { providerName: string }) {
       <GroupCard title={`${mediaProviderDisplayName(providerName)} 图片生成`}>
         {/* API 密钥 */}
         <div className="py-3.5 border-b border-border">
-          <p className="text-sm font-semibold text-foreground mb-2">API 密钥</p>
+          <p className="text-sm font-semibold text-foreground mb-2">{t('settings.models.mediaCard.apiKey')}</p>
           <div className="relative">
             <input
               type={showApiKey ? 'text' : 'password'}
@@ -7576,7 +7578,7 @@ function ImageModelSection({ providerName }: { providerName: string }) {
 
         {/* API 地址（完整接口 URL） */}
         <div className="py-3.5 border-b border-border">
-          <p className="text-sm font-semibold text-foreground mb-2">API 地址</p>
+          <p className="text-sm font-semibold text-foreground mb-2">{t('settings.models.mediaCard.apiBase')}</p>
           <input
             type="text"
             value={apiUrl}
@@ -7584,22 +7586,22 @@ function ImageModelSection({ providerName }: { providerName: string }) {
             placeholder={`https://api.openai.com${IMAGE_DEFAULT_PATH}`}
             className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none transition-shadow placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
           />
-          <p className="mt-1.5 text-xs text-muted-foreground">完整的图片生成接口地址，例如 {`https://api.openai.com${IMAGE_DEFAULT_PATH}`}</p>
+          <p className="mt-1.5 text-xs text-muted-foreground">{t('settings.models.mediaCard.imageApiBaseHint', { url: `https://api.openai.com${IMAGE_DEFAULT_PATH}` })}</p>
         </div>
 
         {/* Endpoints */}
         <div className="py-3.5">
           <div className="flex items-center justify-between mb-2">
-            <p className="text-sm font-semibold text-foreground">Endpoints</p>
+            <p className="text-sm font-semibold text-foreground">{t('settings.models.mediaCard.endpoints')}</p>
             <button
               onClick={addEndpoint}
               className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-card px-2 text-xs font-medium text-foreground transition-colors hover:bg-muted"
             >
-              <Plus size={13} /> 添加 endpoint
+              <Plus size={13} /> {t('settings.models.mediaCard.addEndpoint')}
             </button>
           </div>
           {endpoints.length === 0 ? (
-            <p className="py-2 text-xs text-muted-foreground">暂无 endpoint,点击“添加 endpoint”新增一行。</p>
+            <p className="py-2 text-xs text-muted-foreground">{t('settings.models.mediaCard.noEndpoints')}</p>
           ) : (
             <div className="flex flex-col gap-2">
               {endpoints.map((row, index) => (
@@ -7660,6 +7662,7 @@ function ImageModelSection({ providerName }: { providerName: string }) {
 // ModelSection 左栏选中的视频 provider 决定。
 
 function VideoModelSection({ providerName }: { providerName: string }) {
+  const { t } = useTranslation()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [showApiKey, setShowApiKey] = useState(false)
@@ -7778,7 +7781,7 @@ function VideoModelSection({ providerName }: { providerName: string }) {
       <GroupCard title={`${mediaProviderDisplayName(providerName)} 视频生成`}>
         {/* API 密钥 */}
         <div className="py-3.5 border-b border-border">
-          <p className="text-sm font-semibold text-foreground mb-2">API 密钥</p>
+          <p className="text-sm font-semibold text-foreground mb-2">{t('settings.models.mediaCard.apiKey')}</p>
           <div className="relative">
             <input
               type={showApiKey ? 'text' : 'password'}
@@ -7800,7 +7803,7 @@ function VideoModelSection({ providerName }: { providerName: string }) {
 
         {/* API 地址 */}
         <div className="py-3.5 border-b border-border">
-          <p className="text-sm font-semibold text-foreground mb-2">API 地址</p>
+          <p className="text-sm font-semibold text-foreground mb-2">{t('settings.models.mediaCard.apiBase')}</p>
           <input
             type="text"
             value={baseUrl}
@@ -7808,22 +7811,22 @@ function VideoModelSection({ providerName }: { providerName: string }) {
             placeholder={DOUBAO_DEFAULT_BASE_URL}
             className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none transition-shadow placeholder:text-muted-foreground focus:ring-1 focus:ring-ring"
           />
-          <p className="mt-1.5 text-xs text-muted-foreground">留空则使用默认地址 {DOUBAO_DEFAULT_BASE_URL}</p>
+          <p className="mt-1.5 text-xs text-muted-foreground">{t('settings.models.mediaCard.videoApiBaseHint', { url: DOUBAO_DEFAULT_BASE_URL })}</p>
         </div>
 
         {/* Endpoints */}
         <div className="py-3.5">
           <div className="flex items-center justify-between mb-2">
-            <p className="text-sm font-semibold text-foreground">Endpoints</p>
+            <p className="text-sm font-semibold text-foreground">{t('settings.models.mediaCard.endpoints')}</p>
             <button
               onClick={addEndpoint}
               className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-card px-2 text-xs font-medium text-foreground transition-colors hover:bg-muted"
             >
-              <Plus size={13} /> 添加 endpoint
+              <Plus size={13} /> {t('settings.models.mediaCard.addEndpoint')}
             </button>
           </div>
           {endpoints.length === 0 ? (
-            <p className="py-2 text-xs text-muted-foreground">暂无 endpoint,点击“添加 endpoint”新增一行。</p>
+            <p className="py-2 text-xs text-muted-foreground">{t('settings.models.mediaCard.noEndpoints')}</p>
           ) : (
             <div className="flex flex-col gap-2">
               {endpoints.map((row, index) => (
@@ -7887,6 +7890,7 @@ const FULL_WIDTH_SECTIONS = new Set<SectionKey>(['models', 'search', 'logs'])
 export function SettingsPage() {
   const { t } = useTranslation()
   const location = useLocation()
+  const navigate = useNavigate()
   const initialSection = location.state?.initialSection as SectionKey | undefined
   const [active, setActive] = useState<SectionKey>(
     initialSection === 'channels' || initialSection === 'auth' ? 'connection' : (initialSection || 'connection')
@@ -7935,6 +7939,13 @@ export function SettingsPage() {
     <div className="flex h-full overflow-hidden">
       {/* Left nav */}
       <nav className="w-48 flex-shrink-0 border-r border-border bg-card flex flex-col py-4 gap-0.5 px-2">
+        <button
+          onClick={() => navigate(-1)}
+          className="flex items-center gap-1.5 px-2 py-1.5 mb-2 rounded-lg text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <ArrowLeft size={16} className="flex-shrink-0" />
+          {t('settings.back')}
+        </button>
         <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest px-2 mb-1">
           {t('settings.nav.settings')}
         </p>

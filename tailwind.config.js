@@ -71,6 +71,20 @@ module.exports = {
         'accordion-up': 'accordion-up 0.2s ease-out',
         'pulse': 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
       },
+      // 自定义 prose-xs：@tailwindcss/typography 内置尺寸只有 sm/base/lg/...，
+      // 没有 xs。对话页正文按设计稿统一为 12px / 行高 20px（normal 字重），
+      // 让助手 markdown 正文与用户纯文本消息保持一致大小。
+      typography: {
+        xs: {
+          css: {
+            fontSize: '12px',
+            lineHeight: '20px',
+            p: { marginTop: '0.5em', marginBottom: '0.5em', lineHeight: '20px' },
+            li: { marginTop: '0.25em', marginBottom: '0.25em', lineHeight: '20px' },
+            'ul, ol': { marginTop: '0.5em', marginBottom: '0.5em' },
+          },
+        },
+      },
     },
   },
   plugins: [require('tailwindcss-animate'), require('@tailwindcss/typography')],

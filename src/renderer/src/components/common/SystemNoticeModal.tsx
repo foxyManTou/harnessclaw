@@ -1,4 +1,5 @@
 import { createPortal } from 'react-dom'
+import { useTranslation } from 'react-i18next'
 import { AlertTriangle, Info, AlertCircle, CheckCircle2 } from 'lucide-react'
 
 /**
@@ -43,10 +44,11 @@ export interface SystemNotice {
  * Known topics (v0.6.1 §10.9 table). Adding a new topic here is optional —
  * unknown topics still render correctly via the fallback path; this map is
  * only consulted for business-logic-aware affordances (currently: a
- * "去设置" CTA for the search-config gap).
+ * "去设置" CTA for the search-config gap). The human-readable label is
+ * resolved at render time via `chat.systemNotice.topics.<topic>`.
  */
-const KNOWN_TOPICS: Record<string, { label: string; deeplink?: string }> = {
-  search_capability_gap: { label: '搜索能力', deeplink: 'settings:search' },
+const KNOWN_TOPICS: Record<string, { deeplink?: string }> = {
+  search_capability_gap: { deeplink: 'settings:search' },
 }
 
 const VARIANT_BY_ICON: Record<
@@ -117,12 +119,16 @@ export function SystemNoticeModal({
    */
   onNavigateDeeplink?: (deeplink: string, notice: SystemNotice) => void
 }) {
+  const { t } = useTranslation()
   if (!notice) return null
 
   const variant = pickVariant(notice.icon, notice.severity)
   const { Icon } = variant
   const known = notice.topic ? KNOWN_TOPICS[notice.topic] : undefined
   const canDeeplink = !!known?.deeplink && !!onNavigateDeeplink
+  const topicLabel = notice.topic
+    ? t(`chat.systemNotice.topics.${notice.topic}`, { defaultValue: notice.topic })
+    : ''
 
   return createPortal(
     <div
@@ -158,7 +164,7 @@ export function SystemNoticeModal({
                   className="rounded-full bg-muted px-2 py-0.5 font-mono text-[10px] font-medium text-muted-foreground"
                   title={notice.topic}
                 >
-                  {known?.label ?? notice.topic}
+                  {topicLabel}
                 </span>
               )}
             </div>
@@ -169,7 +175,7 @@ export function SystemNoticeModal({
             )}
             {notice.actionHint && (
               <div className="mt-3 rounded-xl border border-border bg-muted/40 p-3">
-                <p className="text-xs font-medium text-muted-foreground">下一步</p>
+                <p className="text-xs font-medium text-muted-foreground">{t('chat.systemNotice.nextStep')}</p>
                 <pre className="mt-1 whitespace-pre-wrap break-words text-xs leading-5 text-foreground">
                   {notice.actionHint}
                 </pre>
@@ -179,7 +185,7 @@ export function SystemNoticeModal({
         </div>
         <div className="mt-5 flex items-center justify-between gap-3">
           <p className="text-[11px] text-muted-foreground">
-            {queueDepth > 0 ? `还有 ${queueDepth} 条系统提示` : '请确认后继续'}
+            {queueDepth > 0 ? t('chat.systemNotice.queueRemaining', { count: queueDepth }) : t('chat.systemNotice.confirmToContinue')}
           </p>
           <div className="flex items-center gap-2">
             {canDeeplink && (
@@ -191,7 +197,7 @@ export function SystemNoticeModal({
                 }}
                 className="inline-flex min-h-10 items-center justify-center rounded-xl border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
               >
-                去设置
+                {t('chat.systemNotice.goToSettings')}
               </button>
             )}
             <button
@@ -200,7 +206,7 @@ export function SystemNoticeModal({
               autoFocus
               className={`inline-flex min-h-10 items-center justify-center rounded-xl px-4 py-2 text-sm font-medium transition-opacity ${variant.button}`}
             >
-              我已知晓
+              {t('chat.systemNotice.acknowledge')}
             </button>
           </div>
         </div>

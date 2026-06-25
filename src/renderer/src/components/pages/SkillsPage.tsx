@@ -302,7 +302,7 @@ export function SkillsPage() {
         <span className="text-sm font-semibold text-foreground">{t('skills.title')}</span>
         <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full">{skills.length}</span>
         <div className="flex-1" />
-        <div className="titlebar-no-drag flex items-center gap-2">
+        <div className="titlebar-no-drag flex items-center gap-2 pr-32">
           <button
             onClick={() => setMarketOpen(true)}
             className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
