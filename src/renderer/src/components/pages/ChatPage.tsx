@@ -8058,7 +8058,7 @@ export function ChatPage() {
                     'chat-composer-shell relative overflow-hidden rounded-[28px] border bg-card shadow-[0_12px_36px_rgba(15,23,42,0.04)] transition-[border-color,box-shadow]',
                     isDragOver
                       ? 'border-primary shadow-[0_18px_50px_rgba(37,99,235,0.14)]'
-                      : 'border-border focus-within:border-primary'
+                      : 'border-border'
                   )}
                   data-dropped={dropBurstActive ? 'true' : undefined}
                   onDragOver={handleDragOver}
