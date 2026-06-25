@@ -173,7 +173,7 @@ jobs:
 
       - name: Prepare bundled engine runtime
         env:
-          HARNESSCLAW_ENGINE_RUNTIME_VERSION: ${{ contains(github.ref_name, '-beta') && github.ref_name || '' }}
+          HARNESSCLAW_ENGINE_RUNTIME_VERSION: ''
         run: node scripts/prepare-bundled-binaries.cjs --engine-source release --platform "${{ matrix.platform }}" --arch "${{ matrix.arch }}" --output-dir resources/bin
 
       - name: Prepare GitHub release notes
