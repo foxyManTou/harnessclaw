@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, dialog, nativeImage, screen, globalShortcut, protocol, net, Notification, type BrowserWindowConstructorOptions } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog, nativeImage, screen, globalShortcut, protocol, net, Notification } from 'electron'
 import { basename, dirname, extname, isAbsolute, join, resolve, resolve as resolvePath, sep, sep as pathSep } from 'path'
 import { homedir } from 'os'
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, copyFileSync } from 'fs'
@@ -1582,7 +1582,7 @@ app.whenReady().then(() => {
       error: engineConfigInit.error || 'unknown error',
     })
   }
-  setLogThreshold(normalizeLogThreshold(asRecord(readHarnessclawConfig({})).logging?.level))
+  setLogThreshold(normalizeLogThreshold((readHarnessclawConfig({}).logging as Record<string, unknown> | undefined)?.level as string | undefined))
   writeAppLog('info', 'app.lifecycle', 'Application ready')
 
   reportTelemetryEvent({
@@ -2076,7 +2076,7 @@ app.whenReady().then(() => {
   // ────────────────────────────────────────────────────────────────────────────
   const sessionAttentionMap = new Map<string, boolean>()
 
-  ipcMain.handle('chat:set-session-attention', (event, sessionId: string, needsAttention: boolean) => {
+  ipcMain.handle('chat:set-session-attention', (_, sessionId: string, needsAttention: boolean) => {
     const previous = sessionAttentionMap.get(sessionId) || false
 
     // 更新状态：需要注意时设置，不需要时删除（避免 Map 无限增长）
