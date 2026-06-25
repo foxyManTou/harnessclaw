@@ -1,11 +1,30 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Globe, Sparkles, Loader2, ChevronDown, ChevronUp, ChevronRight, FileText, Terminal, Code, ExternalLink, Search, Folder, File, FolderOpen, Wrench } from 'lucide-react'
+import { Loader2, ChevronDown, ChevronUp, ChevronRight, FileText, Terminal, Code, ExternalLink, Search, Folder, File, FolderOpen, Wrench, Globe, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import iconSidebarOpen from '../../assets/icon-sidebar-open.svg'
 import iconSidebarCollapse from '../../assets/icon-sidebar-collapse.svg'
+import emmaAvatar from '../../assets/emma-avatar.svg'
+import agentAvatar from '../../assets/agent-avatar.svg'
+import alexAvatar from '../../assets/alex-avatar.svg'
+import emmaText from '../../assets/emma-text.svg'
+import alexText from '../../assets/alex-text.svg'
+import lilyAvatar from '../../assets/lily-avatar.svg'
+import lilyText from '../../assets/lily-text.svg'
+import maryAvatar from '../../assets/mary-avatar.svg'
+import maryText from '../../assets/mary-text.svg'
 import { resolveArtifactIcon } from '../../assets/artifact-icons'
 import type { ArtifactRef } from '../pages/ChatPage'
+import { getSecretaryForType } from '../../utils/secretaryAssignment'
+
+// Agent LOGO imports
+import emmaLeaderLogo from '../../assets/agent-logos/Emma_leader.svg'
+import alexAgentLogo from '../../assets/agent-logos/Alex Agent.svg'
+import browserAgentLogo from '../../assets/agent-logos/Browser Agent.svg'
+import researchAgentLogo from '../../assets/agent-logos/Research Agent.svg'
+import fileAgentLogo from '../../assets/agent-logos/File Agent.svg'
+import appAgentLogo from '../../assets/agent-logos/App Agent.svg'
+import codingAgentLogo from '../../assets/agent-logos/Coding Agent.svg'
 
 const PANEL_WIDTH_EXPANDED = 280
 const PANEL_WIDTH_COLLAPSED = 44
@@ -92,6 +111,39 @@ export interface MessageGroupedLog {
   entries: AgentLogEntry[]
 }
 
+/**
+ * v4: Agent 树状日志节点（日志模块改造 - 2026/06/22）
+ * 用于右侧日志面板展示 Emma(Leader) → 子 Agent → 工具调用的层级结构
+ */
+export interface AgentTreeNode {
+  /** Agent ID (引擎的 agent_id,主 agent 用 "main") */
+  id: string
+  /** Agent 名称 (Emma / Browser Agent / Research Agent ...) */
+  name: string
+  /** Agent 类型标签 (browser / research / file / app / coding / ...) */
+  type?: string
+  /** Agent 状态 */
+  status: 'running' | 'completed' | 'failed' | 'max_turns' | 'timeout'
+  /** 一句话描述 (来自 agent_desc 或 task) */
+  description?: string
+  /** 开始时间戳 */
+  startTime: number
+  /** 结束时间戳 (running 时为空) */
+  endTime?: number
+  /** 耗时(毫秒) */
+  durationMs?: number
+  /** 该 Agent 执行的工具调用列表 */
+  tools: AgentLogEntry[]
+  /** 子 Agent 列表 */
+  children: AgentTreeNode[]
+  /** 父 Agent ID (用于构建树时查找,渲染时可选) */
+  parentId?: string
+  /** 头像 URL (Emma / Lily / Mary 等角色头像) */
+  avatarSrc?: string
+  /** Agent 元数据 JSON (subagent_end 事件的完整字段,用于展开查看详情) */
+  metadata?: Record<string, unknown>
+}
+
 /** 兼容旧版 plan step 接口的简化日志条目（HEAD 行为）。 */
 interface LegacyLogStep {
   id: string
@@ -105,6 +157,8 @@ interface ConversationSidePanelProps {
   logEntries?: AgentLogEntry[]
   /** v3: 按消息分组的日志时间轴（优先级高于 logEntries） */
   messageGroupedLogs?: MessageGroupedLog[]
+  /** v4: Agent 树状日志（日志模块改造）。优先级最高,存在时渲染树状结构。 */
+  agentTreeLogs?: AgentTreeNode[]
   /** 旧接口：plan steps（HEAD 行为）。当 logEntries 缺省时退回此渲染。 */
   steps?: LegacyLogStep[]
   /** 通用模式产物卡片列表：来自 agent 声明的产物 + meta.json outputs 兜底（ChatPage 合并后传入）。 */
@@ -251,15 +305,414 @@ function openExternalUrl(url: string) {
   }
 }
 
+// ─── Agent 类型到头像映射 ──────────────────────────────────────────────────
+// 根据 Agent 类型(或 id)返回对应的头像。Emma 是 Leader,其他专业 Agent 用通用 Agent 头像。
+function getAgentAvatar(agent: { id: string; name: string; type?: string }): string {
+  // Emma / Leader / main agent
+  if (agent.id === 'main' || agent.id === 'main-end' || agent.name.toLowerCase().includes('emma') || agent.type?.includes('leader')) {
+    return emmaAvatar
+  }
+  // Alex / Freelancer agent
+  if (agent.type?.includes('freelancer')) {
+    return alexAvatar
+  }
+  // 其他子 Agent：随机使用 Lily 或 Mary（同一 type 保持一致）
+  if (agent.type) {
+    const secretary = getSecretaryForType(agent.type)
+    return secretary === 'lily' ? lilyAvatar : maryAvatar
+  }
+  // 兜底
+  return agentAvatar
+}
 
-export function ConversationSidePanel({ logEntries, messageGroupedLogs, steps, artifacts, onSelectArtifact, onRevealArtifact, sessionId, onSelectWorkspaceFile }: ConversationSidePanelProps) {
+// ─── Agent 头像下方文字/图片映射 ──────────────────────────────────────────────
+function getAgentNameDisplay(agent: { id: string; name: string; type?: string }): { type: 'image' | 'text'; value: string } {
+  // Emma / Leader / main agent - 使用 emmaText 图片
+  if (agent.id === 'main' || agent.id === 'main-end' || agent.name.toLowerCase().includes('emma') || agent.type?.includes('leader')) {
+    return { type: 'image', value: emmaText }
+  }
+  // Alex / Freelancer agent - 使用 alexText 图片
+  if (agent.type?.includes('freelancer')) {
+    return { type: 'image', value: alexText }
+  }
+  // 其他子 Agent：使用 Lily 或 Mary 的文字图片
+  if (agent.type) {
+    const secretary = getSecretaryForType(agent.type)
+    return { type: 'image', value: secretary === 'lily' ? lilyText : maryText }
+  }
+  // 兜底：纯文字
+  return { type: 'text', value: agent.name }
+}
+
+// ─── Agent 类型到图标映射 ──────────────────────────────────────────────────
+// 根据 Agent 类型返回对应的 LOGO 图片
+function getAgentTypeLogo(agent: { id: string; name: string; type?: string }): string | null {
+  // Emma / Leader / main agent
+  if (agent.id === 'main' || agent.id === 'main-end' || agent.name.toLowerCase().includes('emma') || agent.type?.includes('leader')) {
+    return emmaLeaderLogo
+  }
+
+  if (!agent.type) return null
+
+  const type = agent.type.toLowerCase()
+
+  if (type.includes('freelancer')) {
+    return alexAgentLogo
+  }
+  if (type.includes('browser')) {
+    return browserAgentLogo
+  }
+  if (type.includes('research')) {
+    return researchAgentLogo
+  }
+  if (type.includes('file')) {
+    return fileAgentLogo
+  }
+  if (type.includes('app')) {
+    return appAgentLogo
+  }
+  if (type.includes('coding') || type.includes('code')) {
+    return codingAgentLogo
+  }
+
+  return null
+}
+
+// ─── Agent 卡片（扁平列表，不递归） ───────────────────────────────────
+interface AgentCardProps {
+  agent: AgentTreeNode
+  isExpanded: boolean
+  toggleExpanded: (agentId: string) => void
+  expandedLogs: Record<string, boolean>
+  toggleLogExpanded: (id: string) => void
+  t: (key: string, opts?: Record<string, unknown>) => string
+  formatRelativeTime: (timestamp: number, t: (key: string, opts?: Record<string, unknown>) => string) => string
+  getToolIcon: (toolName: string, status?: AgentLogEntry['toolStatus']) => JSX.Element
+}
+
+function AgentCard({
+  agent,
+  isExpanded,
+  toggleExpanded,
+  expandedLogs,
+  toggleLogExpanded,
+  t,
+  formatRelativeTime,
+  getToolIcon,
+}: AgentCardProps) {
+  const statusColor = {
+    running: 'text-amber-500',
+    completed: 'text-emerald-500',
+    failed: 'text-red-500',
+    max_turns: 'text-orange-500',
+    timeout: 'text-orange-500',
+  }[agent.status] || 'text-muted-foreground'
+
+  const statusDot = {
+    running: 'bg-amber-500 animate-pulse',
+    completed: 'bg-emerald-500',
+    failed: 'bg-red-500',
+    max_turns: 'bg-orange-500',
+    timeout: 'bg-orange-500',
+  }[agent.status] || 'bg-muted-foreground'
+
+  const hasTools = agent.tools.length > 0
+  const hasMetadata = !!agent.metadata && Object.keys(agent.metadata).length > 0
+  const hasContent = hasTools || hasMetadata
+  const avatarSrc = agent.avatarSrc || getAgentAvatar(agent)
+  const agentLogo = getAgentTypeLogo(agent)
+
+  // 运行中：不可下拉，直接显示"工作中"；完成后才能下拉
+  const isRunning = agent.status === 'running'
+  const canExpand = hasContent && !isRunning
+
+  // 完成后图标下方显示总结文字：
+  //  - Emma 收尾节点 (main-end)：固定文案"已完成任务"
+  //  - Emma 开头节点 (main/leader) 完成：固定文案"已完成任务规划和工作安排"
+  //  - 通用智能体 (freelancer) 完成：固定文案"已完成工作"
+  //  - Browser Agent 完成：固定文案"已完成浏览器调度，打开网页并且截图"
+  //  - Research Agent 完成：固定文案"已完成文件夹搜索和整理"
+  //  - Coding Agent 完成：固定文案"代码已经完成编写"
+  //  - File Agent 完成：固定文案"已完成文件处理工作"
+  //  - App Agent 完成：固定文案"已完成APP相关处理"
+  //  - 其他子 Agent 完成：已完成 + 任务描述（subagent_start 分配的任务内容）
+  //  - 运行中：显示原始任务描述（Emma 为"任务规划中"）
+  const isEndNode = agent.id === 'main-end'
+  const isLeader = agent.id === 'main' || agent.type?.includes('leader')
+  const isFreelancer = agent.type?.includes('freelancer')
+  const agentType = agent.type?.toLowerCase() || ''
+  const isCompleted = agent.status === 'completed'
+  let displayDescription = agent.description
+  if (isEndNode) {
+    displayDescription = t('chat.sidePanel.allTasksCompleted')
+  } else if (isLeader && isCompleted) {
+    displayDescription = t('chat.sidePanel.completedTask')
+  } else if (isFreelancer && isCompleted) {
+    displayDescription = t('chat.sidePanel.completedWork')
+  } else if (isCompleted) {
+    // 根据 agent type 显示专属完成文案
+    if (agentType.includes('browser')) {
+      displayDescription = t('chat.sidePanel.completedBrowser')
+    } else if (agentType.includes('research')) {
+      displayDescription = t('chat.sidePanel.completedResearch')
+    } else if (agentType.includes('coding') || agentType.includes('code')) {
+      displayDescription = t('chat.sidePanel.completedCoding')
+    } else if (agentType.includes('file')) {
+      displayDescription = t('chat.sidePanel.completedFile')
+    } else if (agentType.includes('app')) {
+      displayDescription = t('chat.sidePanel.completedApp')
+    } else {
+      // 兜底：如果有描述就用"已完成 + 描述"，否则用通用"已完成工作"
+      displayDescription = agent.description
+        ? `${t('chat.sidePanel.completedPrefix')}${agent.description}`
+        : t('chat.sidePanel.completedWork')
+    }
+  }
+
+  return (
+    <div>
+      {/* Agent 头部 */}
+      <button
+        onClick={() => canExpand && toggleExpanded(agent.id)}
+        disabled={!canExpand}
+        className={cn(
+          'flex w-full items-start gap-2.5 px-2 py-2.5 text-left transition-colors rounded-lg',
+          canExpand ? 'hover:bg-accent/30 cursor-pointer' : 'cursor-default'
+        )}
+      >
+        {/* 左侧：头像 + 名字垂直布局（设计图：头像 24×24，名字在正下方，45% 灰） */}
+        <div className="flex flex-col items-center gap-1 flex-shrink-0">
+          <img
+            src={avatarSrc}
+            alt={agent.name}
+            className="h-6 w-6 rounded-full object-cover"
+          />
+          {/* 头像下方：根据 agent 类型显示图片或文字 */}
+          {(() => {
+            const nameDisplay = getAgentNameDisplay(agent)
+            if (nameDisplay.type === 'image') {
+              return (
+                <img
+                  src={nameDisplay.value}
+                  alt={agent.name}
+                  className="h-[9px] object-contain opacity-45"
+                />
+              )
+            } else {
+              return <p className="text-[9px] text-muted-foreground/45">{nameDisplay.value}</p>
+            }
+          })()}
+        </div>
+
+        {/* 右侧：内容区（上排 LOGO，下排 文案，文案行尾放"工作中"/展开箭头） */}
+        <div className="min-w-0 flex-1">
+          {/* LOGO 胶囊（设计图高 23，含图标+文字，无状态点） */}
+          <div className="flex items-center mb-[18px]">
+            {agentLogo && (
+              <img
+                src={agentLogo}
+                alt={agent.name}
+                className="h-[23px] flex-shrink-0"
+              />
+            )}
+          </div>
+
+          {/* 文案行：完成文案 + 行尾状态/箭头（Figma：font 10px / line-height 20px / 黑 45%） */}
+          <div className="flex items-end gap-1">
+            {displayDescription && (
+              <p className="min-w-0 text-[10px] leading-[20px] text-black/45 dark:text-white/45">
+                {displayDescription}
+              </p>
+            )}
+
+            {/* 行尾：运行中显示"工作中"（渐变文字），完成后显示展开/折叠图标 */}
+            {isRunning ? (
+              <>
+                <span
+                  className="flex-shrink-0 text-[10px] leading-[20px] dark:hidden"
+                  style={{
+                    backgroundImage:
+                      'linear-gradient(90deg, rgba(0,0,0,0.8) 28%, rgba(0,0,0,0) 68%, rgba(0,0,0,0.8) 100%)',
+                    WebkitBackgroundClip: 'text',
+                    backgroundClip: 'text',
+                    WebkitTextFillColor: 'transparent',
+                    color: 'transparent',
+                  }}
+                >
+                  {t('chat.sidePanel.working')}
+                </span>
+                <span
+                  className="hidden dark:flex flex-shrink-0 text-[10px] leading-[20px]"
+                  style={{
+                    backgroundImage:
+                      'linear-gradient(90deg, rgba(255,255,255,0.8) 28%, rgba(255,255,255,0) 68%, rgba(255,255,255,0.8) 100%)',
+                    WebkitBackgroundClip: 'text',
+                    backgroundClip: 'text',
+                    WebkitTextFillColor: 'transparent',
+                    color: 'transparent',
+                  }}
+                >
+                  {t('chat.sidePanel.working')}
+                </span>
+              </>
+            ) : (
+              canExpand && (
+                <span className="flex-shrink-0 pb-0.5 text-muted-foreground/45">
+                  {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                </span>
+              )
+            )}
+          </div>
+
+          {/* 耗时（设计样例无此行，单独置于文案下方，不影响箭头对齐） */}
+          {agent.durationMs !== undefined && (
+            <p className="mt-1.5 text-[10px] text-muted-foreground/40">
+              {formatDuration(agent.durationMs)}
+            </p>
+          )}
+        </div>
+      </button>
+
+      {/* 展开的内容：元数据 + 工具列表（运行中不可展开） */}
+      {isExpanded && canExpand && (
+        <div className="ml-[20px] mt-2 border-l-2 border-muted-foreground/10 pl-3">{/* 头像中心位置：8px padding + 12px 半径 = 20px */}
+          {/* Agent 元数据 JSON (subagent_end 完整字段) */}
+          {hasMetadata && (
+            <div className="mb-2">
+              <p className="text-[10px] font-medium text-muted-foreground mb-1">Agent 元数据:</p>
+              <pre className="text-[10px] text-foreground/80 whitespace-pre-wrap break-words font-mono bg-muted/20 rounded px-1.5 py-1 max-h-32 overflow-y-auto">
+                {JSON.stringify(agent.metadata, null, 2)}
+              </pre>
+            </div>
+          )}
+
+          {/* 工具列表 */}
+          {hasTools && (
+          <div className="space-y-1.5">
+            {agent.tools.map((tool) => {
+                const toolExpanded = expandedLogs[tool.id] || false
+                const hasDetails = !!(
+                  tool.durationMs ||
+                  tool.errorMessage ||
+                  tool.toolInput ||
+                  tool.toolOutput
+                )
+                return (
+                  <div key={tool.id} className="rounded border border-border/60 bg-background/40 text-xs">
+                    {/* 工具头部 */}
+                    <button
+                      onClick={() => hasDetails && toggleLogExpanded(tool.id)}
+                      disabled={!hasDetails}
+                      className={cn(
+                        'flex w-full items-center gap-2 px-2 py-1.5 text-left transition-colors',
+                        hasDetails && 'hover:bg-accent/30 cursor-pointer',
+                        !hasDetails && 'cursor-default'
+                      )}
+                    >
+                      {/* 工具图标 */}
+                      {getToolIcon(tool.toolName || '', tool.toolStatus)}
+                      <div className="min-w-0 flex-1">
+                        {/* 工具名 + 描述 */}
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-medium text-foreground text-[11px]">
+                            {tool.toolName || 'Tool'}
+                          </span>
+                          {tool.toolStatus && (
+                            <span className={cn(
+                              'text-[10px]',
+                              tool.toolStatus === 'success' ? 'text-emerald-500' :
+                              tool.toolStatus === 'failed' ? 'text-red-500' :
+                              tool.toolStatus === 'running' ? 'text-amber-500' :
+                              'text-muted-foreground'
+                            )}>
+                              {tool.toolStatus === 'success' ? '✓' :
+                               tool.toolStatus === 'failed' ? '✗' :
+                               tool.toolStatus === 'running' ? '...' : ''}
+                            </span>
+                          )}
+                        </div>
+                        {tool.description && (
+                          <p className="mt-0.5 truncate text-[10px] text-muted-foreground">
+                            {tool.description}
+                          </p>
+                        )}
+                      </div>
+                      {/* 耗时 */}
+                      {tool.durationMs !== undefined && (
+                        <span className="flex-shrink-0 text-[10px] text-muted-foreground">
+                          {formatDuration(tool.durationMs)}
+                        </span>
+                      )}
+                      {/* 展开图标 */}
+                      {hasDetails && (
+                        toolExpanded ? <ChevronUp size={12} className="flex-shrink-0 text-muted-foreground" /> : <ChevronDown size={12} className="flex-shrink-0 text-muted-foreground" />
+                      )}
+                    </button>
+
+                    {/* 展开的工具详情 */}
+                    {toolExpanded && hasDetails && (
+                      <div className="border-t border-border/40 px-2 py-2 space-y-1.5 bg-muted/20">
+                        {tool.toolInput && (
+                          <div>
+                            <p className="text-[10px] font-medium text-muted-foreground mb-0.5">输入:</p>
+                            <pre className="text-[10px] text-foreground/80 whitespace-pre-wrap break-words font-mono bg-background/60 rounded px-1.5 py-1 max-h-32 overflow-y-auto">
+                              {tool.toolInput}
+                            </pre>
+                          </div>
+                        )}
+                        {tool.toolOutput && (
+                          <div>
+                            <p className="text-[10px] font-medium text-muted-foreground mb-0.5">输出:</p>
+                            <pre className="text-[10px] text-foreground/80 whitespace-pre-wrap break-words font-mono bg-background/60 rounded px-1.5 py-1 max-h-32 overflow-y-auto">
+                              {tool.toolOutput}
+                            </pre>
+                          </div>
+                        )}
+                        {tool.errorMessage && (
+                          <div>
+                            <p className="text-[10px] font-medium text-red-500 mb-0.5">错误:</p>
+                            <p className="text-[10px] text-red-500/80 whitespace-pre-wrap break-words">
+                              {tool.errorMessage}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+export function ConversationSidePanel({ logEntries, messageGroupedLogs, agentTreeLogs, steps, artifacts, onSelectArtifact, onRevealArtifact, sessionId, onSelectWorkspaceFile }: ConversationSidePanelProps) {
   const { t } = useTranslation()
-  // 优先级：messageGroupedLogs > logEntries > steps
-  const useGroupedLogs = !!messageGroupedLogs && messageGroupedLogs.length > 0
-  const useLegacySteps = !useGroupedLogs && !logEntries && Array.isArray(steps)
+  // 优先级：agentTreeLogs > messageGroupedLogs > logEntries > steps
+  const useAgentTree = !!agentTreeLogs && agentTreeLogs.length > 0
+  const useGroupedLogs = !useAgentTree && !!messageGroupedLogs && messageGroupedLogs.length > 0
+  const useLegacySteps = !useAgentTree && !useGroupedLogs && !logEntries && Array.isArray(steps)
   const effectiveLogEntries = logEntries ?? []
   const effectiveSteps = steps ?? []
   const effectiveGroupedLogs = messageGroupedLogs ?? []
+  const effectiveAgentTreeLogs = agentTreeLogs ?? []
+
+  // 拍平 Agent 树：将树状结构转成扁平列表（Emma + 所有子 Agent 同级）
+  const flattenAgentTree = (nodes: AgentTreeNode[]): AgentTreeNode[] => {
+    const result: AgentTreeNode[] = []
+    const traverse = (node: AgentTreeNode) => {
+      result.push(node)
+      node.children.forEach(traverse)
+    }
+    nodes.forEach(traverse)
+    return result
+  }
+
+  const flatAgentList = flattenAgentTree(effectiveAgentTreeLogs)
   // Default closed every visit (tab choice is persisted, expanded state isn't).
   const [expanded, setExpanded] = useState(false)
   const [activeTab, setActiveTab] = useState<PanelTab>(() => readStoredTab())
@@ -269,9 +722,32 @@ export function ConversationSidePanel({ logEntries, messageGroupedLogs, steps, a
   const [expandedLogs, setExpandedLogs] = useState<Record<string, boolean>>({})
   // 消息分组展开状态：key = messageId, value = true 表示展开
   const [expandedMessages, setExpandedMessages] = useState<Record<string, boolean>>({})
+  // Agent 树节点展开状态：key = agent.id, value = true 表示展开
+  const [expandedAgents, setExpandedAgents] = useState<Record<string, boolean>>({})
   // logEntries 变化时(切会话/切对话),清理已经不在列表里的展开状态。
   useEffect(() => {
-    if (useGroupedLogs) {
+    if (useAgentTree) {
+      setExpandedAgents((prev) => {
+        const liveIds = new Set<string>()
+        const collectIds = (nodes: AgentTreeNode[]) => {
+          nodes.forEach((n) => {
+            liveIds.add(n.id)
+            collectIds(n.children)
+          })
+        }
+        collectIds(effectiveAgentTreeLogs)
+        let changed = false
+        const next: Record<string, boolean> = {}
+        for (const key of Object.keys(prev)) {
+          if (liveIds.has(key)) {
+            next[key] = prev[key]
+          } else {
+            changed = true
+          }
+        }
+        return changed ? next : prev
+      })
+    } else if (useGroupedLogs) {
       setExpandedMessages((prev) => {
         const liveIds = new Set(effectiveGroupedLogs.map((g) => g.messageId))
         let changed = false
@@ -300,7 +776,7 @@ export function ConversationSidePanel({ logEntries, messageGroupedLogs, steps, a
         return changed ? next : prev
       })
     }
-  }, [useGroupedLogs, effectiveLogEntries, effectiveGroupedLogs])
+  }, [useAgentTree, useGroupedLogs, effectiveLogEntries, effectiveGroupedLogs, effectiveAgentTreeLogs])
   // 相对时间需要随时间推移自动刷新("刚刚"→"1 分钟前")。仅在面板展开
   // 且当前在日志 tab 时启动 60s ticker,避免后台空转。
   const [, forceTick] = useState(0)
@@ -333,13 +809,24 @@ export function ConversationSidePanel({ logEntries, messageGroupedLogs, steps, a
   const toggleMessageExpanded = (messageId: string) => {
     setExpandedMessages((prev) => ({ ...prev, [messageId]: !prev[messageId] }))
   }
+  const toggleAgentExpanded = (agentId: string) => {
+    setExpandedAgents((prev) => ({ ...prev, [agentId]: !prev[agentId] }))
+  }
 
   return (
-    <aside
-      aria-label={t('chat.sidePanel.label')}
-      style={{ width: expanded ? PANEL_WIDTH_EXPANDED : PANEL_WIDTH_COLLAPSED }}
-      className="relative flex-shrink-0 flex flex-col select-none overflow-hidden transition-[width] duration-200"
-    >
+    <>
+      {/* Vertical divider - only shown when panel is expanded */}
+      {expanded && (
+        <div className="relative h-full w-0 flex-shrink-0">
+          <div className="absolute top-0 right-0 h-full w-px bg-[#DADEE4]" />
+        </div>
+      )}
+
+      <aside
+        aria-label={t('chat.sidePanel.label')}
+        style={{ width: expanded ? PANEL_WIDTH_EXPANDED : PANEL_WIDTH_COLLAPSED }}
+        className="relative flex-shrink-0 flex flex-col select-none overflow-hidden transition-[width] duration-200"
+      >
       {/* Header: collapse/expand toggle pinned left, tabs centered (when
           expanded). pt-[45px] + the 18px icon centered in the 36px button puts
           the icon 54px from the top boundary, per design spec. */}
@@ -398,7 +885,37 @@ export function ConversationSidePanel({ logEntries, messageGroupedLogs, steps, a
       {expanded && (
         <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
           {activeTab === 'logs' ? (
-            useGroupedLogs ? (
+            useAgentTree ? (
+              effectiveAgentTreeLogs.length === 0 ? (
+                <EmptyState
+                  title={t('chat.sidePanel.noLogs')}
+                  desc={t('chat.sidePanel.noLogsDesc')}
+                />
+              ) : (
+                <div>
+                  {flatAgentList.map((agent, index) => (
+                    <div key={agent.id}>
+                      <AgentCard
+                        agent={agent}
+                        isExpanded={expandedAgents[agent.id] !== false}
+                        toggleExpanded={toggleAgentExpanded}
+                        expandedLogs={expandedLogs}
+                        toggleLogExpanded={toggleLogExpanded}
+                        t={t}
+                        formatRelativeTime={formatRelativeTime}
+                        getToolIcon={getToolIcon}
+                      />
+                      {/* 虚线连接器 - 除了最后一个 Agent */}
+                      {index < flatAgentList.length - 1 && (
+                        <div className="flex justify-start pl-2 py-1">
+                          <div className="ml-[12px] h-6 border-l-[1.5px] border-dashed border-border" />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )
+            ) : useGroupedLogs ? (
               effectiveGroupedLogs.length === 0 ? (
                 <EmptyState
                   title={t('chat.sidePanel.noLogs')}
@@ -742,6 +1259,7 @@ export function ConversationSidePanel({ logEntries, messageGroupedLogs, steps, a
         </div>
       )}
     </aside>
+    </>
   )
 }
 

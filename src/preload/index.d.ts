@@ -843,6 +843,13 @@ interface WindowControlsAPI {
   onMaximizedChanged: (callback: (maximized: boolean) => void) => () => void
 }
 
+interface ChatAPI {
+  setSessionAttention: (sessionId: string, needsAttention: boolean) => Promise<{ ok: boolean }>
+  getAttentionSessions: () => Promise<string[]>
+  onAttentionChanged: (callback: (sessionId: string, needsAttention: boolean) => void) => () => void
+  onNavigateToSession: (callback: (sessionId: string) => void) => () => void
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -854,6 +861,7 @@ declare global {
     appConfig: ConfigAPI
     appRuntime: AppRuntimeAPI
     harnessclaw: HarnessclawAPI
+    chatApi: ChatAPI
     browserAgent: BrowserAgentAPI
     skills: SkillsAPI
     db: DbAPI

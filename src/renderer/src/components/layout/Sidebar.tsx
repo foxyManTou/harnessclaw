@@ -130,6 +130,7 @@ export function Sidebar() {
   const [projects, setProjects] = useState<DbProjectRow[]>([])
   const [assignDialog, setAssignDialog] = useState<AssignProjectDialogState | null>(null)
   const [confirmDeleteSession, setConfirmDeleteSession] = useState<{ sessionId: string; title: string } | null>(null)
+  const [attentionSessions, setAttentionSessions] = useState<Set<string>>(new Set())
   const floatingMenuRef = useRef<HTMLDivElement | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const recentScrollRef = useRef<HTMLDivElement | null>(null)
@@ -187,6 +188,31 @@ export function Sidebar() {
     }
     window.addEventListener('theme-changed', handler)
     return () => window.removeEventListener('theme-changed', handler)
+  }, [])
+
+  // 监听会话 attention 状态变化（问答节点待操作提醒）
+  useEffect(() => {
+    if (!window.chatApi) return
+
+    // 初始加载
+    window.chatApi.getAttentionSessions()
+      .then((sessions: string[]) => setAttentionSessions(new Set(sessions)))
+      .catch((err) => console.error('[Sidebar] getAttentionSessions failed:', err))
+
+    // 监听变化
+    const unsubscribe = window.chatApi.onAttentionChanged((sessionId: string, needsAttention: boolean) => {
+      setAttentionSessions((prev) => {
+        const next = new Set(prev)
+        if (needsAttention) {
+          next.add(sessionId)
+        } else {
+          next.delete(sessionId)
+        }
+        return next
+      })
+    })
+
+    return unsubscribe
   }, [])
 
   const toggleTheme = async () => {
@@ -743,9 +769,13 @@ export function Sidebar() {
                           ) : (
                             <button
                               onClick={() => handleOpenRecentSession(item.id)}
-                              className="min-w-0 flex-1 rounded-lg px-2 py-1 text-left"
+                              className="relative min-w-0 flex-1 rounded-lg px-2 py-1 text-left"
                             >
                               <p className="truncate text-xs text-[#222529]" style={{ fontWeight: 350, lineHeight: '24px' }}>{item.label}</p>
+                              {/* 红点提醒：有待操作的问答节点 */}
+                              {attentionSessions.has(item.id) && (
+                                <span className="absolute right-2 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-red-500" />
+                              )}
                             </button>
                           )}
 

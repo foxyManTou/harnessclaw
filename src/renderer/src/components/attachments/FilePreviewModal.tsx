@@ -5,6 +5,7 @@ import { FileText } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { localFileUrl } from '../../lib/utils'
+import { HtmlArtifactView } from '../common/HtmlArtifactView'
 import type { FilePreviewData } from '../pages/ChatPage'
 
 /**
@@ -46,6 +47,9 @@ export function FilePreviewModal({
   const isAudio = /^(mp3|wav|m4a|aac|flac|ogg)$/.test(ext)
   const isVideo = /^(mp4|mov|avi|mkv|webm)$/.test(ext)
   const isMarkdown = ext === 'md' || ext === 'mdx'
+  // .html/.htm 产物：完整 HTML 文档，双视图（渲染 / 源码）。
+  const isHtmlArtifact =
+    (ext === 'html' || ext === 'htm') && !preview.isBinary && preview.previewKind === undefined
 
   return createPortal(
     <div
@@ -100,6 +104,10 @@ export function FilePreviewModal({
                   </>
                 )}
               </div>
+            </div>
+          ) : isHtmlArtifact ? (
+            <div className="h-[70vh] overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+              <HtmlArtifactView content={preview.content} />
             </div>
           ) : preview.previewKind === 'html' ? (
             <div className="rounded-xl border border-border bg-card p-5 shadow-sm">

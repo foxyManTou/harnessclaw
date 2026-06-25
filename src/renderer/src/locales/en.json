@@ -688,7 +688,11 @@
       "placeholder": "Enter your reply...",
       "cancel": "Cancel",
       "sending": "Sending...",
-      "send": "Send"
+      "send": "Send",
+      "choosePrompt": "Please choose",
+      "otherPlaceholder": "Other",
+      "skip": "Skip",
+      "confirm": "Confirm"
     },
     "file": {
       "label": "Files",
@@ -699,7 +703,9 @@
       "noContentDesc": "This tool call returned no previewable text.",
       "binaryTitle": "Binary file, cannot preview directly",
       "binaryDesc": "This format (e.g. .docx / .pdf / .xlsx) is not UTF-8 text. Use the Export action in the top-right to save the original file.",
-      "preview": "Preview"
+      "preview": "Preview",
+      "viewRender": "Render",
+      "viewSource": "Source"
     },
     "web": {
       "refresh": "Refresh",
@@ -943,6 +949,10 @@
       "tabLogs": "Logs",
       "tabArtifacts": "Artifacts",
       "completedPrefix": "Completed: ",
+      "completedTask": "Completed task planning and work coordination",
+      "allTasksCompleted": "All tasks completed",
+      "planningTask": "Planning task",
+      "working": "Working",
       "unnamedStep": "Unnamed step",
       "noLogs": "No run logs yet",
       "noLogsDesc": "Run progress will appear here",

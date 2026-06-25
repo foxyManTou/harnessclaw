@@ -688,7 +688,11 @@
       "placeholder": "输入你的答复…",
       "cancel": "取消",
       "sending": "发送中…",
-      "send": "发送"
+      "send": "发送",
+      "choosePrompt": "请选择",
+      "otherPlaceholder": "其他",
+      "skip": "跳过",
+      "confirm": "确认"
     },
     "file": {
       "label": "文件",
@@ -699,7 +703,9 @@
       "noContentDesc": "这个工具调用没有返回可预览的文本。",
       "binaryTitle": "二进制文件，无法直接预览",
       "binaryDesc": "该格式（如 .docx / .pdf / .xlsx 等）不是 UTF-8 文本，点击右上角“导出”可保存原始文件。",
-      "preview": "预览"
+      "preview": "预览",
+      "viewRender": "渲染",
+      "viewSource": "源码"
     },
     "web": {
       "refresh": "刷新",
@@ -943,6 +949,16 @@
       "tabLogs": "日志",
       "tabArtifacts": "产物",
       "completedPrefix": "已完成",
+      "completedTask": "已完成任务规划和工作安排",
+      "completedWork": "已完成工作",
+      "completedBrowser": "已完成浏览器调度，打开网页并且截图",
+      "completedResearch": "已完成文件夹搜索和整理",
+      "completedCoding": "代码已经完成编写",
+      "completedFile": "已完成文件处理工作",
+      "completedApp": "已完成APP相关处理",
+      "allTasksCompleted": "已完成任务",
+      "planningTask": "任务规划中",
+      "working": "工作中",
       "unnamedStep": "未命名步骤",
       "noLogs": "暂无运行日志",
       "noLogsDesc": "运行过程将在这里展示",

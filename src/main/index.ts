@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, dialog, nativeImage, screen, globalShortcut, protocol, net, type BrowserWindowConstructorOptions } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog, nativeImage, screen, globalShortcut, protocol, net, Notification, type BrowserWindowConstructorOptions } from 'electron'
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'path'
 import { homedir } from 'os'
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, copyFileSync } from 'fs'
@@ -2080,6 +2080,72 @@ app.whenReady().then(() => {
       console.error('[DB] listProjectSessions error:', err)
       return []
     }
+  })
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // Chat attention (问答节点待操作提醒)
+  // ────────────────────────────────────────────────────────────────────────────
+  const sessionAttentionMap = new Map<string, boolean>()
+
+  ipcMain.handle('chat:set-session-attention', (event, sessionId: string, needsAttention: boolean) => {
+    const previous = sessionAttentionMap.get(sessionId) || false
+
+    // 更新状态：需要注意时设置，不需要时删除（避免 Map 无限增长）
+    if (needsAttention) {
+      sessionAttentionMap.set(sessionId, true)
+    } else {
+      sessionAttentionMap.delete(sessionId)
+    }
+
+    // 广播给所有窗口
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send('chat:attention-changed', sessionId, needsAttention)
+    }
+
+    // 如果从 false → true，且窗口最小化/失焦，弹系统通知
+    if (!previous && needsAttention && mainWindowRef) {
+      const isHidden = mainWindowRef.isMinimized() || !mainWindowRef.isFocused()
+      if (isHidden) {
+        const notification = new Notification({
+          title: '需要你的操作',
+          body: 'Emma 正在等待你的回复',
+          silent: false,
+        })
+        notification.on('click', () => {
+          if (mainWindowRef) {
+            if (mainWindowRef.isMinimized()) mainWindowRef.restore()
+            mainWindowRef.show()
+            mainWindowRef.focus()
+            // 跳转到对应会话（通过 IPC 通知渲染进程）
+            mainWindowRef.webContents.send('chat:navigate-to-session', sessionId)
+          }
+        })
+        notification.show()
+
+        // Windows 任务栏闪烁
+        if (process.platform === 'win32') {
+          mainWindowRef.flashFrame(true)
+          mainWindowRef.once('focus', () => {
+            mainWindowRef?.flashFrame(false)
+          })
+        }
+
+        // macOS Dock 弹跳
+        if (process.platform === 'darwin') {
+          app.dock.bounce('critical')
+        }
+      }
+    }
+
+    return { ok: true }
+  })
+
+  ipcMain.handle('chat:get-attention-sessions', () => {
+    const sessions: string[] = []
+    for (const [sessionId, needs] of sessionAttentionMap.entries()) {
+      if (needs) sessions.push(sessionId)
+    }
+    return sessions
   })
 
   ipcMain.handle('console:listAgents', async (_, params?: { agent_type?: string; source?: string; limit?: number; offset?: number }) => {
