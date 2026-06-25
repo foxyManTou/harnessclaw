@@ -19,6 +19,7 @@ import type { FilePreviewData } from './ChatPage'
 import { HOME_CASES, HOME_CATEGORIES } from '../../data/homeCases'
 import iconAttachFile from '../../assets/icon-attach-file.svg'
 import iconPlanMode from '../../assets/icon-plan-mode.svg'
+import iconStatusConnected from '../../assets/status-connected.svg'
 
 type AttachmentItem = LocalAttachmentItem
 
@@ -286,10 +287,7 @@ export function HomePage() {
           <div className="relative z-10 max-w-[500px]">
             <div className="flex items-center gap-6 mb-[6px]">
               <h1 className="text-2xl font-bold text-[#222529]" style={{ fontFamily: 'Source Han Sans CN' }}>{t('home.title')}</h1>
-              <span className="inline-flex items-center gap-1.5 text-sm font-normal text-[#02B578]" style={{ lineHeight: '20px' }}>
-                <span className="h-2 w-2 rounded-full bg-[#02B578]" />
-                24h Online
-              </span>
+              <img src={iconStatusConnected} alt="24h Online" className="h-7" />
             </div>
             <p className="text-sm text-muted-foreground">
               {t('home.welcomeHint')}
