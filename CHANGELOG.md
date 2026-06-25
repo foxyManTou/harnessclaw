@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, with versions tracked in the repository and published to GitHub Releases.
 
+## [0.0.23-beta.1] - 2026-06-25
+
+### Changed
+
+- Release workflow now uses the latest engine runtime for all releases including beta versions, removing the strict version matching requirement.
+
 ## [0.0.23-beta.0] - 2026-06-16
 
 ### Fixed
