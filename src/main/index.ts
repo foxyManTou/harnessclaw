@@ -28,6 +28,7 @@ import {
   deleteSession as dbDeleteSession, insertMessage, updateMessageContent, updateMessageSystemNotice,
   getMessages, insertToolActivity, insertUsageEvent, listUsageEvents, createProject, getProject,
   listProjects as dbListProjects, softDeleteProjectWithSessions, listProjectSessions,
+  listSessionsWithUnansweredPrompts, sessionHasUnansweredPrompt,
 } from './db'
 import {
   DB_PATH,
@@ -1995,6 +1996,8 @@ app.whenReady().then(() => {
     try {
       closeBrowserAgentSessionsForDbSession(sessionId)
       dbDeleteSession(sessionId)
+      attentionPersistent.delete(sessionId)
+      attentionLive.delete(sessionId)
       broadcastDbSessionsChanged()
       return { ok: true }
     } catch (err) {
@@ -2074,25 +2077,72 @@ app.whenReady().then(() => {
   // ────────────────────────────────────────────────────────────────────────────
   // Chat attention (问答节点待操作提醒)
   // ────────────────────────────────────────────────────────────────────────────
-  const sessionAttentionMap = new Map<string, boolean>()
+  // 双通道并集：
+  //  - persistent：从 DB 派生（有未应答 question/permission 节点的会话）。
+  //    重启后能重建，跨会话切换不丢。随事件落库刷新。
+  //  - live：前端实时上报（覆盖未持久化的 step_decision / 计划草稿）。
+  // 某会话「需要关注」= persistent ∪ live。这样前端报 false 时只清 live，
+  // 不会误清重启后从 DB 重建的 persistent 状态。
+  const attentionPersistent = new Set<string>()
+  const attentionLive = new Set<string>()
+
+  const sessionNeedsAttention = (sessionId: string): boolean =>
+    attentionPersistent.has(sessionId) || attentionLive.has(sessionId)
+
+  // 重算某会话的合并 attention 并在变化时广播；返回最新合并值。
+  const refreshSessionAttention = (sessionId: string): boolean => {
+    const needs = sessionNeedsAttention(sessionId)
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send('chat:attention-changed', sessionId, needs)
+    }
+    return needs
+  }
+
+  // 启动时从 DB 重建 persistent 通道（内存 Set 重启即丢）。
+  try {
+    for (const sessionId of listSessionsWithUnansweredPrompts()) {
+      attentionPersistent.add(sessionId)
+    }
+  } catch (err) {
+    console.error('[Attention] rebuild from DB failed:', err)
+  }
+
+  // 事件落库后调用：按 DB 重新判定该会话的 persistent 态并广播。
+  const syncPersistentAttention = (sessionId: string): void => {
+    if (!sessionId) return
+    try {
+      const had = attentionPersistent.has(sessionId)
+      const has = sessionHasUnansweredPrompt(sessionId)
+      if (has) {
+        attentionPersistent.add(sessionId)
+      } else {
+        attentionPersistent.delete(sessionId)
+      }
+      if (had !== has) refreshSessionAttention(sessionId)
+    } catch (err) {
+      console.error('[Attention] sync failed:', err)
+    }
+  }
 
   ipcMain.handle('chat:set-session-attention', (_, sessionId: string, needsAttention: boolean) => {
-    const previous = sessionAttentionMap.get(sessionId) || false
+    const previous = sessionNeedsAttention(sessionId)
 
-    // 更新状态：需要注意时设置，不需要时删除（避免 Map 无限增长）
+    // live 通道：需要时置入，不需要时移除（persistent 由 DB 派生，不在此动）
     if (needsAttention) {
-      sessionAttentionMap.set(sessionId, true)
+      attentionLive.add(sessionId)
     } else {
-      sessionAttentionMap.delete(sessionId)
+      attentionLive.delete(sessionId)
     }
 
-    // 广播给所有窗口
+    const current = sessionNeedsAttention(sessionId)
+
+    // 广播合并后的最新值（live 清除但 persistent 仍在时，对外仍是 true）
     for (const window of BrowserWindow.getAllWindows()) {
-      window.webContents.send('chat:attention-changed', sessionId, needsAttention)
+      window.webContents.send('chat:attention-changed', sessionId, current)
     }
 
     // 如果从 false → true，且窗口最小化/失焦，弹系统通知
-    if (!previous && needsAttention && mainWindowRef) {
+    if (!previous && current && mainWindowRef) {
       const isHidden = mainWindowRef.isMinimized() || !mainWindowRef.isFocused()
       if (isHidden) {
         const notification = new Notification({
@@ -2130,11 +2180,10 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('chat:get-attention-sessions', () => {
-    const sessions: string[] = []
-    for (const [sessionId, needs] of sessionAttentionMap.entries()) {
-      if (needs) sessions.push(sessionId)
-    }
-    return sessions
+    const sessions = new Set<string>()
+    for (const id of attentionPersistent) sessions.add(id)
+    for (const id of attentionLive) sessions.add(id)
+    return [...sessions]
   })
 
   ipcMain.handle('console:listAgents', async (_, params?: { agent_type?: string; source?: string; limit?: number; offset?: number }) => {
@@ -3307,6 +3356,7 @@ app.whenReady().then(() => {
               const state = pendingDbSegments[sid]
               if (state) state.lastToolTsByModule[getModuleKey(subagent)] = Date.now()
             }
+            syncPersistentAttention(sid)
           }
           break
         }
@@ -3329,6 +3379,7 @@ app.whenReady().then(() => {
               const state = pendingDbSegments[sid]
               if (state) state.lastToolTsByModule[getModuleKey(subagent)] = Date.now()
             }
+            syncPersistentAttention(sid)
           }
           break
         }
@@ -3362,6 +3413,7 @@ app.whenReady().then(() => {
               const state = pendingDbSegments[sid]
               if (state) state.lastToolTsByModule[getModuleKey(subagent)] = Date.now()
             }
+            syncPersistentAttention(sid)
           }
           break
         }
@@ -3389,6 +3441,7 @@ app.whenReady().then(() => {
               const state = pendingDbSegments[sid]
               if (state) state.lastToolTsByModule[getModuleKey(subagent)] = Date.now()
             }
+            syncPersistentAttention(sid)
           }
           break
         }

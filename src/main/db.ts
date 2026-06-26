@@ -631,6 +631,39 @@ export function getMessages(sessionId: string): FullMessage[] {
   }))
 }
 
+// ─── Attention（未应答问答节点）─────────────────────────────────────────────
+// 一个会话「需要关注」= 它存在某个 question / permission 工具节点，其同
+// call_id 的 *_result 从未落库（Emma 仍在等用户回复）。用于重启后重建侧
+// 边栏提醒（内存里的 attention map 重启即丢）。step_decision / 计划草稿不
+// 落库，属 live-only，不在此列。
+const UNANSWERED_PROMPT_FROM = `
+  FROM tool_activities req
+  JOIN messages m ON m.id = req.message_id
+  WHERE req.type IN ('question', 'permission')
+    AND req.call_id IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM tool_activities res
+      JOIN messages m2 ON m2.id = res.message_id
+      WHERE m2.session_id = m.session_id
+        AND res.call_id = req.call_id
+        AND res.type = req.type || '_result'
+    )
+`
+
+export function listSessionsWithUnansweredPrompts(): string[] {
+  const rows = getDb().prepare(
+    `SELECT DISTINCT m.session_id AS session_id ${UNANSWERED_PROMPT_FROM}`
+  ).all() as Array<{ session_id: string }>
+  return rows.map((r) => r.session_id)
+}
+
+export function sessionHasUnansweredPrompt(sessionId: string): boolean {
+  const row = getDb().prepare(
+    `SELECT 1 AS x ${UNANSWERED_PROMPT_FROM} AND m.session_id = ? LIMIT 1`
+  ).get(sessionId) as { x: number } | undefined
+  return !!row
+}
+
 // ─── Tool Activities ─────────────────────────────────────────────────────────
 
 export function insertToolActivity(messageId: string, activity: {

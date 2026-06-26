@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Loader2, ChevronDown, ChevronUp, ChevronRight, FileText, Terminal, Code, ExternalLink, Search, Folder, File, FolderOpen, Wrench, Globe, Sparkles } from 'lucide-react'
+import { Loader2, ChevronDown, ChevronUp, ChevronRight, FileText, Terminal, Code, ExternalLink, Search, Folder, File, FolderOpen, Wrench, Globe, Sparkles, Check, Clock, Circle, XCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import iconSidebarOpen from '../../assets/icon-sidebar-open.svg'
 import iconSidebarCollapse from '../../assets/icon-sidebar-collapse.svg'
@@ -29,7 +29,7 @@ import codingAgentLogo from '../../assets/agent-logos/Coding Agent.svg'
 const PANEL_WIDTH_EXPANDED = 280
 const PANEL_WIDTH_COLLAPSED = 44
 
-type PanelTab = 'logs' | 'artifacts'
+type PanelTab = 'plan' | 'logs' | 'artifacts'
 /** 产物 tab 下的子模式：general=通用模式（产物列表），dev=开发模式（工作区文件树） */
 type ArtifactMode = 'general' | 'dev'
 
@@ -153,6 +153,18 @@ interface LegacyLogStep {
 }
 
 interface ConversationSidePanelProps {
+  /** Plan 模式数据 — 只在 plan 模式下显示计划 tab */
+  planData?: {
+    planId: string
+    goal: string
+    steps: Array<{
+      id: string
+      description?: string
+      status?: 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'skipped'
+      summary?: string
+    }>
+    planStatus?: 'created' | 'running' | 'completed' | 'failed'
+  }
   /** 新接口：完整工具调用 timeline。和 steps 二选一，优先级高于 steps。 */
   logEntries?: AgentLogEntry[]
   /** v3: 按消息分组的日志时间轴（优先级高于 logEntries） */
@@ -178,7 +190,9 @@ const TAB_STORAGE_KEY = 'chat-side-panel-tab'
 function readStoredTab(): PanelTab {
   try {
     const v = localStorage.getItem(TAB_STORAGE_KEY)
-    return v === 'artifacts' ? 'artifacts' : 'logs'
+    if (v === 'plan') return 'plan'
+    if (v === 'artifacts') return 'artifacts'
+    return 'logs'
   } catch {
     return 'logs'
   }
@@ -243,6 +257,24 @@ function getToolIcon(toolName: string, status?: AgentLogEntry['toolStatus']) {
   // 默认通用图标
   return <Sparkles size={14} className="flex-shrink-0 text-muted-foreground" aria-hidden="true" />
 }
+
+// 根据 plan step 状态返回对应图标
+function getPlanStepIcon(status?: string) {
+  switch (status) {
+    case 'completed':
+      return <Check size={14} className="text-emerald-500" />
+    case 'running':
+    case 'dispatched':
+      return <Clock size={14} className="text-orange-500" />
+    case 'failed':
+      return <XCircle size={14} className="text-red-500" />
+    case 'skipped':
+      return <XCircle size={14} className="text-muted-foreground" />
+    default:
+      return <Circle size={14} className="text-muted-foreground" />
+  }
+}
+
 
 // 格式化相对时间（刚刚、2分钟前、1小时前）
 function formatRelativeTime(timestamp: number, t: (key: string, opts?: Record<string, unknown>) => string): string {
@@ -382,7 +414,7 @@ function getAgentTypeLogo(agent: { id: string; name: string; type?: string }): s
 interface AgentCardProps {
   agent: AgentTreeNode
   isExpanded: boolean
-  toggleExpanded: (agentId: string) => void
+  toggleExpanded: (agentId: string, next: boolean) => void
   expandedLogs: Record<string, boolean>
   toggleLogExpanded: (id: string) => void
   t: (key: string, opts?: Record<string, unknown>) => string
@@ -422,9 +454,9 @@ function AgentCard({
   const avatarSrc = agent.avatarSrc || getAgentAvatar(agent)
   const agentLogo = getAgentTypeLogo(agent)
 
-  // 运行中：不可下拉，直接显示"工作中"；完成后才能下拉
+  // 运行中默认展开方便实时查看；完成后默认收起。两种状态都可手动下拉/收起。
   const isRunning = agent.status === 'running'
-  const canExpand = hasContent && !isRunning
+  const canExpand = hasContent
 
   // 完成后图标下方显示总结文字：
   //  - Emma 收尾节点 (main-end)：固定文案"已完成任务"
@@ -473,7 +505,7 @@ function AgentCard({
     <div>
       {/* Agent 头部 */}
       <button
-        onClick={() => canExpand && toggleExpanded(agent.id)}
+        onClick={() => canExpand && toggleExpanded(agent.id, !isExpanded)}
         disabled={!canExpand}
         className={cn(
           'flex w-full items-start gap-2.5 px-2 py-2.5 text-left transition-colors rounded-lg',
@@ -525,7 +557,7 @@ function AgentCard({
               </p>
             )}
 
-            {/* 行尾：运行中显示"工作中"（渐变文字），完成后显示展开/折叠图标 */}
+            {/* 行尾：运行中显示"工作中"（渐变文字）+ 展开箭头，完成后只显示展开/折叠图标 */}
             {isRunning ? (
               <>
                 <span
@@ -554,6 +586,11 @@ function AgentCard({
                 >
                   {t('chat.sidePanel.working')}
                 </span>
+                {canExpand && (
+                  <span className="flex-shrink-0 pb-0.5 text-muted-foreground/45">
+                    {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                  </span>
+                )}
               </>
             ) : (
               canExpand && (
@@ -690,8 +727,15 @@ function AgentCard({
 }
 
 
-export function ConversationSidePanel({ logEntries, messageGroupedLogs, agentTreeLogs, steps, artifacts, onSelectArtifact, onRevealArtifact, sessionId, onSelectWorkspaceFile }: ConversationSidePanelProps) {
+export function ConversationSidePanel({ planData, logEntries, messageGroupedLogs, agentTreeLogs, steps, artifacts, onSelectArtifact, onRevealArtifact, sessionId, onSelectWorkspaceFile }: ConversationSidePanelProps) {
   const { t } = useTranslation()
+
+  // DEBUG: 检查 planData
+  useEffect(() => {
+    if (planData) {
+      console.log('[ConversationSidePanel] planData:', planData)
+    }
+  }, [planData])
   // 优先级：agentTreeLogs > messageGroupedLogs > logEntries > steps
   const useAgentTree = !!agentTreeLogs && agentTreeLogs.length > 0
   const useGroupedLogs = !useAgentTree && !!messageGroupedLogs && messageGroupedLogs.length > 0
@@ -715,7 +759,11 @@ export function ConversationSidePanel({ logEntries, messageGroupedLogs, agentTre
   const flatAgentList = flattenAgentTree(effectiveAgentTreeLogs)
   // Default closed every visit (tab choice is persisted, expanded state isn't).
   const [expanded, setExpanded] = useState(false)
-  const [activeTab, setActiveTab] = useState<PanelTab>(() => readStoredTab())
+  // Plan 模式下默认显示 plan tab，否则读取存储的 tab
+  const [activeTab, setActiveTab] = useState<PanelTab>(() => {
+    if (planData) return 'plan'
+    return readStoredTab()
+  })
   // 产物 tab 下的子模式（通用/开发），持久化到 localStorage。
   const [artifactMode, setArtifactMode] = useState<ArtifactMode>(() => readStoredArtifactMode())
   // 展开状态：key = entry.id, value = true 表示展开
@@ -809,8 +857,8 @@ export function ConversationSidePanel({ logEntries, messageGroupedLogs, agentTre
   const toggleMessageExpanded = (messageId: string) => {
     setExpandedMessages((prev) => ({ ...prev, [messageId]: !prev[messageId] }))
   }
-  const toggleAgentExpanded = (agentId: string) => {
-    setExpandedAgents((prev) => ({ ...prev, [agentId]: !prev[agentId] }))
+  const toggleAgentExpanded = (agentId: string, next: boolean) => {
+    setExpandedAgents((prev) => ({ ...prev, [agentId]: next }))
   }
 
   return (
@@ -851,6 +899,21 @@ export function ConversationSidePanel({ logEntries, messageGroupedLogs, agentTre
 
         {expanded && (
           <div role="tablist" aria-label={t('chat.sidePanel.tabsAria')} className="flex items-center gap-1">
+            {planData && (
+              <button
+                role="tab"
+                aria-selected={activeTab === 'plan'}
+                onClick={() => setActiveTab('plan')}
+                className={cn(
+                  'inline-flex h-8 w-12 items-center justify-center rounded-lg text-xs font-medium transition-colors',
+                  activeTab === 'plan'
+                    ? 'bg-background text-foreground shadow-sm ring-1 ring-border/60'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                {t('chat.sidePanel.tabPlan')}
+              </button>
+            )}
             <button
               role="tab"
               aria-selected={activeTab === 'logs'}
@@ -884,7 +947,38 @@ export function ConversationSidePanel({ logEntries, messageGroupedLogs, agentTre
       {/* Body — only rendered while expanded; collapsed state is just the header button. */}
       {expanded && (
         <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
-          {activeTab === 'logs' ? (
+          {activeTab === 'plan' && planData ? (
+            // Plan tab：显示 plan steps 列表
+            planData.steps.length === 0 ? (
+              <EmptyState
+                title={t('chat.sidePanel.noPlan')}
+                desc={t('chat.sidePanel.noPlanDesc')}
+              />
+            ) : (
+              <div className="space-y-2">
+                {planData.steps.map((step, idx) => (
+                  <div
+                    key={step.id}
+                    className="rounded-lg border border-border bg-card p-3 transition-colors hover:bg-muted/30"
+                  >
+                    <div className="flex items-start gap-2">
+                      {getPlanStepIcon(step.status)}
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[12px] font-medium text-foreground">
+                          Plan-step-{idx + 1} {step.description || t('chat.sidePanel.unnamedStep')}
+                        </div>
+                        {step.summary && (
+                          <p className="mt-1 text-[11px] text-muted-foreground line-clamp-2">
+                            {step.summary}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
+          ) : activeTab === 'logs' ? (
             useAgentTree ? (
               effectiveAgentTreeLogs.length === 0 ? (
                 <EmptyState
@@ -897,7 +991,7 @@ export function ConversationSidePanel({ logEntries, messageGroupedLogs, agentTre
                     <div key={agent.id}>
                       <AgentCard
                         agent={agent}
-                        isExpanded={expandedAgents[agent.id] !== false}
+                        isExpanded={expandedAgents[agent.id] ?? agent.status === 'running'}
                         toggleExpanded={toggleAgentExpanded}
                         expandedLogs={expandedLogs}
                         toggleLogExpanded={toggleLogExpanded}

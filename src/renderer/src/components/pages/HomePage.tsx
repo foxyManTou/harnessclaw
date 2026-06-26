@@ -112,6 +112,14 @@ export function HomePage() {
     if (!payload && attachments.length === 0 && pasted.blocks.length === 0) return
     const pastedSuffix = pasted.buildPastedSuffix()
     const fullMessage = [payload, pastedSuffix].filter(Boolean).join('\n\n')
+
+    // DEBUG: 检查 planMode 状态
+    console.log('[HomePage] handleSend - planMode:', planMode)
+    console.log('[HomePage] navigate state:', {
+      coordinatorMode: planMode ? 'plan' : undefined,
+      planConfirmation: planMode ? 'required' : undefined,
+    })
+
     navigate('/chat', {
       state: {
         initialMessage: fullMessage,

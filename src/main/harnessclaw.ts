@@ -1247,11 +1247,6 @@ export class HarnessclawClient extends EventEmitter {
         forest.agentParents.set(args.cardId, parentAgentId)
 
         const subagentType = typeof args.payload.subagent_type === 'string' ? args.payload.subagent_type : undefined
-        console.log('[harnessclaw.ts] Emitting subagent_start:', {
-          agent_id: args.cardId,
-          agent_name: name,
-          subagent_type: subagentType,
-        })
 
         this.emitCompatEvent({
           type: 'subagent_start',

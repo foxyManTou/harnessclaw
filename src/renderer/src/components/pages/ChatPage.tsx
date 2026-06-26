@@ -3945,16 +3945,21 @@ function SessionTitleMenu({
   }
 
   return (
-    <div ref={containerRef} className="relative min-w-0">
+    <div ref={containerRef} className="relative min-w-0 flex-1">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-haspopup="menu"
         title={title}
-        className="inline-flex min-w-0 max-w-full items-center rounded-md px-1 py-0.5 text-left text-foreground transition-colors hover:bg-muted/60"
+        className="inline-flex w-full min-w-0 max-w-full items-center rounded-md px-1 py-0.5 text-left text-foreground transition-colors hover:bg-muted/60"
       >
-        <h1 className="truncate text-[12px] font-medium leading-5 text-[rgba(0,0,0,0.88)]">{title}</h1>
+        <h1
+          className="min-w-0 flex-1 truncate text-[12px] font-medium leading-5 text-[rgba(0,0,0,0.88)]"
+          style={{ letterSpacing: 0, fontVariationSettings: '"opsz" auto' }}
+        >
+          {title}
+        </h1>
       </button>
 
       {open && (
@@ -4282,6 +4287,11 @@ export function ChatPage() {
     location.state?.coordinatorMode === 'plan' || location.state?.coordinatorMode === 'react'
       ? location.state.coordinatorMode
       : undefined
+
+  // DEBUG: 检查接收到的 coordinatorMode
+  console.log('[ChatPage] location.state:', location.state)
+  console.log('[ChatPage] initialCoordinatorMode:', initialCoordinatorMode)
+
   // v1.15: opt-in `plan_confirmation: "required"` so the engine pauses on
   // `plan.proposed` and lets the user edit the draft DAG before running.
   const initialPlanConfirmation: 'required' | undefined =
@@ -4580,6 +4590,11 @@ export function ChatPage() {
             ...(wireImages.length > 0 ? { images: wireImages } : {}),
           }
         : undefined
+
+    // DEBUG: 检查发送选项
+    console.log('[ChatPage] sendInitialMessage - coordinatorMode:', coordinatorMode)
+    console.log('[ChatPage] sendInitialMessage - sendOptions:', sendOptions)
+
     void window.harnessclaw.send(payload, sid, sendOptions)
     trackMessageSent({
       message_length: trimmedText.length,
@@ -5145,10 +5160,7 @@ export function ChatPage() {
   }, [sessionMap, sessions, dbSessions])
   const activeSessionMeta = displayedSessions.find((session) => session.key === activeSessionId)
   const activeSessionPromptRaw = activeSessionMeta?.title || activeSessionMeta?.firstMsg || t('chat.newChat')
-  const activeSessionPrompt = (() => {
-    const oneLine = activeSessionPromptRaw.replace(/\n/g, ' ').trim()
-    return oneLine.length > 20 ? oneLine.slice(0, 20) + '...' : oneLine
-  })()
+  const activeSessionPrompt = activeSessionPromptRaw.replace(/\n/g, ' ').trim()
   const activeProjectContext = activeSessionId ? sessionProjectContexts[activeSessionId] : routeProjectContext
   const resizeComposerTextarea = useCallback(() => {
     const textarea = composerTextareaRef.current
@@ -7928,8 +7940,8 @@ export function ChatPage() {
         {/* Top bar */}
         <div className="titlebar-drag pl-[70px] pr-[70px] pt-6 pb-4">
           <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 text-foreground">
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 items-center gap-2 text-foreground">
                 {activeSessionId ? (
                   <SessionTitleMenu
                     sessionId={activeSessionId}
@@ -7938,7 +7950,12 @@ export function ChatPage() {
                     onDelete={handleClearHistory}
                   />
                 ) : (
-                  <h1 className="truncate text-[12px] font-medium leading-5 text-[rgba(0,0,0,0.88)]">{t('chat.newChat')}</h1>
+                  <h1
+                    className="truncate text-[12px] font-medium leading-5 text-[rgba(0,0,0,0.88)]"
+                    style={{ letterSpacing: 0, fontVariationSettings: '"opsz" auto' }}
+                  >
+                    {t('chat.newChat')}
+                  </h1>
                 )}
               </div>
               {activeProjectContext ? (
@@ -8383,6 +8400,10 @@ export function ChatPage() {
 
       {/* Right-side panel: logs (plan steps) + artifacts. Default collapsed. */}
       <ConversationSidePanel
+        planData={(() => {
+          console.log('[ChatPage] activeSession.planDraft:', activeSession.planDraft)
+          return activeSession.planDraft
+        })()}
         agentTreeLogs={rebuildAgentTreeFromMessages}
         messageGroupedLogs={sessionMessageGroupedLogs}
         artifacts={generalArtifacts}
@@ -8772,7 +8793,9 @@ function MessageBubble({
   const { t, i18n } = useTranslation()
   const [copied, setCopied] = useState(false)
   const [rating, setRating] = useState<'up' | 'down' | null>(null)
-  const [toolsExpanded, setToolsExpanded] = useState(false)
+  // 工具卡片不再在对话正文展开（需求：去掉"使用了 N 个工具"入口），
+  // 详情统一去右侧日志面板看。保留该标记供下方渲染判断恒为折叠。
+  const toolsExpanded = false
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
   const openFilePathPreview = useCallback(async (path: string) => {
@@ -9024,9 +9047,9 @@ function MessageBubble({
           : 'mb-1.5 rounded-2xl px-3.5 py-2.5 text-sm',
         'min-w-0 max-w-full overflow-hidden',
         !compact && isUser
-          ? 'rounded-br-sm bg-[rgba(218,159,103,0.1)] text-[rgba(0,0,0,0.88)]'
+          ? 'bg-[rgba(218,159,103,0.1)] text-[rgba(0,0,0,0.88)]'
           : !compact
-            ? 'w-full rounded-bl-sm border border-border bg-white text-[rgba(0,0,0,0.88)] shadow-sm'
+            ? 'w-full border border-border bg-white text-[rgba(0,0,0,0.88)] shadow-sm'
             : 'text-foreground'
       )}
     >
@@ -9521,20 +9544,6 @@ function MessageBubble({
 
         {/* 呼吸闪烁小点已移至会话尾部，与"鎏金"shimmer 文案同行渲染
             (ConversationTimeline 中的 streaming-breathing-dot + chat-thinking-shimmer)。 */}
-
-        {/* 工具调用折叠按钮 */}
-        {!isUser && !isSystem && !message.isStreaming && toolCount > 0 && (
-          <div className="mb-2">
-            <button
-              onClick={() => setToolsExpanded(!toolsExpanded)}
-              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-foreground"
-            >
-              <Wrench size={12} />
-              <span>使用了 {toolCount} 个工具</span>
-              {toolsExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-            </button>
-          </div>
-        )}
 
         {/* 点赞点踩 — AI 回复正文下方常显按钮(流式结束后才出现) */}
         {!isUser && !isSystem && !message.isStreaming && hasRenderableAssistantBody && (
@@ -11200,6 +11209,17 @@ export function FilePreviewDrawer({
   const isHtmlArtifact =
     (ext === 'html' || ext === 'htm') && !preview.isBinary && preview.previewKind === undefined
 
+  // DEBUG: 检查HTML文件判断
+  if (ext === 'html' || ext === 'htm') {
+    console.log('[FilePreviewDrawer] HTML file detected:', {
+      fileName: preview.fileName,
+      ext,
+      isBinary: preview.isBinary,
+      previewKind: preview.previewKind,
+      isHtmlArtifact,
+    })
+  }
+
   return createPortal(
     <div className="fixed inset-0 z-[200] flex" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
       <div
@@ -11474,6 +11494,11 @@ export function FilePreviewDrawer({
                 className="max-h-full max-w-full rounded-lg"
               />
             </div>
+          ) : isHtmlArtifact && preview.content ? (
+            // .html/.htm 产物有内容时优先走双视图（渲染 / 源码），isHtml 兜底
+            <div className="h-full overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+              <HtmlArtifactView content={preview.content} />
+            </div>
           ) : isHtml ? (
             // .html / .htm：用 <iframe> 渲染整份页面，而不是把源码塞到代码
             // 视图。sandbox 限制顶层导航 + 第三方表单提交；allow-scripts +
@@ -11503,10 +11528,6 @@ export function FilePreviewDrawer({
                   </>
                 )}
               </div>
-            </div>
-          ) : isHtmlArtifact ? (
-            <div className="h-full overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-              <HtmlArtifactView content={preview.content} />
             </div>
           ) : preview.previewKind === 'html' ? (
             // 主进程已把 docx / xlsx / pptx 等转成语义化 HTML（mammoth /

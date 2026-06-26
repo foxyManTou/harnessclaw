@@ -32,6 +32,7 @@ import iconXlab from '../../assets/icon-xlab.svg'
 import iconChat from '../../assets/icon-chat.svg'
 import iconSettings from '../../assets/icon-settings.svg'
 import iconMore from '../../assets/icon-more.svg'
+import iconQuestion from '../../assets/icon-question.svg'
 import iconRecentArrow from '../../assets/icon-recent-arrow.svg'
 import iconSidebarOpen from '../../assets/icon-sidebar-open.svg'
 import iconSidebarCollapse from '../../assets/icon-sidebar-collapse.svg'
@@ -771,10 +772,16 @@ export function Sidebar() {
                               onClick={() => handleOpenRecentSession(item.id)}
                               className="relative min-w-0 flex-1 rounded-lg px-2 py-1 text-left"
                             >
-                              <p className="truncate text-xs text-[#222529]" style={{ fontWeight: 350, lineHeight: '24px' }}>{item.label}</p>
-                              {/* 红点提醒：有待操作的问答节点 */}
+                              <p className="truncate pr-4 text-xs text-[#222529]" style={{ fontWeight: 350, lineHeight: '24px' }}>{item.label}</p>
+                              {/* 问号提醒：有待回复的问答节点 */}
                               {attentionSessions.has(item.id) && (
-                                <span className="absolute right-2 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-red-500" />
+                                <img
+                                  src={iconQuestion}
+                                  alt=""
+                                  title={t('sidebar.awaitingReply')}
+                                  className="absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2"
+                                  aria-hidden="true"
+                                />
                               )}
                             </button>
                           )}
