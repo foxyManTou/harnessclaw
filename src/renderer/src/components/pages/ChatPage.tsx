@@ -3837,11 +3837,13 @@ function SessionMenuButton({
   title,
   currentProjectId,
   onDelete,
+  onRename,
 }: {
   sessionId: string
   title: string
   currentProjectId: string | null
   onDelete: () => void
+  onRename: () => void
 }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
@@ -3905,9 +3907,9 @@ function SessionMenuButton({
             role="menuitem"
             onClick={() => {
               setOpen(false)
+              onRename()
             }}
             className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
-            disabled
           >
             <Pencil size={14} />
             <span>{t('sessions.actions.rename')}</span>
@@ -4956,6 +4958,44 @@ export function ChatPage() {
   const activeSessionPromptRaw = activeSessionMeta?.title || activeSessionMeta?.firstMsg || t('chat.newChat')
   const activeSessionPrompt = activeSessionPromptRaw.replace(/\n/g, ' ').trim()
   const activeProjectContext = activeSessionId ? sessionProjectContexts[activeSessionId] : routeProjectContext
+  const [isRenamingTitle, setIsRenamingTitle] = useState(false)
+  const [titleRenameValue, setTitleRenameValue] = useState('')
+  const titleRenameInputRef = useRef<HTMLInputElement>(null)
+
+  const startTitleRename = useCallback(() => {
+    setTitleRenameValue(activeSessionPrompt.trim())
+    setIsRenamingTitle(true)
+  }, [activeSessionPrompt])
+
+  const submitTitleRename = useCallback(async () => {
+    if (!activeSessionId) {
+      setIsRenamingTitle(false)
+      return
+    }
+    const next = titleRenameValue.trim()
+    if (!next || next === activeSessionPrompt.trim()) {
+      setIsRenamingTitle(false)
+      return
+    }
+    const result = await window.db.updateSessionTitle(activeSessionId, next)
+    if (result?.ok) {
+      setIsRenamingTitle(false)
+    } else {
+      titleRenameInputRef.current?.focus()
+    }
+  }, [activeSessionId, titleRenameValue, activeSessionPrompt])
+
+  useEffect(() => {
+    if (isRenamingTitle) {
+      titleRenameInputRef.current?.focus()
+      titleRenameInputRef.current?.select()
+    }
+  }, [isRenamingTitle])
+
+  useEffect(() => {
+    setIsRenamingTitle(false)
+  }, [activeSessionId])
+
   const resizeComposerTextarea = useCallback(() => {
     const textarea = composerTextareaRef.current
     if (!textarea) return
@@ -7736,13 +7776,33 @@ export function ChatPage() {
           <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-center gap-2 text-foreground">
-                <h1
-                  className="min-w-0 flex-1 truncate text-[12px] font-medium leading-5 text-[rgba(0,0,0,0.88)]"
-                  style={{ letterSpacing: 0, fontVariationSettings: '"opsz" auto' }}
-                  title={activeSessionId ? activeSessionPrompt || t('chat.newChat') : t('chat.newChat')}
-                >
-                  {activeSessionId ? activeSessionPrompt || t('chat.newChat') : t('chat.newChat')}
-                </h1>
+                {activeSessionId && isRenamingTitle ? (
+                  <input
+                    ref={titleRenameInputRef}
+                    value={titleRenameValue}
+                    onChange={(event) => setTitleRenameValue(event.target.value)}
+                    onBlur={() => void submitTitleRename()}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault()
+                        void submitTitleRename()
+                      } else if (event.key === 'Escape') {
+                        event.preventDefault()
+                        setIsRenamingTitle(false)
+                      }
+                    }}
+                    className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-0.5 text-[12px] font-medium leading-5 text-[rgba(0,0,0,0.88)] outline-none focus:border-primary"
+                    aria-label={t('sessions.actions.rename')}
+                  />
+                ) : (
+                  <h1
+                    className="min-w-0 flex-1 truncate text-[12px] font-medium leading-5 text-[rgba(0,0,0,0.88)]"
+                    style={{ letterSpacing: 0, fontVariationSettings: '"opsz" auto' }}
+                    title={activeSessionId ? activeSessionPrompt || t('chat.newChat') : t('chat.newChat')}
+                  >
+                    {activeSessionId ? activeSessionPrompt || t('chat.newChat') : t('chat.newChat')}
+                  </h1>
+                )}
               </div>
               {activeProjectContext ? (
                 <p className="mt-0.5 truncate text-xs text-muted-foreground">
@@ -7758,6 +7818,7 @@ export function ChatPage() {
                   title={activeSessionPrompt || t('chat.newChat')}
                   currentProjectId={activeProjectContext?.projectId || null}
                   onDelete={handleClearHistory}
+                  onRename={startTitleRename}
                 />
                 {/* Files button — hidden per design requirements
                 <SessionWorkspaceFilesButton sessionId={activeSessionId} />
