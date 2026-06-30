@@ -677,6 +677,14 @@ export function Sidebar() {
                             </span>
                           )
                         }
+                        // X-LAB 图标原始尺寸为 13x15,用 18x18 容器居中,避免被拉伸放大
+                        if (item.path === '/x-lab') {
+                          return (
+                            <span className="relative flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center" aria-hidden="true">
+                              <img src={src} alt="" className="h-[15px] w-[13px] max-w-none" />
+                            </span>
+                          )
+                        }
                         return (
                           <img src={src} alt="" className="h-[18px] w-[18px] flex-shrink-0" aria-hidden="true" />
                         )
@@ -952,7 +960,7 @@ export function Sidebar() {
             className="absolute inset-0 bg-white/28 backdrop-blur-[10px] dark:bg-slate-950/24"
           />
 
-          <div className="pointer-events-none absolute inset-0 flex items-start justify-center px-5 pt-20">
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-5">
             <div className="pointer-events-auto w-full max-w-[640px] overflow-hidden rounded-[30px] border border-slate-200 bg-white shadow-[0_30px_90px_rgba(15,23,42,0.16)] dark:border-slate-800 dark:bg-slate-950">
               <div className="border-b border-slate-200/80 px-5 py-4 dark:border-slate-800">
                 <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white/82 px-4 py-3 dark:border-slate-800 dark:bg-slate-900/80">

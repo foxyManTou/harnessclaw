@@ -417,8 +417,8 @@
   },
   "sessions": {
     "title": "对话",
-    "subtitle": "查看历史会话，或继续最近的上下文。",
-    "searchPlaceholder": "搜索对话...",
+    "subtitle": "查看历史会话，或继续最近的上下文",
+    "searchPlaceholder": "搜索对话",
     "exitMultiSelect": "退出多选",
     "enterMultiSelect": "多选",
     "newSession": "新建对话",

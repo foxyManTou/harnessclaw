@@ -20,6 +20,8 @@ import { HOME_CASES, HOME_CATEGORIES } from '../../data/homeCases'
 import iconAttachFile from '../../assets/icon-attach-file.svg'
 import iconPlanMode from '../../assets/icon-plan-mode.svg'
 import iconStatusConnected from '../../assets/status-connected.svg'
+import sendIconActive from '../../assets/send-icon-active.svg'
+import sendIcon from '../../assets/send-icon.svg'
 
 type AttachmentItem = LocalAttachmentItem
 
@@ -421,12 +423,11 @@ export function HomePage() {
                       )}
                     >
                       <img
-                        src={new URL(
+                        src={
                           (input.length > 0 || attachments.length > 0 || pasted.blocks.length > 0)
-                            ? '../../assets/send-icon-active.svg'
-                            : '../../assets/send-icon.svg',
-                          import.meta.url
-                        ).href}
+                            ? sendIconActive
+                            : sendIcon
+                        }
                         alt={t('home.send')}
                         className="w-full h-full"
                       />

@@ -1991,3 +1991,13 @@
     animation: none;
   }
 }
+
+/* 隐藏滚动条（用于对话列表，改用砝码导航） */
+.scrollbar-hide {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
